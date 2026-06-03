@@ -100,6 +100,8 @@ h1,h2,h3,h4,.disp{font-family:'Syne','Trebuchet MS','Gill Sans',sans-serif}
 .alert.info{background:var(--infol);border-color:var(--info);color:#BcdcF6}
 .alert.success{background:var(--okl);border-color:var(--ok);color:#B6E8CC}
 .alert-icon{font-size:18px;flex-shrink:0}
+.alert-x{background:none;border:none;color:inherit;opacity:.55;font-size:20px;line-height:1;cursor:pointer;padding:0 2px;flex-shrink:0;align-self:flex-start}
+.alert-x:hover{opacity:1}
 
 /* ── TABLE ── */
 .table-wrap{background:var(--noir2);border:1px solid var(--anthr);border-radius:var(--r);overflow:hidden;margin-bottom:20px}
@@ -612,21 +614,22 @@ RENDERERS.dashboard=function(){
   const prestaAvenir=prestations.filter(p=>p.statutRealisation==='Confirmée'&&daysFromNow(p.dateEvenement)>=0).length;
   const impayes=factures.filter(f=>['Émise','Relance 1','Relance 2','En contentieux'].includes(f.statut)).reduce((s,f)=>s+(+f.soldeDu||0),0);
 
-  // Alertes
+  // Alertes (fermables : × masque X jours, ré-apparaît ensuite)
   let alertes='';
+  function alrt(key,type,icon,txt,days){ if(key&&isSnoozed(key))return; alertes+=alertHtml(type,icon,txt,key,days); }
   const relancesDues=factures.filter(f=>f.statut==='Émise'&&daysSince(f.dateEcheance)>0);
-  if(relancesDues.length) alertes+=alertHtml('danger','🔔','<strong>'+relancesDues.length+' facture(s) échue(s)</strong> — relance à envoyer. <a onclick="nav(\'factures\')" style="color:inherit;text-decoration:underline;cursor:pointer">Voir factures</a>');
+  if(relancesDues.length) alrt('relances-due','danger','🔔','<strong>'+relancesDues.length+' facture(s) échue(s)</strong> — relance à envoyer. <a onclick="nav(\'factures\')" style="color:inherit;text-decoration:underline;cursor:pointer">Voir factures</a>',3);
   const devisVieux=devis.filter(d=>d.statut==='Envoyé'&&daysSince(d.dateEnvoi)>7);
-  if(devisVieux.length) alertes+=alertHtml('warning','⏳','<strong>'+devisVieux.length+' devis</strong> envoyé(s) sans réponse depuis +7 jours.');
+  if(devisVieux.length) alrt('devis-vieux','warning','⏳','<strong>'+devisVieux.length+' devis</strong> envoyé(s) sans réponse depuis +7 jours. <a onclick="nav(\'devis\')" style="color:inherit;text-decoration:underline;cursor:pointer">Relancer</a>',3);
   const prestaProches=prestations.filter(p=>p.statutRealisation==='Confirmée'&&daysFromNow(p.dateEvenement)>=0&&daysFromNow(p.dateEvenement)<=7);
   prestaProches.forEach(p=>{ const j=daysFromNow(p.dateEvenement);
-    alertes+=alertHtml('info','📅','<strong>Prestation J-'+j+'</strong> · '+esc(p.typePrestation)+' — '+esc(p.lieu)+' ('+esc(p.creneau)+'). Contact : '+esc(p.contactSurPlace||'—')); });
+    alrt('presta-'+p.id,'info','📅','<strong>Prestation '+(j===0?"aujourd'hui":'J-'+j)+'</strong> · '+esc(p.typePrestation)+' — '+esc(p.lieu)+' ('+esc(p.horaire||p.creneau)+'). Contact : '+esc(p.contactSurPlace||'—'),2); });
   const avisAdemander=prestations.filter(p=>p.statutRealisation==='Réalisée'&&daysSince(p.dateEvenement)<=14&&daysSince(p.dateEvenement)>=0&&!mailEnvoye('avis',p.id));
-  avisAdemander.forEach(p=>{ alertes+=alertHtml('success','★','<strong>Avis Google à demander</strong> — prestation '+esc(p.typePrestation)+' du '+fmtDateShort(p.dateEvenement)+'. <a onclick="avisGoogleMail(\''+p.id+'\')" style="color:inherit;text-decoration:underline;cursor:pointer">Préparer l\'email</a>'); });
+  avisAdemander.forEach(p=>{ alrt('avis-'+p.id,'success','★','<strong>Avis Google à demander</strong> — '+esc(p.typePrestation)+' du '+fmtDateShort(p.dateEvenement)+'. <a onclick="avisGoogleMail(\''+p.id+'\')" style="color:inherit;text-decoration:underline;cursor:pointer">Préparer l\'email</a>',7); });
   trimsADeclarer().forEach(q=>{ const ca=caTrimestre(q.an,q.t); const ech=trimEcheance(q.an,q.t); const jE=daysFromNow(ech);
-    alertes+=alertHtml(q.et==='retard'?'danger':'warning', q.et==='retard'?'⚠️':'📊',
-      '<strong>Déclaration URSSAF '+q.an+' T'+q.t+' '+(q.et==='retard'?'en retard':'à faire')+'</strong> — CA '+fmtEur(ca)+', échéance '+fmtDateShort(ech)+(jE>=0?(' (dans '+jE+' j)'):(' (dépassée de '+(-jE)+' j)'))+'. <a onclick="nav(\'compta\')" style="color:inherit;text-decoration:underline;cursor:pointer">Déclarer</a>'); });
-  if(!alertes) alertes=alertHtml('success','✓','Aucune alerte. Tout est sous contrôle.');
+    alrt('urssaf-'+q.an+'T'+q.t, q.et==='retard'?'danger':'warning', q.et==='retard'?'⚠️':'📊',
+      '<strong>Déclaration URSSAF '+q.an+' T'+q.t+' '+(q.et==='retard'?'en retard':'à faire')+'</strong> — CA '+fmtEur(ca)+', échéance '+fmtDateShort(ech)+(jE>=0?(' (dans '+jE+' j)'):(' (dépassée de '+(-jE)+' j)'))+'. <a onclick="nav(\'compta\')" style="color:inherit;text-decoration:underline;cursor:pointer">Déclarer</a>',7); });
+  if(!alertes) alertes=alertHtml('success','✓','Aucune alerte — tout est à jour. 🎩');
 
   // Activité
   const acts=DB.all('activite').slice(0,10);
@@ -650,7 +653,14 @@ RENDERERS.dashboard=function(){
   buildChartCA(); buildChartType();
 };
 function kpi(cls,label,val,sub){ return '<div class="kpi '+cls+'"><div class="kpi-label">'+label+'</div><div class="kpi-val">'+val+'</div>'+(sub?'<div class="kpi-sub">'+sub+'</div>':'')+'</div>'; }
-function alertHtml(type,icon,txt){ return '<div class="alert '+type+'"><span class="alert-icon">'+icon+'</span><div>'+txt+'</div></div>'; }
+function alertHtml(type,icon,txt,key,days){
+  return '<div class="alert '+type+'"><span class="alert-icon">'+icon+'</span><div style="flex:1">'+txt+'</div>'
+    +(key?'<button class="alert-x" title="Masquer cette notification" onclick="dismissAlert(\''+key+'\','+(days||7)+')">×</button>':'')+'</div>'; }
+function isSnoozed(key){ const d=(DB.config().dismissed||{})[key]; return d && new Date(d)>new Date(); }
+function dismissAlert(key,days){ const c=DB.config(); c.dismissed=c.dismissed||{};
+  const u=new Date(); u.setDate(u.getDate()+(days||7)); c.dismissed[key]=u.toISOString(); DB.saveConfig(c);
+  if(RENDERERS.dashboard&&document.getElementById('view-dashboard').classList.contains('active')) RENDERERS.dashboard();
+  updateBadges(); toast('Notification masquée '+(days||7)+' j','ok'); }
 function timeAgo(d){ const s=daysSince(d); if(s<=0)return "aujourd'hui"; if(s===1)return 'hier'; if(s<7)return 'il y a '+s+' j'; return fmtDateShort(d); }
 function buildChartCA(){
   if(_charts.ca)_charts.ca.destroy(); const cc=chartColors();
