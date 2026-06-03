@@ -822,7 +822,7 @@ function voirDevis(id){
   if(d.statut==='Brouillon') manu=`<button class="btn btn-ghost" onclick="majDevis('${id}','Envoyé');voirDevis('${id}')">✓ Marquer envoyé</button>`;
   else if(d.statut==='Envoyé') manu=`<button class="btn btn-success" onclick="majDevis('${id}','Accepté');voirDevis('${id}')">✓ Accepté</button><button class="btn btn-warn" onclick="majDevis('${id}','Refusé');voirDevis('${id}')">✗ Refusé</button>`;
   else if(d.statut==='Accepté') manu=`<button class="btn btn-or" onclick="enregistrerAcompte('${id}');voirDevis('${id}')">💰 Acompte reçu</button>${facturee?'':`<button class="btn btn-ghost" onclick="transformerEnFacture('${id}')">🧾 Facturer</button>`}`;
-  else if(d.statut==='Acompte reçu') manu=`${facturee?'':`<button class="btn btn-or" onclick="transformerEnFacture('${id}')">🧾 Facturer le solde</button>`}<button class="btn btn-ghost" onclick="closeModal();nav('agenda')">📅 Agenda</button>`;
+  else if(d.statut==='Acompte reçu') manu=`${facturee?'':`<button class="btn btn-or" onclick="transformerEnFacture('${id}')">🧾 Facturer le solde</button>`}<button class="btn btn-ghost" onclick="annulerAcompte('${id}')">↩ Annuler l'acompte</button><button class="btn btn-ghost" onclick="closeModal();nav('agenda')">📅 Agenda</button>`;
   else manu='<div class="td-dim">—</div>';
 
   const body=`${bar}
@@ -914,6 +914,14 @@ function addRecetteAcompte(d){
   if(m<=0 || DB.all('recettes').some(r=>r.ref===d.id&&r.type==='Acompte')) return;
   DB.save('recettes',{id:uid('REC'),date:todayISO(),montant:m,type:'Acompte',mode:'Virement',client:d.nomClient,designation:'Acompte réservation',ref:d.id});
 }
+function removeRecetteAcompte(idDevis){ DB.all('recettes').filter(r=>r.ref===idDevis&&r.type==='Acompte').forEach(r=>DB.remove('recettes',r.id)); }
+function annulerAcompte(id){
+  const d=DB.get('devis',id); if(!d)return;
+  d.statut='Accepté'; d.acompteRecu=0; DB.save('devis',d);
+  removeRecetteAcompte(id); syncPrestationDevis(d);
+  logActivite('Acompte annulé · '+id); closeModal(); updateBadges(); RENDERERS.devis();
+  toast('Acompte annulé — devis repassé en Accepté','ok');
+}
 function addRecetteSolde(f,montant){
   const m=+montant||0; if(m<=0 || DB.all('recettes').some(r=>r.ref===f.id&&r.type==='Solde')) return;
   DB.save('recettes',{id:uid('REC'),date:todayISO(),montant:m,type:'Solde',mode:'Virement',client:clientNomFacture(f),designation:'Solde prestation',ref:f.id});
@@ -932,6 +940,7 @@ function changerStatutDevis(id){
   syncPrestationDevis(d);
   if(ns==='Acompte reçu'||ns==='Accepté') extra=' · créneau '+(statutPrestaCible(ns)==='Confirmée'?'bloqué':'')+' dans l\'agenda';
   if(ns==='Acompte reçu') addRecetteAcompte(d);
+  else if(old==='Acompte reçu'){ removeRecetteAcompte(id); extra=' · acompte annulé (retiré du livre)'; } // revient en arrière → retire la recette d'acompte
   logActivite('Devis '+id+' statut '+old+' → '+ns+' (manuel)');
   closeModal(); updateBadges(); RENDERERS.devis(); toast('Statut → '+ns+extra,'ok');
 }
