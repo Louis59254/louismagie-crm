@@ -604,12 +604,13 @@ function seedDemo(){
 /* ═══════════ VUE : DASHBOARD ═══════════ */
 let _charts={};
 RENDERERS.dashboard=function(){
-  const devis=DB.all('devis'), factures=DB.all('factures'), prestations=DB.all('prestations'), demandes=DB.all('demandes');
+  const devis=DB.all('devis'), factures=DB.all('factures'), prestations=DB.all('prestations'), demandes=DB.all('demandes'), recettes=DB.all('recettes');
   const now=new Date(), moisCour=now.getMonth(), anCour=now.getFullYear();
+  const moisISO=anCour+'-'+String(moisCour+1).padStart(2,'0');
 
-  // KPIs
-  const caMois=factures.filter(f=>f.datePaiement&&new Date(f.datePaiement).getMonth()===moisCour&&new Date(f.datePaiement).getFullYear()===anCour).reduce((s,f)=>s+(+f.montantTTC||0),0);
-  const caAn=factures.filter(f=>f.datePaiement&&new Date(f.datePaiement).getFullYear()===anCour).reduce((s,f)=>s+(+f.montantTTC||0),0);
+  // KPIs — CA = encaissements réels (recettes / livre de comptes), cohérent avec Compta
+  const caMois=recettes.filter(r=>(r.date||'').slice(0,7)===moisISO).reduce((s,r)=>s+(+r.montant||0),0);
+  const caAn=recettes.filter(r=>(r.date||'').slice(0,4)===String(anCour)).reduce((s,r)=>s+(+r.montant||0),0);
   const devisAttente=devis.filter(d=>d.statut==='Envoyé').length;
   const prestaAvenir=prestations.filter(p=>p.statutRealisation==='Confirmée'&&daysFromNow(p.dateEvenement)>=0).length;
   const impayes=factures.filter(f=>['Émise','Relance 1','Relance 2','En contentieux'].includes(f.statut)).reduce((s,f)=>s+(+f.soldeDu||0),0);
@@ -665,9 +666,11 @@ function timeAgo(d){ const s=daysSince(d); if(s<=0)return "aujourd'hui"; if(s===
 function buildChartCA(){
   if(_charts.ca)_charts.ca.destroy(); const cc=chartColors();
   const labels=[],data=[]; const now=new Date();
+  const rec=DB.all('recettes');
   for(let i=11;i>=0;i--){ const d=new Date(now.getFullYear(),now.getMonth()-i,1);
+    const key=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
     labels.push(d.toLocaleDateString('fr-FR',{month:'short'}));
-    const tot=DB.all('factures').filter(f=>f.datePaiement&&new Date(f.datePaiement).getMonth()===d.getMonth()&&new Date(f.datePaiement).getFullYear()===d.getFullYear()).reduce((s,f)=>s+(+f.montantTTC||0),0);
+    const tot=rec.filter(r=>(r.date||'').slice(0,7)===key).reduce((s,r)=>s+(+r.montant||0),0);
     data.push(tot); }
   _charts.ca=new Chart(document.getElementById('chartCA'),{type:'line',data:{labels,datasets:[{data,borderColor:'#FF7700',backgroundColor:'rgba(255,119,0,.12)',fill:true,tension:.35,borderWidth:2,pointBackgroundColor:'#FF7700',pointRadius:3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:cc.grid},ticks:{color:cc.txt}},y:{grid:{color:cc.grid},ticks:{color:cc.txt,callback:v=>v+' €'}}}}});
 }
