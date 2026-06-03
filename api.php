@@ -44,7 +44,7 @@ function smtpSend($to,$subject,$bodyText,$attachName='',$attachB64=''){
   if(!stream_socket_enable_crypto($fp,true,STREAM_CRYPTO_METHOD_TLS_CLIENT)) return [false,'TLS échec'];
   $cmd("EHLO louismagie"); $cmd("AUTH LOGIN"); $cmd(base64_encode($user));
   $r=$cmd(base64_encode($pass));
-  if(strpos($r,'235')===false){ fclose($fp); return [false,'authentification Gmail refusée']; }
+  if(strpos($r,'235')===false){ fclose($fp); return [false,'auth refusée ('.$host.', user '.$user.') : '.trim($r)]; }
   $cmd("MAIL FROM:<$from>"); $cmd("RCPT TO:<$to>"); $cmd("DATA");
   $h="From: $from\r\nReply-To: $from\r\nTo: $to\r\nSubject: =?UTF-8?B?".base64_encode($subject)."?=\r\nMIME-Version: 1.0\r\n";
   if($attachB64){
