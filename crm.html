@@ -925,6 +925,8 @@ function changerStatutDevis(id){
   d.statut=ns;
   if(ns==='Envoyé'&&!d.dateEnvoi) d.dateEnvoi=todayISO();
   if(ns==='Accepté'&&!d.dateAcceptation) d.dateAcceptation=todayISO();
+  if(ns==='Acompte reçu') d.acompteRecu=Math.round((+d.montantTTC||0)*(d.acomptePct||0)/100);
+  if(ns!=='Acompte reçu') d.acompteRecu=0;   // pas d'acompte encaissé sur les autres statuts
   DB.save('devis',d);
   let extra='';
   syncPrestationDevis(d);
@@ -960,7 +962,9 @@ function majDevis(id,statut){
 }
 function enregistrerAcompte(id){
   const d=DB.get('devis',id); if(!d)return;
-  d.statut='Acompte reçu'; DB.save('devis',d);
+  d.statut='Acompte reçu';
+  d.acompteRecu=Math.round((+d.montantTTC||0)*(d.acomptePct||0)/100); // montant réellement encaissé
+  DB.save('devis',d);
   syncPrestationDevis(d); addRecetteAcompte(d);
   logActivite('Acompte reçu · '+id+' '+fmtDateShort(d.dateEvenement));
   closeModal(); updateBadges(); RENDERERS.devis(); toast('💰 Acompte reçu — créneau confirmé','ok');
@@ -1079,10 +1083,12 @@ function pdfDevis(id,returnDoc){
   const rows=[['Sous-total prestations',fmtEur(d.montantHT)],['Frais de déplacement ('+(d.distanceKm||0)+' km)',fmtEur(d.fraisDeplacement)]];
   if(d.remise) rows.push(['Remise','- '+fmtEur(d.remise)]);
   pdfTotaux(doc,ty,rows,['TOTAL TTC',fmtEur(d.montantTTC)]);
-  pdfReglement(doc,doc.lastAutoTable.finalY+9,'CONDITIONS',[
-    'Acompte de réservation de '+fmtEur(acompte)+' ('+(d.acomptePct||0)+' %) à la commande.',
-    'La date n\'est confirmée et bloquée qu\'à réception de l\'acompte.',
-    'Devis valable 30 jours. Solde réglé après la prestation.']);
+  const cond=(d.acomptePct>0)
+    ? ['Acompte de réservation de '+fmtEur(acompte)+' ('+d.acomptePct+' %) à la commande.',
+       'La date n\'est confirmée et bloquée qu\'à réception de l\'acompte.',
+       'Devis valable 30 jours. Solde réglé après la prestation.']
+    : ['Devis valable 30 jours.','Règlement à réception après la prestation.'];
+  pdfReglement(doc,doc.lastAutoTable.finalY+9,'CONDITIONS',cond);
   pdfFooter(doc);
   if(returnDoc) return doc;
   doc.output('dataurlnewwindow'); logActivite('PDF généré · devis '+id);
@@ -1246,11 +1252,11 @@ RENDERERS.factures=function(){
 function facturerSolde(idDevis){
   const d=DB.get('devis',idDevis); if(!d)return;
   if(DB.all('factures').find(f=>f.idDevis===idDevis)){ toast('Facture déjà émise pour ce devis','err'); return; }
-  const acompte=Math.round((+d.montantTTC||0)*(d.acomptePct||0)/100);
+  const acompte=+d.acompteRecu||0;   // SEULEMENT l'acompte réellement encaissé (0 si pas reçu)
   const cfg=DB.config(); const ech=new Date(); ech.setDate(ech.getDate()+(cfg.delaiRelance1||30));
   DB.save('factures',{id:nextId('FAC','factures'),dateEmission:todayISO(),idDevis:d.id,idClient:d.idClient,montantTTC:+d.montantTTC,acompteVerse:acompte,soldeDu:(+d.montantTTC-acompte),dateEcheance:ech.toISOString().slice(0,10),statut:'Émise',datePaiement:'',dateRelance1:'',dateRelance2:''});
-  logActivite('Facture émise · solde devis '+idDevis);
-  closeModal(); updateBadges(); toast('🧾 Facture émise (solde après acompte)','ok'); nav('factures');
+  logActivite('Facture émise · devis '+idDevis+(acompte?' (acompte '+fmtEur(acompte)+' déduit)':' (sans acompte)'));
+  closeModal(); updateBadges(); toast(acompte?'🧾 Facture émise (acompte déduit)':'🧾 Facture émise (montant total)','ok'); nav('factures');
 }
 function marquerPayee(id){
   const f=DB.get('factures',id); const solde=+f.soldeDu||0;
@@ -1318,7 +1324,7 @@ function voirFacture(id){
       <div class="action-box"><div class="action-box-title">📧 Par email (semi-auto)</div>${emailBtns}</div>
       <div class="action-box"><div class="action-box-title">✋ Déjà fait hors CRM</div>${manuBtns}</div>
     </div>`;
-  openModal('Facture · '+esc(id),body,`<button class="btn btn-ghost" onclick="event.stopPropagation();pdfFacture('${id}')">⬇ Aperçu PDF</button><button class="btn btn-ghost" onclick="closeModal()">Fermer</button>`);
+  openModal('Facture · '+esc(id),body,`<button class="btn btn-danger" onclick="supprimerFacture('${id}')">🗑 Supprimer</button><button class="btn btn-ghost" onclick="event.stopPropagation();pdfFacture('${id}')">⬇ Aperçu PDF</button><button class="btn btn-ghost" onclick="closeModal()">Fermer</button>`);
 }
 function marquerFactureEnvoyee(id){ const f=DB.get('factures',id); f.dateEnvoi=todayISO(); DB.save('factures',f); logActivite('Facture '+id+' marquée envoyée (manuel)'); updateBadges(); RENDERERS.factures(); if(document.getElementById('modal-bg').classList.contains('open')) voirFacture(id); toast('Facture marquée envoyée','ok'); }
 function qbtn(cls,onclick,label){ return `<button class="btn ${cls} btn-sm" onclick="event.stopPropagation();${onclick}">${label}</button>`; }
@@ -1340,6 +1346,12 @@ function factureQuick(f){
 }
 function marquerRelanceManuelle(id){ const f=DB.get('factures',id); const type=f.statut==='Relance 1'?'R2':'R1'; confirmerRelance(id,type); voirFacture(id); toast('Relance '+type+' marquée faite','ok'); }
 function marquerFacturePayee(id){ marquerPayee(id); voirFacture(id); }
+function supprimerFacture(id){
+  openModal('Supprimer la facture '+esc(id)+' ?',
+    '<div class="alert danger" style="margin:0"><span class="alert-icon">🗑</span><div>La facture sera supprimée (le devis lié repasse facturable). Les recettes déjà encaissées restent dans le livre de comptes.</div></div>',
+    '<button class="btn btn-ghost" onclick="voirFacture(\''+id+'\')">Annuler</button><button class="btn btn-danger" onclick="confirmSupprimerFacture(\''+id+'\')">Supprimer définitivement</button>');
+}
+function confirmSupprimerFacture(id){ DB.remove('factures',id); logActivite('Facture '+id+' supprimée'); closeModal(); updateBadges(); RENDERERS.factures(); toast('Facture supprimée','ok'); }
 function avisGoogleFacture(id){
   const f=DB.get('factures',id); if(!f)return;
   const dev=DB.get('devis',f.idDevis)||{};
