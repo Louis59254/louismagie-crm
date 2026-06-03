@@ -847,7 +847,8 @@ function voirDevis(id){
       <button class="btn btn-ghost" onclick="changerStatutDevis('${id}');voirDevis('${id}')">Appliquer</button>
     </div></details>`;
   const footer=`<button class="btn btn-danger" onclick="supprimerDevis('${id}')">🗑 Supprimer</button>
-    <button class="btn btn-ghost" onclick="pdfDevis('${id}')">⬇ Aperçu PDF</button>
+    ${d.statut!=='Brouillon'?`<button class="btn btn-ghost" onclick="devisBack('${id}')">↩ Étape précédente</button>`:''}
+    <button class="btn btn-ghost" onclick="pdfDevis('${id}')">⬇ PDF</button>
     <button class="btn btn-ghost" onclick="closeModal();nav('devis-create',{id:'${id}'})">✎ Modifier</button>
     <button class="btn btn-ghost" onclick="closeModal()">Fermer</button>`;
   openModal('Devis · '+esc(d.id),body,footer);
@@ -921,6 +922,18 @@ function annulerAcompte(id){
   removeRecetteAcompte(id); syncPrestationDevis(d);
   logActivite('Acompte annulé · '+id); closeModal(); updateBadges(); RENDERERS.devis();
   toast('Acompte annulé — devis repassé en Accepté','ok');
+}
+function devisBack(id){
+  const d=DB.get('devis',id); if(!d)return; const s=d.statut;
+  if(s==='Acompte reçu'){ annulerAcompte(id); return; }
+  if(s==='Refusé'){ d.statut='Envoyé'; }
+  else if(s==='Accepté'){ d.statut='Envoyé'; d.dateAcceptation=''; }
+  else if(s==='Envoyé'){ d.statut='Brouillon'; d.dateEnvoi=''; }
+  else { toast('Déjà au brouillon'); return; }
+  DB.save('devis',d); syncPrestationDevis(d); logActivite('Devis '+id+' revenu à '+d.statut);
+  updateBadges(); RENDERERS.devis();
+  if(document.getElementById('modal-bg').classList.contains('open')) voirDevis(id);
+  toast('↩ Revenu à : '+d.statut,'ok');
 }
 function addRecetteSolde(f,montant){
   const m=+montant||0; if(m<=0 || DB.all('recettes').some(r=>r.ref===f.id&&r.type==='Solde')) return;
@@ -1333,7 +1346,8 @@ function voirFacture(id){
       <div class="action-box"><div class="action-box-title">📧 Par email (semi-auto)</div>${emailBtns}</div>
       <div class="action-box"><div class="action-box-title">✋ Déjà fait hors CRM</div>${manuBtns}</div>
     </div>`;
-  openModal('Facture · '+esc(id),body,`<button class="btn btn-danger" onclick="supprimerFacture('${id}')">🗑 Supprimer</button><button class="btn btn-ghost" onclick="event.stopPropagation();pdfFacture('${id}')">⬇ Aperçu PDF</button><button class="btn btn-ghost" onclick="closeModal()">Fermer</button>`);
+  const peutReculer=(f.statut!=='Émise')||f.dateEnvoi||mailDate('facture',id);
+  openModal('Facture · '+esc(id),body,`<button class="btn btn-danger" onclick="supprimerFacture('${id}')">🗑 Supprimer</button>${peutReculer?`<button class="btn btn-ghost" onclick="factureBack('${id}')">↩ Étape précédente</button>`:''}<button class="btn btn-ghost" onclick="event.stopPropagation();pdfFacture('${id}')">⬇ PDF</button><button class="btn btn-ghost" onclick="closeModal()">Fermer</button>`);
 }
 function marquerFactureEnvoyee(id){ const f=DB.get('factures',id); f.dateEnvoi=todayISO(); DB.save('factures',f); logActivite('Facture '+id+' marquée envoyée (manuel)'); updateBadges(); RENDERERS.factures(); if(document.getElementById('modal-bg').classList.contains('open')) voirFacture(id); toast('Facture marquée envoyée','ok'); }
 function qbtn(cls,onclick,label){ return `<button class="btn ${cls} btn-sm" onclick="event.stopPropagation();${onclick}">${label}</button>`; }
@@ -1361,6 +1375,21 @@ function supprimerFacture(id){
     '<button class="btn btn-ghost" onclick="voirFacture(\''+id+'\')">Annuler</button><button class="btn btn-danger" onclick="confirmSupprimerFacture(\''+id+'\')">Supprimer définitivement</button>');
 }
 function confirmSupprimerFacture(id){ DB.remove('factures',id); logActivite('Facture '+id+' supprimée'); closeModal(); updateBadges(); RENDERERS.factures(); toast('Facture supprimée','ok'); }
+function factureBack(id){
+  const f=DB.get('factures',id); if(!f)return;
+  const rmMail=k=>DB.all('mails').filter(m=>m.kind===k&&m.ref===id).forEach(m=>DB.remove('mails',m.id));
+  let msg;
+  if(f.statut==='Payée'){ f.statut=f.dateRelance2?'Relance 2':(f.dateRelance1?'Relance 1':'Émise'); f.datePaiement=''; f.soldeDu=(+f.montantTTC||0)-(+f.acompteVerse||0);
+    DB.all('recettes').filter(r=>r.ref===id&&r.type==='Solde').forEach(r=>DB.remove('recettes',r.id)); msg='Paiement annulé'; }
+  else if(f.statut==='Relance 2'){ f.statut='Relance 1'; f.dateRelance2=''; rmMail('relanceR2'); msg='Relance 2 annulée'; }
+  else if(f.statut==='Relance 1'){ f.statut='Émise'; f.dateRelance1=''; rmMail('relanceR1'); msg='Relance 1 annulée'; }
+  else if(f.dateEnvoi||mailDate('facture',id)){ f.dateEnvoi=''; rmMail('facture'); msg='Envoi annulé'; }
+  else { toast('Déjà au début (facture émise)'); return; }
+  DB.save('factures',f); logActivite('Facture '+id+' : '+msg);
+  updateBadges(); RENDERERS.factures();
+  if(document.getElementById('modal-bg').classList.contains('open')) voirFacture(id);
+  toast('↩ '+msg,'ok');
+}
 function avisGoogleFacture(id){
   const f=DB.get('factures',id); if(!f)return;
   const dev=DB.get('devis',f.idDevis)||{};
