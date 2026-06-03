@@ -35,7 +35,7 @@
   --sh:0 2px 12px rgba(70,55,30,.08);--sh2:0 14px 44px rgba(70,55,30,.16);
   --sidebar:#FBF8F3;--topbar:rgba(245,242,238,.9);--login-bg:#E7E0D6;
 }
-body{font-family:'DM Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,sans-serif;color:var(--creme);font-size:14px;background:var(--noir);min-height:100vh;-webkit-font-smoothing:antialiased}
+body{font-family:'DM Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,sans-serif;color:var(--creme);font-size:14px;background:var(--noir);min-height:100vh;-webkit-font-smoothing:antialiased;overflow-x:hidden}
 h1,h2,h3,h4,.disp{font-family:'Syne','Trebuchet MS','Gill Sans',sans-serif}
 ::selection{background:var(--or);color:var(--noir)}
 ::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:var(--anthr);border-radius:8px}::-webkit-scrollbar-track{background:transparent}
@@ -259,6 +259,15 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
 #sb-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:90}
 #sb-backdrop.show{display:block}
 .table-scroll{-webkit-overflow-scrolling:touch}
+/* barre nav mobile */
+#mobnav{display:none}
+@media(max-width:900px){
+  #mobnav{display:flex;position:fixed;bottom:0;left:0;right:0;z-index:95;background:var(--sidebar);border-top:1px solid var(--anthr);justify-content:space-around;padding-bottom:env(safe-area-inset-bottom)}
+  #mobnav .mn{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;color:var(--gm);font-size:10px;font-weight:600;padding:8px 2px 7px;cursor:pointer;background:none;border:none;border-top:2px solid transparent;font-family:'DM Sans',sans-serif}
+  #mobnav .mn .ic{font-size:20px;line-height:1}
+  #mobnav .mn.active{color:var(--or);border-top-color:var(--or)}
+  #main{padding-bottom:64px}
+}
 
 /* ── RESPONSIVE ── */
 @media(max-width:1080px){
@@ -271,6 +280,10 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
   #sidebar.open{transform:translateX(0);box-shadow:var(--sh2)}
   #main{margin-left:0}
   .hamburger{display:block;font-size:24px}
+  .topbar{gap:8px}
+  .topbar-actions{overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch}
+  .topbar-actions .btn{font-size:11px;padding:7px 9px}
+  .topbar-actions .btn-sm{font-size:11px;padding:6px 8px}
   .form-grid,.form-grid.c3{grid-template-columns:1fr}
   .content{padding:20px}
   /* anti-zoom iOS : inputs >=16px */
@@ -287,6 +300,10 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
   .kpi-grid,.kanban{grid-template-columns:1fr!important}
   .content{padding:14px}.topbar{padding:11px 14px}
   .topbar-title{font-size:18px}.topbar-title span{display:none}
+  th,td{padding:9px 10px;font-size:12px}
+  th{font-size:9px}
+  .td-actions .btn{padding:8px 10px}
+  .table-header{padding:12px 14px}
   .cal-grid{gap:3px}.cal-cell{min-height:62px;font-size:10px;padding:4px 5px}
   /* lignes de devis : empile proprement */
   #dv-lines .form-grid{grid-template-columns:1fr 1fr!important}
@@ -307,7 +324,6 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
     <input type="password" id="pwd" placeholder="Mot de passe" onkeydown="if(event.key==='Enter')doLogin()">
     <button class="login-btn" onclick="doLogin()">Accéder au CRM</button>
     <div class="login-err" id="login-err">Mot de passe incorrect</div>
-    <div class="login-hint">Mot de passe par défaut : <strong>louismagie</strong></div>
   </div>
 </div>
 
@@ -339,6 +355,13 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
     </div>
   </aside>
   <div id="sb-backdrop" onclick="toggleSidebar(false)"></div>
+  <nav id="mobnav">
+    <button class="mn" data-v="dashboard" onclick="nav('dashboard')"><span class="ic">🎩</span>Bord</button>
+    <button class="mn" data-v="demandes" onclick="nav('demandes')"><span class="ic">📥</span>Demandes</button>
+    <button class="mn" data-v="agenda" onclick="nav('agenda')"><span class="ic">📅</span>Agenda</button>
+    <button class="mn" data-v="devis" onclick="nav('devis')"><span class="ic">📄</span>Devis</button>
+    <button class="mn" data-v="factures" onclick="nav('factures')"><span class="ic">🧾</span>Factures</button>
+  </nav>
 
   <div id="main">
     <div class="topbar">
@@ -501,6 +524,7 @@ function nav(view,params){
   const tt=document.getElementById('topbar-title');
   tt.innerHTML=(VIEW_TITLES[view]||'')+' <span id="topbar-date">· '+new Date().toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'})+'</span>';
   document.getElementById('topbar-actions').innerHTML='';
+  document.querySelectorAll('#mobnav .mn').forEach(b=>b.classList.toggle('active', b.dataset.v===view));
   toggleSidebar(false);
   if(RENDERERS[view]) RENDERERS[view](currentParams);
   else if(vEl) vEl.innerHTML='<div class="empty"><div class="empty-icon">🛠️</div><div class="empty-text">Vue en construction</div><div class="empty-sub">Livrée au prochain incrément.</div></div>';
