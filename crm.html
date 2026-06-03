@@ -1823,10 +1823,15 @@ function confirmImport(j){
     '<div class="alert warning" style="margin:0"><span class="alert-icon">⚠</span><div>Remplace <strong>toutes les données actuelles</strong> par la sauvegarde (<strong>'+n+' enregistrements</strong>, du '+(j._date?fmtDateShort(j._date):'?')+'). Irréversible — exporte d\'abord l\'état actuel si besoin.</div></div>',
     '<button class="btn btn-ghost" onclick="closeModal()">Annuler</button><button class="btn btn-danger" onclick="doImport()">Remplacer tout</button>');
 }
-function doImport(){ const j=window._importData; if(!j)return;
-  ENTITIES.forEach(e=>DB._write(e, Array.isArray(j.data[e])?j.data[e]:[]));
+async function doImport(){ const j=window._importData; if(!j)return;
+  ENTITIES.forEach(e=>DB._writeLocal(e, Array.isArray(j.data[e])?j.data[e]:[]));
   if(j.config) DB.saveConfig(j.config);
-  closeModal(); toast('Sauvegarde restaurée','ok'); setTimeout(()=>location.reload(),600);
+  if(cloudUrl()){ // pousse tout vers le serveur AVANT le reload (sinon cloudPull écraserait l'import)
+    toast('Import → synchronisation serveur…');
+    try{ await Promise.all(ENTITIES.map(e=>cloudPost({action:'putEntity',entity:e,rows:DB.all(e)}))
+                            .concat(cloudPost({action:'putConfig',config:DB.config()}))); }catch(_){}
+  }
+  closeModal(); toast('Sauvegarde restaurée','ok'); setTimeout(()=>location.reload(),800);
 }
 function supprimerRecette(id){ DB.remove('recettes',id); RENDERERS.compta(); toast('Recette supprimée','ok'); }
 function addRecetteManuelle(){
