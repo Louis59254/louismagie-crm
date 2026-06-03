@@ -2009,7 +2009,7 @@ RENDERERS.reglages=function(){
       </div>
       <div class="td-dim" style="margin-top:4px">Envoi auto = nécessite <code>GMAIL_USER</code> + <code>GMAIL_APP_PASSWORD</code> dans Coolify (mot de passe d'application Gmail, 2FA requise).</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">
-        <button class="btn btn-or" onclick="saveParams();cloudSyncNow()">💾 Enregistrer & synchroniser</button>
+        <button class="btn btn-or" onclick="saveBackend()">💾 Enregistrer & synchroniser</button>
         <button class="btn btn-ghost" onclick="cloudPushAll()">⬆ Tout envoyer vers Google</button>
         <button class="btn btn-ghost" onclick="cloudSyncNow()">🔄 Récupérer depuis Google</button>
       </div>
@@ -2083,6 +2083,13 @@ function archivePdfCloud(doc,kind,filename,year){ if(!cloudUrl())return;
   try{ const b64=doc.output('datauristring').split(',')[1];
     cloudPost({action:'archivePdf',kind,filename,base64:b64,year:year||new Date().getFullYear()})
       .then(j=>{ if(j&&j.ok&&j.url) logActivite('PDF archivé dans Drive : '+filename); }); }catch(_){}
+}
+async function saveBackend(){            // sauve les réglages + POUSSE vers le serveur (sans re-tirer = pas d'écrasement)
+  saveParams(); setCloudStatus('sync');
+  if(cloudUrl()){ const j=await cloudPost({action:'putConfig',config:DB.config()});
+    toast(j&&j.ok?'Réglages enregistrés & synchronisés':'Enregistré en local (serveur injoignable)', j&&j.ok?'ok':'err'); }
+  else toast('Réglages enregistrés','ok');
+  if(_currentView==='reglages') RENDERERS.reglages();
 }
 async function cloudSyncNow(){ const res=await cloudPull(); if(typeof RENDERERS[_currentView]==='function') RENDERERS[_currentView](currentParams); updateBadges();
   toast(res==='pulled'?'Données récupérées depuis Google':(res==='init'?'Cloud initialisé depuis ce CRM':(res==='off'?'Configure d\'abord l\'URL':'Échec — vérifie l\'URL')), res==='err'?'err':'ok'); }
