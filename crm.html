@@ -1,0 +1,2015 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CRM · LouisMagie</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@500;600;700;800&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --or:#FF7700;--or-deep:#E56200;--or-soft:rgba(255,119,0,.14);--or-line:rgba(255,119,0,.35);
+  --noir:#0A0A08;--noir2:#141410;--noir3:#1E1E1A;--anthr:#2C2C28;
+  --creme:#F5F2EE;--blanc:#FDFCFB;--gc:#C8C3BB;--gm:#8A8580;--gf:#5A5650;
+  --ok:#3FB97A;--okl:rgba(63,185,122,.14);
+  --warn:#E8A13A;--warnl:rgba(232,161,58,.14);
+  --er:#E5564B;--erl:rgba(229,86,75,.14);
+  --info:#4A9DE8;--infol:rgba(74,157,232,.14);
+  --sh:0 2px 14px rgba(0,0,0,.4);--sh2:0 12px 40px rgba(0,0,0,.55);
+  --sidebar:#060605;--topbar:rgba(10,10,8,.85);--login-bg:#161613;
+  --r:10px;--rsm:6px;--sb:244px;
+}
+:root[data-theme="light"]{
+  --or:#EA6A00;--or-deep:#C75900;--or-soft:rgba(234,106,0,.12);--or-line:rgba(234,106,0,.3);
+  --noir:#F0EBE4;--noir2:#FFFFFF;--noir3:#F4F0EA;--anthr:#E1DACF;
+  --creme:#1C1A15;--blanc:#0E0E0C;--gc:#3A372F;--gm:#6E695F;--gf:#A39C90;
+  --ok:#2E9E63;--okl:rgba(46,158,99,.13);
+  --warn:#C97E14;--warnl:rgba(201,126,20,.13);
+  --er:#D23B30;--erl:rgba(210,59,48,.12);
+  --info:#2F7FCB;--infol:rgba(47,127,203,.12);
+  --sh:0 2px 12px rgba(70,55,30,.08);--sh2:0 14px 44px rgba(70,55,30,.16);
+  --sidebar:#FBF8F3;--topbar:rgba(245,242,238,.9);--login-bg:#E7E0D6;
+}
+body{font-family:'DM Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,sans-serif;color:var(--creme);font-size:14px;background:var(--noir);min-height:100vh;-webkit-font-smoothing:antialiased}
+h1,h2,h3,h4,.disp{font-family:'Syne','Trebuchet MS','Gill Sans',sans-serif}
+::selection{background:var(--or);color:var(--noir)}
+::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:var(--anthr);border-radius:8px}::-webkit-scrollbar-track{background:transparent}
+
+/* ── LOGIN ── */
+#login-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 0%,var(--login-bg) 0%,var(--noir) 60%)}
+.login-card{background:var(--noir2);border:1px solid var(--anthr);border-radius:18px;padding:46px 40px;width:370px;box-shadow:var(--sh2);text-align:center}
+.login-logo{font-family:'Syne','Trebuchet MS','Gill Sans',sans-serif;font-weight:700;font-size:11px;letter-spacing:4px;text-transform:uppercase;color:var(--or);margin-bottom:10px}
+.login-title{font-family:'Syne','Trebuchet MS','Gill Sans',sans-serif;font-weight:800;font-size:30px;color:var(--creme);margin-bottom:30px;line-height:1.1}
+.login-title em{color:var(--or);font-style:normal}
+.login-card input[type=password]{width:100%;padding:13px 16px;border:1.5px solid var(--anthr);border-radius:var(--rsm);font-family:'DM Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,sans-serif;font-size:15px;outline:none;transition:border-color .2s;margin-bottom:12px;background:var(--noir3);color:var(--creme)}
+.login-card input[type=password]:focus{border-color:var(--or)}
+.login-btn{width:100%;padding:14px;background:var(--or);color:var(--noir);border:none;border-radius:var(--rsm);font-family:'Syne','Trebuchet MS','Gill Sans',sans-serif;font-weight:700;font-size:15px;cursor:pointer;transition:background .2s}
+.login-btn:hover{background:var(--or-deep)}
+.login-err{color:var(--er);font-size:12px;margin-top:10px;display:none}
+.login-hint{color:var(--gf);font-size:11px;margin-top:18px}
+
+/* ── SHELL ── */
+#app{display:none;min-height:100vh;flex-direction:row}
+#sidebar{width:var(--sb);min-height:100vh;background:var(--sidebar);border-right:1px solid var(--anthr);display:flex;flex-direction:column;position:fixed;top:0;left:0;z-index:100;transition:transform .3s}
+.sb-logo{padding:24px 22px 18px;border-bottom:1px solid var(--anthr)}
+.sb-brand{font-family:'Syne','Trebuchet MS','Gill Sans',sans-serif;font-weight:700;font-size:9px;letter-spacing:4px;text-transform:uppercase;color:var(--or);margin-bottom:4px}
+.sb-name{font-family:'Syne','Trebuchet MS','Gill Sans',sans-serif;font-weight:800;font-size:20px;color:var(--creme);line-height:1}
+.sb-name em{color:var(--or);font-style:normal}
+.sb-nav{flex:1;padding:14px 0;overflow-y:auto}
+.sb-section{font-size:9px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:var(--gf);padding:14px 22px 6px}
+.sb-item{display:flex;align-items:center;gap:12px;padding:10px 22px;cursor:pointer;color:var(--gm);font-size:13.5px;font-weight:500;transition:all .16s;border-left:3px solid transparent;user-select:none}
+.sb-item:hover{color:var(--creme);background:rgba(255,255,255,.04)}
+.sb-item.active{color:var(--creme);background:var(--or-soft);border-left-color:var(--or)}
+.sb-item .ic{font-size:17px;width:22px;text-align:center;flex-shrink:0}
+.sb-item .badge-count{margin-left:auto;background:var(--or);color:var(--noir);font-size:10px;font-weight:700;padding:1px 7px;border-radius:20px}
+.sb-cta{margin:14px;background:var(--or);color:var(--noir);border:none;border-radius:var(--rsm);padding:12px 16px;font-family:'Syne','Trebuchet MS','Gill Sans',sans-serif;font-size:13.5px;font-weight:700;cursor:pointer;width:calc(100% - 28px);transition:background .2s;display:flex;align-items:center;justify-content:center;gap:8px}
+.sb-cta:hover{background:var(--or-deep)}
+.sb-footer{padding:16px 22px;border-top:1px solid var(--anthr);font-size:11px;color:var(--gf)}
+.sb-logout{cursor:pointer;color:var(--gm);font-size:12px;margin-top:6px;display:flex;align-items:center;gap:6px}
+.sb-logout:hover{color:var(--or)}
+
+#main{margin-left:var(--sb);flex:1;min-height:100vh;display:flex;flex-direction:column}
+.topbar{background:var(--topbar);backdrop-filter:blur(10px);border-bottom:1px solid var(--anthr);padding:15px 28px;display:flex;align-items:center;gap:12px;justify-content:space-between;position:sticky;top:0;z-index:50}
+.iconbtn{background:var(--noir3);border:1.5px solid var(--anthr);color:var(--creme);width:38px;height:38px;min-width:38px;border-radius:var(--rsm);font-size:17px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .16s}
+.iconbtn:hover{border-color:var(--or)}
+.topbar-title{font-family:'Syne','Trebuchet MS','Gill Sans',sans-serif;font-weight:700;font-size:21px;color:var(--creme)}
+.topbar-title span{font-size:12px;font-weight:400;color:var(--gm);font-family:'DM Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,sans-serif;margin-left:10px}
+.topbar-actions{display:flex;gap:10px;align-items:center}
+.hamburger{display:none;background:none;border:none;color:var(--creme);font-size:22px;cursor:pointer}
+.content{padding:28px;flex:1;max-width:1280px;width:100%}
+.view{display:none}.view.active{display:block}
+
+/* ── KPI ── */
+.kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:14px;margin-bottom:24px}
+.kpi{background:var(--noir2);border:1px solid var(--anthr);border-radius:var(--r);padding:18px;border-top:3px solid var(--anthr);transition:transform .18s,border-color .18s}
+.kpi:hover{transform:translateY(-2px)}
+.kpi.or{border-top-color:var(--or)}.kpi.vert{border-top-color:var(--ok)}.kpi.warn{border-top-color:var(--warn)}.kpi.rouge{border-top-color:var(--er)}.kpi.info{border-top-color:var(--info)}
+.kpi-label{font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:var(--gm);margin-bottom:8px}
+.kpi-val{font-family:'Syne','Trebuchet MS','Gill Sans',sans-serif;font-weight:700;font-size:26px;color:var(--creme);line-height:1}
+.kpi-sub{font-size:11px;color:var(--gm);margin-top:6px}
+
+/* ── ALERTS ── */
+.alert{border-radius:var(--r);padding:12px 16px;margin-bottom:12px;display:flex;align-items:flex-start;gap:12px;font-size:13px;line-height:1.5;border:1px solid}
+.alert.danger{background:var(--erl);border-color:var(--er);color:#FBC9C4}
+.alert.warning{background:var(--warnl);border-color:var(--warn);color:#F4D9A8}
+.alert.info{background:var(--infol);border-color:var(--info);color:#BcdcF6}
+.alert.success{background:var(--okl);border-color:var(--ok);color:#B6E8CC}
+.alert-icon{font-size:18px;flex-shrink:0}
+
+/* ── TABLE ── */
+.table-wrap{background:var(--noir2);border:1px solid var(--anthr);border-radius:var(--r);overflow:hidden;margin-bottom:20px}
+.table-header{padding:16px 20px;border-bottom:1px solid var(--anthr);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.table-title{font-family:'Syne','Trebuchet MS','Gill Sans',sans-serif;font-weight:700;font-size:16px;color:var(--creme)}
+.table-filters{display:flex;gap:8px;flex-wrap:wrap}
+.filter-input{padding:8px 12px;border:1.5px solid var(--anthr);border-radius:var(--rsm);font-family:'DM Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,sans-serif;font-size:12px;outline:none;transition:border-color .2s;background:var(--noir3);color:var(--creme)}
+.filter-input:focus{border-color:var(--or)}
+.table-scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th{padding:10px 16px;text-align:left;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--gm);background:var(--noir);border-bottom:1px solid var(--anthr);white-space:nowrap}
+td{padding:12px 16px;border-bottom:1px solid var(--anthr);font-size:13px;vertical-align:middle;color:var(--creme)}
+tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:var(--noir3)}
+.td-actions{display:flex;gap:6px;flex-wrap:wrap}
+.td-strong{font-weight:600;color:var(--blanc)}
+.td-dim{color:var(--gm);font-size:12px}
+
+/* ── BADGES ── */
+.badge{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:600;padding:3px 9px;border-radius:20px;letter-spacing:.3px;white-space:nowrap}
+.badge.nouveau,.badge.emise,.badge.envoye-info{background:var(--infol);color:var(--info)}
+.badge.brouillon,.badge.ignore{background:rgba(200,195,187,.12);color:var(--gc)}
+.badge.envoye,.badge.encours,.badge.relance1{background:var(--warnl);color:var(--warn)}
+.badge.accepte,.badge.converti,.badge.payee,.badge.acompte,.badge.acompterecu,.badge.realisee,.badge.confirmee{background:var(--okl);color:var(--ok)}
+.badge.option{background:var(--infol);color:var(--info)}
+
+/* ── PROGRESS STEPPER ── */
+.prog{display:flex;align-items:flex-start;margin:6px 0 14px}
+.prog-step{flex:1;text-align:center;position:relative;min-width:0}
+.prog-step:not(:last-child)::after{content:'';position:absolute;top:12px;left:50%;width:100%;height:3px;background:var(--anthr);z-index:0;border-radius:2px}
+.prog-step.done::after{background:var(--ok)}
+.prog-step.current::after{background:linear-gradient(90deg,var(--or),var(--anthr))}
+.prog-dot{width:26px;height:26px;border-radius:50%;margin:0 auto 6px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;position:relative;z-index:1;background:var(--noir3);border:2px solid var(--anthr);color:var(--gm);transition:all .2s}
+.prog-step.done .prog-dot{background:var(--ok);border-color:var(--ok);color:#04240f}
+.prog-step.current .prog-dot{background:var(--or);border-color:var(--or);color:var(--noir);box-shadow:0 0 0 4px var(--or-soft)}
+.prog-step.skip .prog-dot{border-style:dashed}
+.prog-lbl{font-size:11px;font-weight:600;color:var(--creme);line-height:1.2}
+.prog-step:not(.done):not(.current) .prog-lbl{color:var(--gm)}
+.prog-sub{font-size:9.5px;color:var(--gm);margin-top:2px}
+
+/* ── QUICK ACTIONS ── */
+.qa{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:7px;border:1.5px solid var(--anthr);background:var(--noir3);color:var(--gc);cursor:pointer;font-size:14px;transition:all .15s;flex-shrink:0}
+.qa:hover{border-color:var(--or);color:var(--or);transform:translateY(-1px)}
+.qa.primary{background:var(--or);border-color:var(--or);color:var(--noir)}
+.qa.primary:hover{background:var(--or-deep);color:var(--noir)}
+.qa.ok{border-color:var(--ok);color:var(--ok)}.qa.ok:hover{background:var(--ok);color:#04240f}
+.action-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
+.action-box{background:var(--noir);border:1px solid var(--anthr);border-radius:var(--r);padding:12px}
+.action-box-title{font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--gm);margin-bottom:8px}
+.action-box .btn{width:100%;justify-content:center;margin-bottom:6px}
+@media(max-width:560px){.action-grid{grid-template-columns:1fr}}
+.badge.refuse,.badge.relance2,.badge.impaye{background:var(--erl);color:var(--er)}
+.badge.contentieux{background:#3a0d0a;color:#FF8B7E}
+
+/* ── BUTTONS ── */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border:none;border-radius:var(--rsm);font-family:'DM Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,sans-serif;font-size:12px;font-weight:600;cursor:pointer;transition:all .16s;white-space:nowrap}
+.btn-or{background:var(--or);color:var(--noir)}.btn-or:hover{background:var(--or-deep)}
+.btn-success{background:var(--ok);color:#04240f}.btn-success:hover{filter:brightness(1.1)}
+.btn-warn{background:var(--warn);color:#231400}.btn-warn:hover{filter:brightness(1.1)}
+.btn-danger{background:var(--er);color:#fff}.btn-danger:hover{filter:brightness(1.1)}
+.btn-ghost{background:transparent;color:var(--gc);border:1.5px solid var(--anthr)}.btn-ghost:hover{border-color:var(--or);color:var(--or)}
+.btn-sm{padding:5px 10px;font-size:11px}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+
+/* ── CHARTS ── */
+.charts-grid{display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-bottom:24px}
+.chart-card{background:var(--noir2);border:1px solid var(--anthr);border-radius:var(--r);padding:20px}
+.chart-title{font-family:'Syne','Trebuchet MS','Gill Sans',sans-serif;font-weight:700;font-size:15px;color:var(--creme);margin-bottom:16px}
+.chart-wrap{position:relative;height:240px}
+
+/* ── PANELS / CARDS ── */
+.panel{background:var(--noir2);border:1px solid var(--anthr);border-radius:var(--r);padding:20px;margin-bottom:16px}
+.panel-title{font-family:'Syne','Trebuchet MS','Gill Sans',sans-serif;font-weight:700;font-size:16px;color:var(--creme);margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--anthr);display:flex;align-items:center;justify-content:space-between;gap:10px}
+.info-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.info-item{font-size:13px;line-height:1.5}
+.info-label{font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--gm);display:block;margin-bottom:2px}
+
+/* ── MODAL ── */
+#modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:200;align-items:center;justify-content:center;padding:20px}
+#modal-bg.open{display:flex}
+.modal{background:var(--noir2);border:1px solid var(--anthr);border-radius:14px;width:620px;max-width:100%;max-height:90vh;overflow-y:auto;box-shadow:var(--sh2)}
+.modal-head{padding:20px 24px;border-bottom:1px solid var(--anthr);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:var(--noir2);z-index:2}
+.modal-title{font-family:'Syne','Trebuchet MS','Gill Sans',sans-serif;font-weight:700;font-size:18px;color:var(--creme)}
+.modal-close{background:none;border:none;font-size:24px;cursor:pointer;color:var(--gm);line-height:1}
+.modal-close:hover{color:var(--or)}
+.modal-body{padding:24px}
+.modal-footer{padding:16px 24px;border-top:1px solid var(--anthr);display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap}
+
+/* ── FORM ── */
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+.form-grid.full{grid-template-columns:1fr}
+.form-grid.c3{grid-template-columns:1fr 1fr 1fr}
+.form-group{display:flex;flex-direction:column;gap:5px}
+.form-label{font-size:10px;font-weight:600;letter-spacing:.6px;text-transform:uppercase;color:var(--gm)}
+.form-label .req{color:var(--or)}
+.form-control{padding:10px 12px;border:1.5px solid var(--anthr);border-radius:var(--rsm);font-family:'DM Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,sans-serif;font-size:13px;color:var(--creme);background:var(--noir3);outline:none;transition:border-color .2s;-webkit-appearance:none;width:100%}
+.form-control:focus{border-color:var(--or);box-shadow:0 0 0 3px var(--or-soft)}
+textarea.form-control{resize:vertical;min-height:70px;font-family:'DM Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,sans-serif}
+select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='7'%3E%3Cpath d='M1 1l4.5 4.5L10 1' stroke='%23FF7700' stroke-width='1.8' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:32px}
+
+/* ── CATALOGUE CHIPS ── */
+.cat-chip{background:var(--noir3);border:1.5px solid var(--anthr);color:var(--creme);border-radius:30px;padding:7px 13px;font-family:'DM Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,sans-serif;font-size:12px;cursor:pointer;transition:all .16s}
+.cat-chip:hover{border-color:var(--or);color:var(--or)}
+.cat-chip strong{color:var(--or);margin-left:3px}
+.ent-card{background:var(--noir2);border:1.5px solid var(--anthr);border-radius:var(--rsm);padding:10px 12px;margin-bottom:7px;cursor:pointer;transition:border-color .16s}
+.ent-card:hover{border-color:var(--or)}
+
+/* ── KANBAN ── */
+.kanban{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px;align-items:start}
+.kb-col{background:var(--noir2);border:1px solid var(--anthr);border-radius:var(--r);min-height:120px}
+.kb-head{padding:11px 14px;border-bottom:1px solid var(--anthr);font-family:'Syne','Trebuchet MS','Gill Sans',sans-serif;font-weight:700;font-size:12px;display:flex;justify-content:space-between;align-items:center}
+.kb-count{background:var(--noir3);color:var(--gc);font-size:10px;font-weight:700;padding:1px 7px;border-radius:20px}
+.kb-body{padding:10px;display:flex;flex-direction:column;gap:8px}
+.kb-card{background:var(--noir3);border:1px solid var(--anthr);border-radius:var(--rsm);padding:11px;cursor:pointer;transition:border-color .16s}
+.kb-card:hover{border-color:var(--or)}
+.kb-card-title{font-weight:600;font-size:13px;margin-bottom:3px}
+.kb-card-sub{font-size:11px;color:var(--gm)}
+.kb-card-amt{font-family:'Syne','Trebuchet MS','Gill Sans',sans-serif;font-weight:700;color:var(--or);font-size:13px;margin-top:6px}
+
+/* ── AGENDA ── */
+.cal-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.cal-month{font-family:'Syne','Trebuchet MS','Gill Sans',sans-serif;font-weight:700;font-size:20px;text-transform:capitalize}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+.cal-dow{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--gm);text-align:center;padding:6px 0}
+.cal-cell{background:var(--noir2);border:1px solid var(--anthr);border-radius:var(--rsm);min-height:88px;padding:6px 7px;font-size:12px}
+.cal-cell.empty{background:transparent;border-color:transparent}
+.cal-cell.today{border-color:var(--or)}
+.cal-day{font-weight:600;color:var(--gm);margin-bottom:4px}
+.cal-cell.today .cal-day{color:var(--or)}
+.cal-evt{background:var(--or-soft);border-left:3px solid var(--or);border-radius:4px;padding:3px 6px;font-size:11px;margin-bottom:4px;cursor:pointer;line-height:1.3}
+.cal-evt:hover{background:var(--or-line)}
+.cal-evt.realisee{border-left-color:var(--ok);background:var(--okl)}
+.cal-evt.option{border-left-color:var(--info);background:transparent;border:1px dashed var(--info);opacity:.85}
+.cal-risk{font-size:10px;color:var(--er);font-weight:700;margin-top:2px;cursor:pointer}
+.cal-risk.soft{color:var(--warn)}
+
+/* ── EMPTY ── */
+.empty{text-align:center;padding:56px 20px;color:var(--gm)}
+.empty-icon{font-size:46px;margin-bottom:12px}
+.empty-text{font-family:'Syne','Trebuchet MS','Gill Sans',sans-serif;font-weight:700;font-size:18px;color:var(--creme);margin-bottom:6px}
+.empty-sub{font-size:13px}
+
+/* ── ACTIVITY ── */
+.activity-list{list-style:none}
+.activity-item{display:flex;gap:12px;padding:10px 0;border-bottom:1px solid var(--anthr);align-items:flex-start}
+.activity-item:last-child{border-bottom:none}
+.activity-dot{width:8px;height:8px;border-radius:50%;background:var(--or);flex-shrink:0;margin-top:5px}
+.activity-text{font-size:12.5px;line-height:1.5;flex:1}
+.activity-time{font-size:11px;color:var(--gm);flex-shrink:0}
+
+/* ── TOAST ── */
+#toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--noir3);border:1px solid var(--anthr);color:var(--creme);font-size:12px;padding:11px 20px;border-radius:30px;opacity:0;transition:all .35s;pointer-events:none;z-index:999;white-space:nowrap;box-shadow:var(--sh2)}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+#toast.ok{border-color:var(--ok)}#toast.err{border-color:var(--er)}
+
+/* ── SIDEBAR BACKDROP (tablette/mobile) ── */
+#sb-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:90}
+#sb-backdrop.show{display:block}
+.table-scroll{-webkit-overflow-scrolling:touch}
+
+/* ── RESPONSIVE ── */
+@media(max-width:1080px){
+  .charts-grid{grid-template-columns:1fr!important}
+  .kanban{grid-template-columns:1fr 1fr;overflow-x:visible}
+}
+@media(max-width:900px){          /* iPad portrait & en-dessous : sidebar en tiroir */
+  :root{--sb:0px}
+  #sidebar{transform:translateX(-244px);width:244px}
+  #sidebar.open{transform:translateX(0);box-shadow:var(--sh2)}
+  #main{margin-left:0}
+  .hamburger{display:block;font-size:24px}
+  .form-grid,.form-grid.c3{grid-template-columns:1fr}
+  .content{padding:20px}
+  /* anti-zoom iOS : inputs >=16px */
+  .form-control,.filter-input,.login-card input[type=password]{font-size:16px}
+  /* cibles tactiles plus grandes */
+  .btn{padding:10px 16px;font-size:13px}
+  .btn-sm{padding:7px 12px;font-size:12px}
+  .sb-item{padding:13px 22px;font-size:15px}
+  .cat-chip{padding:10px 15px;font-size:13px}
+  /* force l'empilement des KPI même avec styles inline */
+  .kpi-grid{grid-template-columns:1fr 1fr!important}
+}
+@media(max-width:680px){
+  .kpi-grid,.kanban{grid-template-columns:1fr!important}
+  .content{padding:14px}.topbar{padding:11px 14px}
+  .topbar-title{font-size:18px}.topbar-title span{display:none}
+  .cal-grid{gap:3px}.cal-cell{min-height:62px;font-size:10px;padding:4px 5px}
+  /* lignes de devis : empile proprement */
+  #dv-lines .form-grid{grid-template-columns:1fr 1fr!important}
+  /* modale plein écran */
+  #modal-bg{padding:0}
+  .modal{width:100%;max-width:100%;height:100vh;max-height:100vh;border-radius:0;border:none}
+  .modal-footer{position:sticky;bottom:0;background:var(--noir2)}
+}
+</style>
+</head>
+<body>
+
+<!-- ══ LOGIN ══ -->
+<div id="login-screen">
+  <div class="login-card">
+    <div class="login-logo">LouisMagie</div>
+    <div class="login-title">Espace<br><em>Administration</em></div>
+    <input type="password" id="pwd" placeholder="Mot de passe" onkeydown="if(event.key==='Enter')doLogin()">
+    <button class="login-btn" onclick="doLogin()">Accéder au CRM</button>
+    <div class="login-err" id="login-err">Mot de passe incorrect</div>
+    <div class="login-hint">Mot de passe par défaut : <strong>louismagie</strong></div>
+  </div>
+</div>
+
+<!-- ══ APP ══ -->
+<div id="app">
+  <aside id="sidebar">
+    <div class="sb-logo">
+      <div class="sb-brand">Magicien · Dunkerque</div>
+      <div class="sb-name">Louis<em>Magie</em></div>
+    </div>
+    <nav class="sb-nav">
+      <div class="sb-section">Pilotage</div>
+      <div class="sb-item active" onclick="nav('dashboard')" id="nav-dashboard"><span class="ic">🎩</span>Tableau de bord</div>
+      <div class="sb-item" onclick="nav('demandes')" id="nav-demandes"><span class="ic">📥</span>Demandes <span class="badge-count" id="badge-demandes" style="display:none">0</span></div>
+      <div class="sb-item" onclick="nav('agenda')" id="nav-agenda"><span class="ic">📅</span>Agenda</div>
+      <div class="sb-section">Gestion</div>
+      <div class="sb-item" onclick="nav('devis')" id="nav-devis"><span class="ic">📄</span>Devis <span class="badge-count" id="badge-devis" style="display:none">0</span></div>
+      <div class="sb-item" onclick="nav('factures')" id="nav-factures"><span class="ic">🧾</span>Factures <span class="badge-count" id="badge-factures" style="display:none">0</span></div>
+      <div class="sb-item" onclick="nav('clients')" id="nav-clients"><span class="ic">👥</span>Clients & partenaires</div>
+      <div class="sb-item" onclick="nav('compta')" id="nav-compta"><span class="ic">📊</span>Compta / URSSAF <span class="badge-count" id="badge-compta" style="display:none">0</span></div>
+      <div class="sb-section">Configuration</div>
+      <div class="sb-item" onclick="nav('reglages')" id="nav-reglages"><span class="ic">⚙️</span>Réglages & catalogue</div>
+    </nav>
+    <button class="sb-cta" onclick="nav('devis-create')">✦ Créer un devis</button>
+    <div class="sb-footer">
+      <div class="sb-logout" id="theme-btn" onclick="toggleTheme()">☀️ Mode clair</div>
+      <div class="sb-logout" onclick="doLogout()">⬡ Déconnexion</div>
+      <div style="margin-top:8px">CRM v1.0 · Phase 1</div>
+    </div>
+  </aside>
+  <div id="sb-backdrop" onclick="toggleSidebar(false)"></div>
+
+  <div id="main">
+    <div class="topbar">
+      <button class="hamburger" onclick="toggleSidebar()">☰</button>
+      <div class="topbar-title" id="topbar-title">Tableau de bord <span id="topbar-date"></span></div>
+      <div style="display:flex;gap:10px;align-items:center">
+        <div class="topbar-actions" id="topbar-actions"></div>
+        <span id="cloud-dot" onclick="cloudSyncNow()" title="Cloud non configuré" style="width:11px;height:11px;border-radius:50%;background:#5A5650;cursor:pointer;flex-shrink:0" aria-label="Synchroniser"></span>
+        <button class="iconbtn" id="theme-btn-top" onclick="toggleTheme()" title="Changer de thème">☀️</button>
+      </div>
+    </div>
+    <div class="content">
+      <div class="view active" id="view-dashboard"></div>
+      <div class="view" id="view-demandes"></div>
+      <div class="view" id="view-agenda"></div>
+      <div class="view" id="view-devis"></div>
+      <div class="view" id="view-factures"></div>
+      <div class="view" id="view-clients"></div>
+      <div class="view" id="view-devis-create"></div>
+      <div class="view" id="view-compta"></div>
+      <div class="view" id="view-reglages"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ MODAL ══ -->
+<div id="modal-bg" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-head"><div class="modal-title" id="modal-title"></div><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-footer" id="modal-footer"></div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+/* ════════════════════════════════════════════════════
+   CRM LOUISMAGIE — Phase 1 (UI + localStorage)
+   Couche données DB.* abstraite → swap Google Sheets en P2
+   ════════════════════════════════════════════════════ */
+
+/* ───── Couche données (abstraction) ───── */
+const ENTITIES = ['demandes','devis','prestations','factures','clients','relances','activite','mails','catalogue','recettes','declarations'];
+const LS_PREFIX = 'lm_crm_';
+const DB = {
+  all(e){ try{ return JSON.parse(localStorage.getItem(LS_PREFIX+e)) || []; }catch(_){ return []; } },
+  _writeLocal(e,arr){ localStorage.setItem(LS_PREFIX+e, JSON.stringify(arr)); },     // local seul (utilisé par la sync descendante)
+  _write(e,arr){ DB._writeLocal(e,arr); if(typeof cloudQueueEntity==='function') cloudQueueEntity(e); }, // local + push cloud
+  get(e,id){ return DB.all(e).find(x=>x.id===id) || null; },
+  save(e,obj){ const arr=DB.all(e); const i=arr.findIndex(x=>x.id===obj.id);
+    if(i>=0) arr[i]=obj; else arr.push(obj); DB._write(e,arr); return obj; },
+  remove(e,id){ DB._write(e, DB.all(e).filter(x=>x.id!==id)); },
+  config(){ try{ return JSON.parse(localStorage.getItem(LS_PREFIX+'config')) || {}; }catch(_){ return {}; } },
+  saveConfig(c){ localStorage.setItem(LS_PREFIX+'config', JSON.stringify(c)); if(typeof cloudQueueConfig==='function') cloudQueueConfig(); },
+};
+
+/* ───── Utils ───── */
+function fmtEur(n){ return (parseFloat(n)||0).toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})+' €'; }
+function fmtDateFr(d){ if(!d) return '—'; const x=new Date(d); if(isNaN(x)) return '—';
+  return x.toLocaleDateString('fr-FR',{day:'2-digit',month:'long',year:'numeric'}); }
+function fmtDateShort(d){ if(!d) return '—'; const x=new Date(d); if(isNaN(x)) return '—';
+  return x.toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit',year:'2-digit'}); }
+function todayISO(){ return new Date().toISOString().slice(0,10); }
+function daysFromNow(d){ return Math.floor((new Date(d)-new Date())/(1000*86400)); }
+function daysSince(d){ return Math.floor((new Date()-new Date(d))/(1000*86400)); }
+function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function nextId(prefix, entity){
+  const yr=new Date().getFullYear();
+  const arr=DB.all(entity).filter(x=>x.id&&x.id.startsWith(prefix+'-'+yr));
+  let max=0; arr.forEach(x=>{ const n=parseInt(x.id.split('-')[2],10); if(n>max)max=n; });
+  return prefix+'-'+yr+'-'+String(max+1).padStart(3,'0');
+}
+function uid(p){ return p+'-'+Date.now().toString(36)+Math.floor(Math.random()*1000); }
+
+function logActivite(txt){
+  const arr=DB.all('activite');
+  arr.unshift({ id:uid('act'), date:new Date().toISOString(), txt });
+  DB._write('activite', arr.slice(0,60));
+}
+
+async function sha256(str){
+  const buf=await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+
+/* ───── UI helpers ───── */
+function toast(msg,type){ const t=document.getElementById('toast'); t.textContent=msg;
+  t.className=(type||''); t.classList.add('show'); clearTimeout(t._t);
+  t._t=setTimeout(()=>t.classList.remove('show'),2600); }
+function openModal(title,body,footer){
+  document.getElementById('modal-title').innerHTML=title;
+  document.getElementById('modal-body').innerHTML=body;
+  document.getElementById('modal-footer').innerHTML=footer||'';
+  document.getElementById('modal-bg').classList.add('open');
+}
+function closeModal(){ document.getElementById('modal-bg').classList.remove('open'); }
+function toggleSidebar(force){
+  const sb=document.getElementById('sidebar'), bd=document.getElementById('sb-backdrop');
+  const open = force===undefined ? !sb.classList.contains('open') : force;
+  sb.classList.toggle('open',open); if(bd) bd.classList.toggle('show',open);
+}
+/* ───── Thème clair / sombre ───── */
+function applyTheme(t){
+  document.documentElement.setAttribute('data-theme',t);
+  try{ localStorage.setItem('lm_theme',t); }catch(_){}
+  const light=t==='light';
+  const b=document.getElementById('theme-btn'); if(b) b.textContent=light?'🌙 Mode sombre':'☀️ Mode clair';
+  const bt=document.getElementById('theme-btn-top'); if(bt) bt.textContent=light?'🌙':'☀️';
+  const dv=document.getElementById('view-dashboard');
+  if(dv&&dv.classList.contains('active')&&typeof _charts!=='undefined'&&(_charts.ca||_charts.type)){ buildChartCA(); buildChartType(); }
+}
+function toggleTheme(){ applyTheme((document.documentElement.getAttribute('data-theme')==='light')?'dark':'light'); }
+function chartColors(){ const light=document.documentElement.getAttribute('data-theme')==='light';
+  return { grid: light?'rgba(0,0,0,.08)':'rgba(255,255,255,.06)', txt: light?'#6E695F':'#8A8580', legend: light?'#3A372F':'#C8C3BB' }; }
+function badge(statut){ const s=(statut||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z]/g,'');
+  return '<span class="badge '+s+'">'+esc(statut)+'</span>'; }
+function progressBar(steps){ // [{label,sub,state:'done'|'current'|'todo'|'skip'}]
+  return '<div class="prog">'+steps.map(s=>`<div class="prog-step ${s.state}">
+    <div class="prog-dot">${s.state==='done'?'✓':(s.state==='current'?'●':'')}</div>
+    <div class="prog-lbl">${esc(s.label)}</div>${s.sub?`<div class="prog-sub">${esc(s.sub)}</div>`:''}</div>`).join('')+'</div>';
+}
+
+/* ───── Auth ───── */
+const DEFAULT_PWD='louismagie';
+async function doLogin(){
+  const pwd=document.getElementById('pwd').value;
+  const cfg=DB.config();
+  const hash=await sha256(pwd);
+  if(hash===cfg.passwordHash){
+    sessionStorage.setItem('lm_auth','1');
+    showApp();
+  } else {
+    document.getElementById('login-err').style.display='block';
+  }
+}
+function doLogout(){ sessionStorage.removeItem('lm_auth'); location.reload(); }
+function showApp(){
+  document.getElementById('login-screen').style.display='none';
+  document.getElementById('app').style.display='flex';
+  document.getElementById('topbar-date').textContent='· '+new Date().toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'});
+  updateBadges();
+  nav('dashboard');
+}
+
+/* ───── Navigation ───── */
+const VIEW_TITLES={dashboard:'Tableau de bord',demandes:'Demandes',agenda:'Agenda',devis:'Devis',factures:'Factures',clients:'Clients & partenaires',compta:'Comptabilité / URSSAF','devis-create':'Créer un devis',reglages:'Réglages & catalogue'};
+const RENDERERS={}; // remplis par les modules de vue (tours suivants)
+let currentParams={};
+let _currentView='dashboard';
+function nav(view,params){
+  currentParams=params||{}; _currentView=view;
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+  document.querySelectorAll('.sb-item').forEach(i=>i.classList.remove('active'));
+  const vEl=document.getElementById('view-'+view);
+  if(vEl) vEl.classList.add('active');
+  const navKey = view==='devis-create' ? 'devis-create' : view;
+  const navItem=document.getElementById('nav-'+navKey) || document.getElementById('nav-devis');
+  if(navItem) navItem.classList.add('active');
+  document.getElementById('topbar-title').childNodes[0].nodeType; // noop guard
+  const tt=document.getElementById('topbar-title');
+  tt.innerHTML=(VIEW_TITLES[view]||'')+' <span id="topbar-date">· '+new Date().toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'})+'</span>';
+  document.getElementById('topbar-actions').innerHTML='';
+  toggleSidebar(false);
+  if(RENDERERS[view]) RENDERERS[view](currentParams);
+  else if(vEl) vEl.innerHTML='<div class="empty"><div class="empty-icon">🛠️</div><div class="empty-text">Vue en construction</div><div class="empty-sub">Livrée au prochain incrément.</div></div>';
+}
+function updateBadges(){
+  const nd=DB.all('demandes').filter(d=>d.statut==='Nouveau').length;
+  const ndv=DB.all('devis').filter(d=>d.statut==='Envoyé').length;
+  const nf=DB.all('factures').filter(f=>['Émise','Relance 1','Relance 2'].includes(f.statut)).length;
+  setBadge('badge-demandes',nd); setBadge('badge-devis',ndv); setBadge('badge-factures',nf);
+  setBadge('badge-compta',trimsADeclarer().length);
+}
+function setBadge(id,n){ const el=document.getElementById(id); if(!el)return;
+  if(n>0){ el.textContent=n; el.style.display='inline-block'; } else el.style.display='none'; }
+
+/* ───── Seed (jeu d'exemple au 1er lancement) ───── */
+async function ensureSeed(){
+  let cfg=DB.config();
+  if(!cfg.passwordHash){
+    cfg={ passwordHash: await sha256(DEFAULT_PWD), emailLouis:'contact@louismagie.fr',
+      acompteDefautPct:30, delaiRelance1:30, delaiRelance2:15, fraisKm:0.55, notificationsOn:true,
+      signature:'Louis · LouisMagie\nMagicien — Dunkerque\ncontact@louismagie.fr · louismagie.fr',
+      googleReviewUrl:'https://g.page/r/VOTRE-ID-GOOGLE/review',
+      entrepriseContact:'Louis Slosse', entrepriseStatut:'Magicien — Entrepreneur individuel',
+      entrepriseAdresse:'Dunkerque, Hauts-de-France', entrepriseSiret:'',
+      entrepriseTel:'', iban:'FR76 3000 3029 0400 0205 0334 532', bic:'',
+      mentionTva:'TVA non applicable, article 293 B du CGI',
+      delaiPaiement:'Paiement sous 1 mois à compter de la date d\'émission, par virement bancaire.',
+      tauxUrssaf:23.1, versementLiberatoire:false, tauxImpotLib:2.2,
+      urssafUrl:'https://www.autoentrepreneur.urssaf.fr', appsScriptUrl:'', backendToken:'' };
+    DB.saveConfig(cfg);
+  }
+  if(!DB.all('catalogue').length) seedCatalogue();
+  if(DB.all('clients').length || DB.all('demandes').length) return; // déjà des données
+  seedDemo();
+}
+function seedCatalogue(){
+  const items=[
+    {label:'Prestation de close-up 1h',prix:220,categorie:'prestation',duree:'1h'},
+    {label:'Prestation de close-up 2h',prix:400,categorie:'prestation',duree:'2h'},
+    {label:'Prestation de close-up 3h',prix:560,categorie:'prestation',duree:'3h'},
+    {label:'Spectacle magie et mentalisme',prix:450,categorie:'prestation',duree:''},
+    {label:'Option magie digitale personnalisée',prix:150,categorie:'option',duree:''},
+    {label:'Option sculptures sur ballons',prix:100,categorie:'option',duree:''},
+  ];
+  items.forEach((it,i)=>DB.save('catalogue',{id:'CAT-'+String(i+1).padStart(3,'0'),actif:true,...it}));
+}
+function seedDemo(){
+  const C=(o)=>DB.save('clients',o);
+  C({id:'CLI-001',nom:'Moreau',prenom:'Camille',email:'camille.moreau@email.fr',tel:'06 12 34 56 78',adresse:'Lille',type:'particulier',date1erDevis:'2026-01-15',nbDevis:1,nbPrestations:1,caTotal:1450,sourceInitiale:'Instagram'});
+  C({id:'CLI-002',nom:'Atelier Réception',prenom:'',email:'contact@atelier-reception.fr',tel:'03 28 11 22 33',adresse:'Dunkerque',type:'partenaire',date1erDevis:'2025-11-02',nbDevis:3,nbPrestations:2,caTotal:3900,sourceInitiale:'Recommandation'});
+  C({id:'CLI-003',nom:'Lemaire',prenom:'Thomas',email:'t.lemaire@entreprise.com',tel:'07 88 99 00 11',adresse:'Calais',type:'entreprise',date1erDevis:'2026-03-20',nbDevis:1,nbPrestations:0,caTotal:0,sourceInitiale:'Google'});
+
+  DB.save('demandes',{id:'DEM-001',date:'2026-05-28',nom:'Sophie Bernard',email:'sophie.b@email.fr',tel:'06 45 67 89 01',typeEvenement:'Mariage',dateEvenement:'2026-09-12',creneau:'Soirée',lieu:'Château de la Motte, Lille',distanceKm:30,nbInvites:120,prestationSouhaitee:'Close-up cocktail + mentalisme',duree:'2h',budgetEstime:'1500-2000',source:'Instagram',statut:'Nouveau',notes:'Recommandée par une amie.'});
+  DB.save('demandes',{id:'DEM-002',date:'2026-05-30',nom:'Julien Petit',email:'j.petit@boite.com',tel:'07 22 33 44 55',typeEvenement:'Soirée entreprise',dateEvenement:'2026-07-04',creneau:'Soirée',lieu:'Dunkerque',distanceKm:5,nbInvites:60,prestationSouhaitee:'Magie digitale + close-up',duree:'1h30',budgetEstime:'1000-1500',source:'Site web',statut:'En cours',notes:''});
+  DB.save('demandes',{id:'DEM-003',date:'2026-04-10',nom:'Camille Moreau',email:'camille.moreau@email.fr',tel:'06 12 34 56 78',typeEvenement:'Anniversaire',dateEvenement:'2026-02-14',creneau:'Après-midi',lieu:'Lille',distanceKm:30,nbInvites:40,prestationSouhaitee:'Close-up',duree:'1h',budgetEstime:'',source:'Instagram',statut:'Converti',notes:''});
+
+  // Devis acompte reçu → prestation confirmée (alimente l'agenda)
+  DB.save('devis',{id:'DEV-2026-001',dateCreation:'2026-01-15',idClient:'CLI-001',nomClient:'Camille Moreau',email:'camille.moreau@email.fr',tel:'06 12 34 56 78',dateEvenement:'2026-02-14',creneau:'Après-midi',lieu:'Lille',distanceKm:30,nbInvites:40,prestations:[{label:'Close-up itinérant',prix:1200,duree:'1h'}],montantHT:1200,fraisDeplacement:33,tva:0,montantTTC:1450,remise:0,acomptePct:30,statut:'Acompte reçu',dateEnvoi:'2026-01-16',dateAcceptation:'2026-01-20',notes:'',idDemandeOrigine:'DEM-003'});
+  DB.save('devis',{id:'DEV-2026-002',dateCreation:'2026-05-29',idClient:'',nomClient:'Sophie Bernard',email:'sophie.b@email.fr',tel:'06 45 67 89 01',dateEvenement:'2026-09-12',creneau:'Soirée',lieu:'Château de la Motte, Lille',distanceKm:30,nbInvites:120,prestations:[{label:'Close-up cocktail',prix:900,duree:'1h'},{label:'Mentalisme scénique',prix:800,duree:'1h'}],montantHT:1700,fraisDeplacement:33,tva:0,montantTTC:1733,remise:0,acomptePct:30,statut:'Envoyé',dateEnvoi:'2026-05-30',dateAcceptation:'',notes:'',idDemandeOrigine:'DEM-001'});
+  DB.save('devis',{id:'DEV-2026-003',dateCreation:'2026-03-20',idClient:'CLI-003',nomClient:'Thomas Lemaire',email:'t.lemaire@entreprise.com',tel:'07 88 99 00 11',dateEvenement:'2026-06-20',creneau:'Soirée',lieu:'Calais',distanceKm:45,nbInvites:80,prestations:[{label:'Magie digitale entreprise',prix:1500,duree:'1h30'}],montantHT:1500,fraisDeplacement:50,tva:0,montantTTC:1550,remise:0,acomptePct:30,statut:'Accepté',dateEnvoi:'2026-03-21',dateAcceptation:'2026-03-28',notes:'',idDemandeOrigine:''});
+
+  DB.save('prestations',{id:'PRE-001',idDevis:'DEV-2026-001',dateEvenement:'2026-02-14',creneau:'Après-midi',lieu:'Lille',typePrestation:'Close-up itinérant',duree:'1h',statutRealisation:'Réalisée',materielNotes:'Cartes + pièces',contactSurPlace:'Camille 06 12 34 56 78'});
+
+  // Facture solde après prestation réalisée
+  DB.save('factures',{id:'FAC-2026-001',dateEmission:'2026-02-15',idDevis:'DEV-2026-001',idClient:'CLI-001',montantTTC:1450,acompteVerse:435,soldeDu:1015,dateEcheance:'2026-03-17',statut:'Payée',datePaiement:'2026-02-28',dateRelance1:'',dateRelance2:''});
+
+  // Livre des recettes (encaissements) liés au devis/facture réglés
+  DB.save('recettes',{id:'REC-001',date:'2026-01-20',montant:435,type:'Acompte',mode:'Virement',client:'Camille Moreau',designation:'Acompte réservation close-up',ref:'DEV-2026-001'});
+  DB.save('recettes',{id:'REC-002',date:'2026-02-28',montant:1015,type:'Solde',mode:'Virement',client:'Camille Moreau',designation:'Solde prestation close-up',ref:'FAC-2026-001'});
+
+  DB.all('devis').forEach(d=>syncPrestationDevis(d)); // Envoyé→Option, Accepté→Confirmée (préserve Réalisée)
+  logActivite('Données de démonstration initialisées.');
+}
+
+/* ═══════════ VUE : DASHBOARD ═══════════ */
+let _charts={};
+RENDERERS.dashboard=function(){
+  const devis=DB.all('devis'), factures=DB.all('factures'), prestations=DB.all('prestations'), demandes=DB.all('demandes');
+  const now=new Date(), moisCour=now.getMonth(), anCour=now.getFullYear();
+
+  // KPIs
+  const caMois=factures.filter(f=>f.datePaiement&&new Date(f.datePaiement).getMonth()===moisCour&&new Date(f.datePaiement).getFullYear()===anCour).reduce((s,f)=>s+(+f.montantTTC||0),0);
+  const caAn=factures.filter(f=>f.datePaiement&&new Date(f.datePaiement).getFullYear()===anCour).reduce((s,f)=>s+(+f.montantTTC||0),0);
+  const devisAttente=devis.filter(d=>d.statut==='Envoyé').length;
+  const prestaAvenir=prestations.filter(p=>p.statutRealisation==='Confirmée'&&daysFromNow(p.dateEvenement)>=0).length;
+  const impayes=factures.filter(f=>['Émise','Relance 1','Relance 2','En contentieux'].includes(f.statut)).reduce((s,f)=>s+(+f.soldeDu||0),0);
+
+  // Alertes
+  let alertes='';
+  const relancesDues=factures.filter(f=>f.statut==='Émise'&&daysSince(f.dateEcheance)>0);
+  if(relancesDues.length) alertes+=alertHtml('danger','🔔','<strong>'+relancesDues.length+' facture(s) échue(s)</strong> — relance à envoyer. <a onclick="nav(\'factures\')" style="color:inherit;text-decoration:underline;cursor:pointer">Voir factures</a>');
+  const devisVieux=devis.filter(d=>d.statut==='Envoyé'&&daysSince(d.dateEnvoi)>7);
+  if(devisVieux.length) alertes+=alertHtml('warning','⏳','<strong>'+devisVieux.length+' devis</strong> envoyé(s) sans réponse depuis +7 jours.');
+  const prestaProches=prestations.filter(p=>p.statutRealisation==='Confirmée'&&daysFromNow(p.dateEvenement)>=0&&daysFromNow(p.dateEvenement)<=7);
+  prestaProches.forEach(p=>{ const j=daysFromNow(p.dateEvenement);
+    alertes+=alertHtml('info','📅','<strong>Prestation J-'+j+'</strong> · '+esc(p.typePrestation)+' — '+esc(p.lieu)+' ('+esc(p.creneau)+'). Contact : '+esc(p.contactSurPlace||'—')); });
+  const avisAdemander=prestations.filter(p=>p.statutRealisation==='Réalisée'&&daysSince(p.dateEvenement)<=14&&daysSince(p.dateEvenement)>=0&&!mailEnvoye('avis',p.id));
+  avisAdemander.forEach(p=>{ alertes+=alertHtml('success','★','<strong>Avis Google à demander</strong> — prestation '+esc(p.typePrestation)+' du '+fmtDateShort(p.dateEvenement)+'. <a onclick="avisGoogleMail(\''+p.id+'\')" style="color:inherit;text-decoration:underline;cursor:pointer">Préparer l\'email</a>'); });
+  trimsADeclarer().forEach(q=>{ const ca=caTrimestre(q.an,q.t); const ech=trimEcheance(q.an,q.t); const jE=daysFromNow(ech);
+    alertes+=alertHtml(q.et==='retard'?'danger':'warning', q.et==='retard'?'⚠️':'📊',
+      '<strong>Déclaration URSSAF '+q.an+' T'+q.t+' '+(q.et==='retard'?'en retard':'à faire')+'</strong> — CA '+fmtEur(ca)+', échéance '+fmtDateShort(ech)+(jE>=0?(' (dans '+jE+' j)'):(' (dépassée de '+(-jE)+' j)'))+'. <a onclick="nav(\'compta\')" style="color:inherit;text-decoration:underline;cursor:pointer">Déclarer</a>'); });
+  if(!alertes) alertes=alertHtml('success','✓','Aucune alerte. Tout est sous contrôle.');
+
+  // Activité
+  const acts=DB.all('activite').slice(0,10);
+  const actHtml=acts.length?acts.map(a=>'<li class="activity-item"><span class="activity-dot"></span><span class="activity-text">'+esc(a.txt)+'</span><span class="activity-time">'+timeAgo(a.date)+'</span></li>').join(''):'<li class="activity-item"><span class="activity-text" style="color:var(--gm)">Aucune activité récente.</span></li>';
+
+  document.getElementById('view-dashboard').innerHTML=`
+    <div class="kpi-grid">
+      ${kpi('or','CA mois en cours',fmtEur(caMois))}
+      ${kpi('vert','CA année '+anCour,fmtEur(caAn))}
+      ${kpi('info','Devis en attente',devisAttente,'réponse client')}
+      ${kpi('or','Prestations à venir',prestaAvenir,'confirmées')}
+      ${kpi('rouge','Impayés',fmtEur(impayes))}
+    </div>
+    <div>${alertes}</div>
+    <div class="charts-grid">
+      <div class="chart-card"><div class="chart-title">Chiffre d'affaires · 12 mois glissants</div><div class="chart-wrap"><canvas id="chartCA"></canvas></div></div>
+      <div class="chart-card"><div class="chart-title">Répartition par type d'événement</div><div class="chart-wrap"><canvas id="chartType"></canvas></div></div>
+    </div>
+    <div class="panel"><div class="panel-title">Activité récente</div><ul class="activity-list">${actHtml}</ul></div>`;
+
+  buildChartCA(); buildChartType();
+};
+function kpi(cls,label,val,sub){ return '<div class="kpi '+cls+'"><div class="kpi-label">'+label+'</div><div class="kpi-val">'+val+'</div>'+(sub?'<div class="kpi-sub">'+sub+'</div>':'')+'</div>'; }
+function alertHtml(type,icon,txt){ return '<div class="alert '+type+'"><span class="alert-icon">'+icon+'</span><div>'+txt+'</div></div>'; }
+function timeAgo(d){ const s=daysSince(d); if(s<=0)return "aujourd'hui"; if(s===1)return 'hier'; if(s<7)return 'il y a '+s+' j'; return fmtDateShort(d); }
+function buildChartCA(){
+  if(_charts.ca)_charts.ca.destroy(); const cc=chartColors();
+  const labels=[],data=[]; const now=new Date();
+  for(let i=11;i>=0;i--){ const d=new Date(now.getFullYear(),now.getMonth()-i,1);
+    labels.push(d.toLocaleDateString('fr-FR',{month:'short'}));
+    const tot=DB.all('factures').filter(f=>f.datePaiement&&new Date(f.datePaiement).getMonth()===d.getMonth()&&new Date(f.datePaiement).getFullYear()===d.getFullYear()).reduce((s,f)=>s+(+f.montantTTC||0),0);
+    data.push(tot); }
+  _charts.ca=new Chart(document.getElementById('chartCA'),{type:'line',data:{labels,datasets:[{data,borderColor:'#FF7700',backgroundColor:'rgba(255,119,0,.12)',fill:true,tension:.35,borderWidth:2,pointBackgroundColor:'#FF7700',pointRadius:3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:cc.grid},ticks:{color:cc.txt}},y:{grid:{color:cc.grid},ticks:{color:cc.txt,callback:v=>v+' €'}}}}});
+}
+function buildChartType(){
+  if(_charts.type)_charts.type.destroy(); const cc=chartColors();
+  const counts={};
+  DB.all('demandes').forEach(d=>{ const t=d.typeEvenement||'Autre'; counts[t]=(counts[t]||0)+1; });
+  const labels=Object.keys(counts), data=Object.values(counts);
+  const palette=['#FF7700','#E8A13A','#4A9DE8','#3FB97A','#E5564B','#C8C3BB'];
+  const borderC=document.documentElement.getAttribute('data-theme')==='light'?'#FFFFFF':'#141410';
+  _charts.type=new Chart(document.getElementById('chartType'),{type:'doughnut',data:{labels,datasets:[{data,backgroundColor:palette,borderColor:borderC,borderWidth:2}]},options:{responsive:true,maintainAspectRatio:false,cutout:'62%',plugins:{legend:{position:'bottom',labels:{color:cc.legend,font:{size:11},boxWidth:12,padding:10}}}}});
+}
+
+/* ═══════════ VUE : DEMANDES ═══════════ */
+let _fDem={statut:'',source:''};
+RENDERERS.demandes=function(){
+  const all=DB.all('demandes');
+  const sources=[...new Set(all.map(d=>d.source).filter(Boolean))];
+  let rows=all.slice().sort((a,b)=>new Date(b.date)-new Date(a.date));
+  if(_fDem.statut) rows=rows.filter(d=>d.statut===_fDem.statut);
+  if(_fDem.source) rows=rows.filter(d=>d.source===_fDem.source);
+
+  const total=all.length, convertis=all.filter(d=>d.statut==='Converti').length;
+  const tauxConv=total?Math.round(convertis/total*100):0;
+
+  const body=rows.length?rows.map(d=>`<tr>
+    <td class="td-dim">${fmtDateShort(d.date)}</td>
+    <td class="td-strong">${esc(d.nom)}<div class="td-dim">${esc(d.email)}</div></td>
+    <td>${esc(d.typeEvenement)}<div class="td-dim">${d.dateEvenement?fmtDateShort(d.dateEvenement):'date ?'} · ${esc(d.creneau||'')}</div></td>
+    <td>${esc(d.lieu||'—')}</td>
+    <td><span class="badge brouillon">${esc(d.source||'—')}</span></td>
+    <td>${badge(d.statut)}</td>
+    <td><div class="td-actions">
+      <button class="btn btn-ghost btn-sm" onclick="voirDemande('${d.id}')">Détails</button>
+      ${d.statut!=='Converti'?`<button class="btn btn-or btn-sm" onclick="nav('devis-create',{demandeId:'${d.id}'})">→ Devis</button>`:''}
+    </div></td></tr>`).join('')
+    :'<tr><td colspan="7"><div class="empty"><div class="empty-icon">📭</div><div class="empty-text">Aucune demande</div><div class="empty-sub">Les demandes du site arriveront ici.</div></div></td></tr>';
+
+  const opt=(v,cur)=>`<option value="${v}"${v===cur?' selected':''}>${v||'Tous'}</option>`;
+  document.getElementById('view-demandes').innerHTML=`
+    <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr)">
+      ${kpi('info','Demandes totales',total)}
+      ${kpi('or','Nouvelles',all.filter(d=>d.statut==='Nouveau').length)}
+      ${kpi('vert','Taux de conversion',tauxConv+' %','demande → devis')}
+    </div>
+    <div class="table-wrap"><div class="table-header">
+      <div class="table-title">Demandes reçues</div>
+      <div class="table-filters">
+        <select class="filter-input" onchange="_fDem.statut=this.value;RENDERERS.demandes()">
+          ${['','Nouveau','En cours','Converti','Ignoré'].map(s=>opt(s,_fDem.statut)).join('')}
+        </select>
+        <select class="filter-input" onchange="_fDem.source=this.value;RENDERERS.demandes()">
+          ${['',...sources].map(s=>opt(s,_fDem.source)).join('')}
+        </select>
+      </div></div>
+      <div class="table-scroll"><table><thead><tr><th>Reçue</th><th>Contact</th><th>Événement</th><th>Lieu</th><th>Source</th><th>Statut</th><th></th></tr></thead><tbody>${body}</tbody></table></div>
+    </div>`;
+};
+function voirDemande(id){
+  const d=DB.get('demandes',id); if(!d)return;
+  const body=`<div class="info-grid">
+    ${infoItem('Contact',esc(d.nom))}${infoItem('Reçue le',fmtDateFr(d.date))}
+    ${infoItem('Email',esc(d.email))}${infoItem('Téléphone',esc(d.tel||'—'))}
+    ${infoItem('Type',esc(d.typeEvenement))}${infoItem('Date événement',fmtDateFr(d.dateEvenement)+' · '+esc(d.creneau||''))}
+    ${infoItem('Lieu',esc(d.lieu||'—'))}${infoItem('Distance',(d.distanceKm||0)+' km')}
+    ${infoItem('Nb invités',esc(d.nbInvites||'—'))}${infoItem('Budget estimé',esc(d.budgetEstime||'—'))}
+    ${infoItem('Durée',esc(d.duree||'—'))}${infoItem('Source',esc(d.source||'—'))}
+  </div>
+  <div style="margin-top:14px">${infoItem('Prestation souhaitée',esc(d.prestationSouhaitee||'—'))}</div>
+  ${d.notes?'<div style="margin-top:10px">'+infoItem('Notes',esc(d.notes))+'</div>':''}
+  <div class="form-group" style="margin-top:16px"><label class="form-label">Changer le statut</label>
+    <select class="form-control" id="dem-statut">${['Nouveau','En cours','Converti','Ignoré'].map(s=>`<option${s===d.statut?' selected':''}>${s}</option>`).join('')}</select></div>`;
+  const footer=`<button class="btn btn-ghost" onclick="closeModal()">Fermer</button>
+    <button class="btn btn-success" onclick="majStatutDemande('${id}')">Enregistrer statut</button>
+    ${d.statut!=='Converti'?`<button class="btn btn-or" onclick="closeModal();nav('devis-create',{demandeId:'${id}'})">→ Créer le devis</button>`:''}`;
+  openModal('Demande · '+esc(d.nom),body,footer);
+}
+function infoItem(label,val){ return '<div class="info-item"><span class="info-label">'+label+'</span>'+val+'</div>'; }
+function majStatutDemande(id){
+  const d=DB.get('demandes',id); const ns=document.getElementById('dem-statut').value;
+  d.statut=ns; DB.save('demandes',d); logActivite('Demande '+d.nom+' → '+ns);
+  closeModal(); updateBadges(); RENDERERS.demandes(); toast('Statut mis à jour','ok');
+}
+
+/* ═══════════ VUE : DEVIS ═══════════ */
+const DEVIS_STATUTS=['Brouillon','Envoyé','Accepté','Acompte reçu','Refusé'];
+let _devisMode='liste';
+RENDERERS.devis=function(){
+  const all=DB.all('devis');
+  const acceptes=all.filter(d=>['Accepté','Acompte reçu'].includes(d.statut)).length;
+  const envoyes=all.filter(d=>d.statut!=='Brouillon').length;
+  const taux=envoyes?Math.round(acceptes/envoyes*100):0;
+  const panier=all.length?all.reduce((s,d)=>s+(+d.montantTTC||0),0)/all.length:0;
+
+  document.getElementById('topbar-actions').innerHTML=`
+    <button class="btn ${_devisMode==='liste'?'btn-or':'btn-ghost'} btn-sm" onclick="_devisMode='liste';RENDERERS.devis()">☰ Liste</button>
+    <button class="btn ${_devisMode==='kanban'?'btn-or':'btn-ghost'} btn-sm" onclick="_devisMode='kanban';RENDERERS.devis()">▦ Kanban</button>
+    <button class="btn btn-or btn-sm" onclick="nav('devis-create')">+ Nouveau devis</button>`;
+
+  const head=`<div class="kpi-grid" style="grid-template-columns:repeat(4,1fr)">
+    ${kpi('info','Devis totaux',all.length)}
+    ${kpi('vert','Taux d\'acceptation',taux+' %')}
+    ${kpi('or','Panier moyen',fmtEur(panier))}
+    ${kpi('warn','En attente',all.filter(d=>d.statut==='Envoyé').length)}
+  </div>`;
+
+  if(_devisMode==='kanban'){
+    const cols=DEVIS_STATUTS.map(st=>{
+      const items=all.filter(d=>d.statut===st);
+      const cards=items.map(d=>`<div class="kb-card" onclick="voirDevis('${d.id}')">
+        <div class="kb-card-title">${esc(d.nomClient)}</div>
+        <div class="kb-card-sub">${esc(d.id)} · ${fmtDateShort(d.dateEvenement)}</div>
+        <div class="kb-card-amt">${fmtEur(d.montantTTC)}</div></div>`).join('')||'<div class="td-dim" style="padding:6px">—</div>';
+      return `<div class="kb-col"><div class="kb-head">${st}<span class="kb-count">${items.length}</span></div><div class="kb-body">${cards}</div></div>`;
+    }).join('');
+    document.getElementById('view-devis').innerHTML=head+'<div class="kanban">'+cols+'</div>';
+    return;
+  }
+
+  const rows=all.slice().sort((a,b)=>new Date(b.dateCreation)-new Date(a.dateCreation));
+  const body=rows.length?rows.map(d=>`<tr style="cursor:pointer" onclick="voirDevis('${d.id}')">
+    <td class="td-strong">${esc(d.id)}</td>
+    <td>${esc(d.nomClient)}<div class="td-dim">${fmtDateShort(d.dateEvenement)} · ${esc(d.creneau||'')}</div></td>
+    <td>${esc(d.lieu||'—')}</td>
+    <td class="td-strong">${fmtEur(d.montantTTC)}</td>
+    <td>${badge(d.statut)}</td>
+    <td><div class="td-actions">${devisQuick(d)}</div></td></tr>`).join('')
+    :'<tr><td colspan="6"><div class="empty"><div class="empty-icon">📄</div><div class="empty-text">Aucun devis</div><div class="empty-sub">Créez votre premier devis.</div></div></td></tr>';
+  document.getElementById('view-devis').innerHTML=head+`
+    <div class="table-wrap"><div class="table-header"><div class="table-title">Tous les devis</div></div>
+    <div class="table-scroll"><table><thead><tr><th>N°</th><th>Client / Date</th><th>Lieu</th><th>Montant TTC</th><th>Statut</th><th></th></tr></thead><tbody>${body}</tbody></table></div></div>`;
+};
+function voirDevis(id){
+  const d=DB.get('devis',id); if(!d)return;
+  const acompte=Math.round((+d.montantTTC||0)*(d.acomptePct||0)/100);
+  const lignes=(d.prestations||[]).map(p=>`<tr><td>${esc(p.label)}${p.duree?' <span class="td-dim">('+esc(p.duree)+')</span>':''}</td><td style="text-align:right">${fmtEur(p.prix)}</td></tr>`).join('');
+  const facturee=!!DB.all('factures').find(f=>f.idDevis===id);
+  const refuse=d.statut==='Refusé';
+  const order=['Brouillon','Envoyé','Accepté','Acompte reçu'];
+  const cur=facturee?4:order.indexOf(d.statut);
+  const subs=[d.dateCreation?fmtDateShort(d.dateCreation):'',d.dateEnvoi?fmtDateShort(d.dateEnvoi):'',d.dateAcceptation?fmtDateShort(d.dateAcceptation):'','reçu',(facturee?'✓':'')];
+  const bar=refuse
+    ? alertHtml('danger','✗','<strong>Devis refusé.</strong> Tu peux le repasser en Envoyé via le statut manuel ci-dessous.')
+    : progressBar(['Brouillon','Envoyé','Accepté','Acompte','Facturé'].map((l,i)=>({label:l,sub:subs[i],state:i<cur?'done':(i===cur?'current':'todo')})));
+
+  // actions contextuelles
+  const email=`<button class="btn btn-or" onclick="envoyerDevisMail('${id}')">✉ ${d.statut==='Brouillon'?'Envoyer le devis':'Renvoyer le devis'}</button>`;
+  let manu='';
+  if(d.statut==='Brouillon') manu=`<button class="btn btn-ghost" onclick="majDevis('${id}','Envoyé');voirDevis('${id}')">✓ Marquer envoyé</button>`;
+  else if(d.statut==='Envoyé') manu=`<button class="btn btn-success" onclick="majDevis('${id}','Accepté');voirDevis('${id}')">✓ Accepté</button><button class="btn btn-warn" onclick="majDevis('${id}','Refusé');voirDevis('${id}')">✗ Refusé</button>`;
+  else if(d.statut==='Accepté') manu=`<button class="btn btn-or" onclick="enregistrerAcompte('${id}');voirDevis('${id}')">💰 Acompte reçu</button>${facturee?'':`<button class="btn btn-ghost" onclick="transformerEnFacture('${id}')">🧾 Facturer</button>`}`;
+  else if(d.statut==='Acompte reçu') manu=`${facturee?'':`<button class="btn btn-or" onclick="transformerEnFacture('${id}')">🧾 Facturer le solde</button>`}<button class="btn btn-ghost" onclick="closeModal();nav('agenda')">📅 Agenda</button>`;
+  else manu='<div class="td-dim">—</div>';
+
+  const body=`${bar}
+  <div class="info-grid">
+    ${infoItem('Client',esc(d.nomClient))}${infoItem('Statut',badge(d.statut)+(facturee?' '+badge('Facturé'):''))}
+    ${infoItem('Événement',fmtDateFr(d.dateEvenement)+' · '+esc(d.creneau||'')+(d.horaire?' · '+esc(d.horaire):''))}${infoItem('Lieu',esc(d.lieu||'—'))}
+    ${infoItem('Invités',esc(d.nbInvites||'—'))}${infoItem('Distance',(d.distanceKm||0)+' km')}
+  </div>
+  <table style="margin-top:12px;width:100%"><tbody>${lignes}
+    <tr><td class="td-dim">Frais de déplacement</td><td style="text-align:right">${fmtEur(d.fraisDeplacement)}</td></tr>
+    ${d.remise?`<tr><td class="td-dim">Remise</td><td style="text-align:right;color:var(--ok)">- ${fmtEur(d.remise)}</td></tr>`:''}
+    <tr><td class="td-strong">Total TTC</td><td class="td-strong" style="text-align:right;color:var(--or)">${fmtEur(d.montantTTC)}</td></tr>
+    <tr><td class="td-dim">Acompte (${d.acomptePct||0} %)</td><td style="text-align:right">${fmtEur(acompte)}</td></tr>
+  </tbody></table>
+  <div class="action-grid">
+    <div class="action-box"><div class="action-box-title">📧 Par email</div>${email}</div>
+    <div class="action-box"><div class="action-box-title">⚡ Étape suivante</div>${manu}</div>
+  </div>
+  <details style="margin-top:12px"><summary style="cursor:pointer;color:var(--gm);font-size:12px">Statut manuel avancé</summary>
+    <div class="form-grid" style="margin-top:8px;grid-template-columns:1fr auto;align-items:end">
+      <div class="form-group"><select class="form-control" id="dev-statut-manuel">${DEVIS_STATUTS.map(s=>`<option${s===d.statut?' selected':''}>${s}</option>`).join('')}</select></div>
+      <button class="btn btn-ghost" onclick="changerStatutDevis('${id}');voirDevis('${id}')">Appliquer</button>
+    </div></details>`;
+  const footer=`<button class="btn btn-danger" onclick="supprimerDevis('${id}')">🗑 Supprimer</button>
+    <button class="btn btn-ghost" onclick="pdfDevis('${id}')">⬇ Aperçu PDF</button>
+    <button class="btn btn-ghost" onclick="closeModal();nav('devis-create',{id:'${id}'})">✎ Modifier</button>
+    <button class="btn btn-ghost" onclick="closeModal()">Fermer</button>`;
+  openModal('Devis · '+esc(d.id),body,footer);
+}
+function envoyerDevis(id){ majDevis(id,'Envoyé'); }
+function envoyerDevisMail(id){
+  const d=DB.get('devis',id); if(!d)return;
+  const tpl=EMAIL_TPL.devis(d);
+  openMailComposer({titre:'Envoyer le devis '+id, ...tpl, pdfId:id, pdfType:'Devis', kind:'devis', ref:id,
+    onSent:()=>{ if(d.statut==='Brouillon'){ d.statut='Envoyé'; d.dateEnvoi=todayISO(); DB.save('devis',d); updateBadges(); } RENDERERS.devis(); }});
+}
+function transformerEnFacture(id){
+  if(DB.all('factures').find(f=>f.idDevis===id)){ toast('Facture déjà créée pour ce devis','err'); return; }
+  facturerSolde(id);
+}
+function prestaFields(d){ return {dateEvenement:d.dateEvenement,creneau:d.creneau,horaire:d.horaire||'',lieu:d.lieu,distanceKm:d.distanceKm||0,typePrestation:(d.prestations||[]).map(p=>p.label).join(' + '),duree:(d.prestations||[]).map(p=>p.duree).filter(Boolean).join(' / '),contactSurPlace:d.nomClient+' '+(d.tel||'')}; }
+function statutPrestaCible(statutDevis){
+  if(statutDevis==='Refusé') return null;                       // pas dans l'agenda
+  if(statutDevis==='Accepté'||statutDevis==='Acompte reçu') return 'Confirmée'; // créneau bloqué
+  return 'Option';                                              // Brouillon / Envoyé
+}
+/* Crée / met à jour / supprime la prestation agenda en fonction du statut du devis */
+function syncPrestationDevis(d){
+  if(!d||!d.id) return null;
+  let p=DB.all('prestations').find(x=>x.idDevis===d.id);
+  if(p&&p.statutRealisation==='Réalisée'){ Object.assign(p,prestaFields(d)); return DB.save('prestations',p); }
+  const cible=statutPrestaCible(d.statut);
+  if(cible===null){ if(p) DB.remove('prestations',p.id); return null; }
+  if(!p) p={id:uid('PRE'),idDevis:d.id,materielNotes:''};
+  Object.assign(p,prestaFields(d),{statutRealisation:cible});
+  return DB.save('prestations',p);
+}
+/* compat : ancien nom */
+function creerPrestationPourDevis(d){ return syncPrestationDevis(d); }
+
+/* ───── Horaires & risque agenda ───── */
+function parseHoraire(h){ if(!h) return null; const re=/(\d{1,2})\s*[h:]\s*(\d{0,2})/g; let m,ts=[]; while((m=re.exec(h))) ts.push(+m[1]*60+(m[2]?+m[2]:0)); return ts.length?{start:ts[0],end:ts.length>1?ts[1]:null}:null; }
+function fmtMin(x){ return Math.floor(x/60)+'h'+String(x%60).padStart(2,'0'); }
+function risqueEntre(a,b){
+  const ta=parseHoraire(a.horaire), tb=parseHoraire(b.horaire);
+  if(!ta||!tb) return {niveau:'inconnu',msg:'horaire(s) non précisé(s)'};
+  const A=ta.start<=tb.start?{t:ta,p:a}:{t:tb,p:b}, B=ta.start<=tb.start?{t:tb,p:b}:{t:ta,p:a};
+  const fin=A.t.end!=null?A.t.end:A.t.start;
+  if(B.t.start<fin) return {niveau:'conflit',msg:'chevauchement horaire',gap:B.t.start-fin};
+  const gap=B.t.start-fin; const memeLieu=(a.lieu||'').trim().toLowerCase()===(b.lieu||'').trim().toLowerCase();
+  if(!memeLieu && gap<60) return {niveau:'risque',msg:gap+' min entre 2 lieux différents',gap};
+  return {niveau:'ok',msg:gap+' min d\'écart',gap};
+}
+function risqueJour(date,excludeId){
+  const ps=DB.all('prestations').filter(p=>p.dateEvenement===date&&p.statutRealisation!=='Réalisée'&&p.id!==excludeId);
+  let worst=null;
+  for(let i=0;i<ps.length;i++) for(let j=i+1;j<ps.length;j++){ const r=risqueEntre(ps[i],ps[j]);
+    if(r.niveau==='conflit') return {niveau:'conflit',r,a:ps[i],b:ps[j]};
+    if(r.niveau==='risque') worst={niveau:'risque',r,a:ps[i],b:ps[j]}; }
+  return worst;
+}
+/* Géocodage (BAN gratuit) pour estimer le trajet entre 2 lieux */
+const _geoCache={};
+async function geocodeLieu(q){ if(!q) return null; if(q in _geoCache) return _geoCache[q];
+  try{ const r=await fetch('https://api-adresse.data.gouv.fr/search/?q='+encodeURIComponent(q)+'&limit=1'); const d=await r.json(); const f=(d.features||[])[0]; _geoCache[q]=f?f.geometry.coordinates:null; }catch(_){ _geoCache[q]=null; } return _geoCache[q]; }
+function haversineKm(a,b){ const R=6371,toR=x=>x*Math.PI/180; const dLat=toR(b[1]-a[1]),dLon=toR(b[0]-a[0]); const s=Math.sin(dLat/2)**2+Math.cos(toR(a[1]))*Math.cos(toR(b[1]))*Math.sin(dLon/2)**2; return 2*R*Math.asin(Math.sqrt(s)); }
+function addRecetteAcompte(d){
+  const m=Math.round((+d.montantTTC||0)*(d.acomptePct||0)/100);
+  if(m<=0 || DB.all('recettes').some(r=>r.ref===d.id&&r.type==='Acompte')) return;
+  DB.save('recettes',{id:uid('REC'),date:todayISO(),montant:m,type:'Acompte',mode:'Virement',client:d.nomClient,designation:'Acompte réservation',ref:d.id});
+}
+function addRecetteSolde(f,montant){
+  const m=+montant||0; if(m<=0 || DB.all('recettes').some(r=>r.ref===f.id&&r.type==='Solde')) return;
+  DB.save('recettes',{id:uid('REC'),date:todayISO(),montant:m,type:'Solde',mode:'Virement',client:clientNomFacture(f),designation:'Solde prestation',ref:f.id});
+}
+function changerStatutDevis(id){
+  const d=DB.get('devis',id); if(!d)return;
+  const ns=document.getElementById('dev-statut-manuel').value, old=d.statut;
+  if(ns===old){ toast('Statut inchangé'); return; }
+  d.statut=ns;
+  if(ns==='Envoyé'&&!d.dateEnvoi) d.dateEnvoi=todayISO();
+  if(ns==='Accepté'&&!d.dateAcceptation) d.dateAcceptation=todayISO();
+  DB.save('devis',d);
+  let extra='';
+  syncPrestationDevis(d);
+  if(ns==='Acompte reçu'||ns==='Accepté') extra=' · créneau '+(statutPrestaCible(ns)==='Confirmée'?'bloqué':'')+' dans l\'agenda';
+  if(ns==='Acompte reçu') addRecetteAcompte(d);
+  logActivite('Devis '+id+' statut '+old+' → '+ns+' (manuel)');
+  closeModal(); updateBadges(); RENDERERS.devis(); toast('Statut → '+ns+extra,'ok');
+}
+function supprimerDevis(id){
+  const d=DB.get('devis',id); if(!d)return;
+  const fac=DB.all('factures').filter(f=>f.idDevis===id);
+  const pres=DB.all('prestations').filter(p=>p.idDevis===id);
+  if(fac.length){ openModal('Suppression impossible',
+    '<div class="alert warning" style="margin:0"><span class="alert-icon">⚠</span><div>Une facture (<strong>'+esc(fac[0].id)+'</strong>) est liée à ce devis. Supprime d\'abord la facture pour des raisons comptables.</div></div>',
+    '<button class="btn btn-ghost" onclick="voirDevis(\''+id+'\')">Retour</button>'); return; }
+  openModal('Supprimer le devis '+esc(id)+' ?',
+    '<div class="alert danger" style="margin:0"><span class="alert-icon">🗑</span><div>Action irréversible. Le devis'+(pres.length?' et sa prestation liée ('+esc(pres[0].dateEvenement)+')':'')+' seront supprimés.</div></div>',
+    '<button class="btn btn-ghost" onclick="voirDevis(\''+id+'\')">Annuler</button><button class="btn btn-danger" onclick="confirmSupprimerDevis(\''+id+'\')">Supprimer définitivement</button>');
+}
+function confirmSupprimerDevis(id){
+  DB.all('prestations').filter(p=>p.idDevis===id).forEach(p=>DB.remove('prestations',p.id));
+  DB.remove('devis',id);
+  logActivite('Devis '+id+' supprimé');
+  closeModal(); updateBadges(); RENDERERS.devis(); toast('Devis supprimé','ok');
+}
+function majDevis(id,statut){
+  const d=DB.get('devis',id); d.statut=statut;
+  if(statut==='Envoyé'&&!d.dateEnvoi) d.dateEnvoi=todayISO();
+  if(statut==='Accepté'&&!d.dateAcceptation) d.dateAcceptation=todayISO();
+  DB.save('devis',d); syncPrestationDevis(d); logActivite('Devis '+id+' → '+statut);
+  let extra=''; if(statut==='Accepté'){ const rq=risqueJour(d.dateEvenement,null); if(rq) extra=rq.niveau==='conflit'?' ⚠ conflit horaire ce jour !':' ⚠ créneau serré ce jour'; }
+  closeModal(); updateBadges(); RENDERERS.devis(); toast('Devis → '+statut+(statut==='Accepté'?' · créneau bloqué':'')+extra, extra?'err':'ok');
+}
+function enregistrerAcompte(id){
+  const d=DB.get('devis',id); if(!d)return;
+  d.statut='Acompte reçu'; DB.save('devis',d);
+  syncPrestationDevis(d); addRecetteAcompte(d);
+  logActivite('Acompte reçu · '+id+' '+fmtDateShort(d.dateEvenement));
+  closeModal(); updateBadges(); RENDERERS.devis(); toast('💰 Acompte reçu — créneau confirmé','ok');
+}
+
+/* ═══════════ MODULE PDF (template pro partagé) ═══════════ */
+const P_OR=[255,119,0], P_NOIR=[24,23,18], P_GRIS=[122,118,110], P_GRISC=[158,153,144], P_LIGHT=[247,244,240], P_LINE=[224,217,206], P_BLANC=[255,255,255];
+function emetteur(){ const c=DB.config();
+  return {
+    contact:c.entrepriseContact||'Louis Slosse',
+    statut:c.entrepriseStatut||'Magicien — Entrepreneur individuel',
+    adresse:c.entrepriseAdresse||'Dunkerque, Hauts-de-France',
+    siret:c.entrepriseSiret||'',
+    tel:c.entrepriseTel||'',
+    email:c.emailLouis||'contact@louismagie.fr',
+    site:'louismagie.fr',
+    iban:c.iban||'FR76 3000 3029 0400 0205 0334 532',
+    bic:c.bic||'',
+    mentionTva:c.mentionTva||'TVA non applicable, article 293 B du CGI',
+    delaiPaiement:c.delaiPaiement||'Paiement sous 1 mois à compter de la date d\'émission, par virement bancaire.'
+  };
+}
+function pdfNew(){ const {jsPDF}=window.jspdf; return new jsPDF({unit:'mm',format:'a4'}); }
+function pdfHeader(doc,type,num,dates){
+  const e=emetteur();
+  doc.setFillColor(...P_OR); doc.rect(0,0,210,4,'F');
+  doc.setFont('helvetica','bold'); doc.setFontSize(25);
+  doc.setTextColor(...P_NOIR); doc.text('Louis',15,24);
+  const w=doc.getTextWidth('Louis'); doc.setTextColor(...P_OR); doc.text('Magie',15+w,24);
+  doc.setFont('helvetica','normal'); doc.setFontSize(7.2); doc.setTextColor(...P_GRISC);
+  doc.text('MAGICIEN  ·  CLOSE-UP  ·  MENTALISME  ·  MAGIE DIGITALE',15,29.5);
+  doc.setFontSize(8.4); doc.setTextColor(...P_GRIS); let y=37;
+  [[e.contact,e.statut].filter(Boolean).join(' — '), e.adresse, e.siret?('SIRET '+e.siret):'', [e.tel,e.email].filter(Boolean).join('  ·  '), e.site]
+    .filter(Boolean).forEach(l=>{ doc.text(l,15,y); y+=4; });
+  // bloc document (droite)
+  doc.setFillColor(...P_LIGHT); doc.roundedRect(138,12,57,37,2.5,2.5,'F');
+  doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.setTextColor(...P_OR);
+  doc.text(type,166.5,22,{align:'center'});
+  doc.setFontSize(11); doc.setTextColor(...P_NOIR); doc.text(num,166.5,29.5,{align:'center'});
+  doc.setFont('helvetica','normal'); doc.setFontSize(8.2); doc.setTextColor(...P_GRIS);
+  let dy=37; dates.forEach(d=>{ doc.text(d[0]+' : '+d[1],166.5,dy,{align:'center'}); dy+=4.6; });
+  return 58;
+}
+function pdfBlocs(doc,y,client,presta){
+  doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(...P_OR); doc.text('ADRESSÉ À',15,y);
+  doc.setTextColor(...P_NOIR); doc.setFontSize(12); doc.text(client.nom||'—',15,y+7);
+  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(...P_GRIS);
+  let cy=y+13; (client.lines||[]).filter(Boolean).forEach(l=>{ doc.text(l,15,cy); cy+=4.6; });
+  if(presta){
+    doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(...P_OR); doc.text(presta.titre||'PRESTATION',115,y);
+    doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(...P_NOIR); let py=y+7;
+    (presta.lines||[]).filter(Boolean).forEach(l=>{ doc.text(l,115,py); py+=4.6; });
+    cy=Math.max(cy,py);
+  }
+  return cy+5;
+}
+function pdfTable(doc,y,head,body,amtWidth){
+  doc.autoTable({startY:y,head:[head],body,theme:'striped',
+    headStyles:{fillColor:P_NOIR,textColor:P_BLANC,fontStyle:'bold',fontSize:9.5,cellPadding:3.6},
+    alternateRowStyles:{fillColor:[248,245,241]},
+    styles:{fontSize:10,cellPadding:3.6,textColor:P_NOIR,lineColor:P_LINE,lineWidth:.1},
+    columnStyles:head.length===3?{1:{halign:'center',cellWidth:26},2:{halign:'right',cellWidth:amtWidth||34}}:{1:{halign:'right',cellWidth:amtWidth||42}},
+    margin:{left:15,right:15}});
+  return doc.lastAutoTable.finalY;
+}
+function pdfTotaux(doc,y,rows,total){
+  const x0=122,x1=195,w=73;
+  doc.setFontSize(9.5);
+  rows.forEach(r=>{ doc.setFont('helvetica','normal'); doc.setTextColor(...P_GRIS); doc.text(r[0],x0,y);
+    doc.setTextColor(...P_NOIR); doc.text(r[1],x1,y,{align:'right'}); y+=6.2; });
+  y+=1.5;
+  doc.setFillColor(...P_OR); doc.roundedRect(x0-3,y-5.2,w+3,11,2,2,'F');
+  doc.setFont('helvetica','bold'); doc.setFontSize(11.5); doc.setTextColor(...P_NOIR);
+  doc.text(total[0],x0,y+1.4); doc.text(total[1],x1,y+1.4,{align:'right'});
+  return y+12;
+}
+function pdfReglement(doc,y,condTitle,condLines){
+  const e=emetteur();
+  doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(...P_OR); doc.text('RÈGLEMENT',15,y);
+  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(...P_NOIR);
+  let ry=y+6; doc.text('IBAN : '+e.iban,15,ry); ry+=4.6;
+  if(e.bic){ doc.text('BIC : '+e.bic,15,ry); ry+=4.6; }
+  doc.setTextColor(...P_GRIS);
+  doc.splitTextToSize(e.delaiPaiement,95).forEach(l=>{ doc.text(l,15,ry); ry+=4.4; });
+  if(condLines&&condLines.length){
+    ry+=3.5; doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(...P_OR); doc.text(condTitle||'CONDITIONS',15,ry); ry+=5;
+    doc.setFont('helvetica','normal'); doc.setFontSize(8.4); doc.setTextColor(...P_GRIS);
+    condLines.forEach(c=>{ const ws=doc.splitTextToSize('•  '+c,98); ws.forEach(l=>{ doc.text(l,15,ry); ry+=4.1; }); });
+  }
+  return ry;
+}
+function pdfFooter(doc){
+  const e=emetteur();
+  doc.setDrawColor(...P_LINE); doc.setLineWidth(.4); doc.line(15,282,195,282);
+  doc.setFont('helvetica','normal'); doc.setFontSize(7.2); doc.setTextColor(...P_GRISC);
+  doc.text(['LouisMagie',e.contact,e.statut].filter(Boolean).join('  ·  '),105,287,{align:'center'});
+  doc.text([e.siret?('SIRET '+e.siret):'',e.adresse,e.email,e.site].filter(Boolean).join('  ·  '),105,291,{align:'center'});
+  doc.setFont('helvetica','bold'); doc.setTextColor(...P_OR); doc.setFontSize(7.4);
+  doc.text(e.mentionTva,105,295.5,{align:'center'});
+}
+
+/* ───── PDF devis ───── */
+function pdfDevis(id){
+  const d=DB.get('devis',id); if(!d)return;
+  const cli=DB.get('clients',d.idClient)||{};
+  const acompte=Math.round((+d.montantTTC||0)*(d.acomptePct||0)/100);
+  const valid=new Date(d.dateCreation); valid.setDate(valid.getDate()+30);
+  const doc=pdfNew();
+  let y=pdfHeader(doc,'DEVIS',d.id,[['Date',fmtDateShort(d.dateCreation)],['Validité',fmtDateShort(valid.toISOString().slice(0,10))]]);
+  y=pdfBlocs(doc,y,
+    {nom:d.nomClient,lines:[d.email,d.tel,cli.adresse||d.lieu,cli.siren?('SIREN '+cli.siren):'']},
+    {titre:'PRESTATION',lines:['Date : '+fmtDateFr(d.dateEvenement),'Créneau : '+(d.creneau||'—'),d.horaire?('Horaire : '+d.horaire):'','Lieu : '+(d.lieu||'—'),d.nbInvites?('Invités : '+d.nbInvites):'']});
+  const body=(d.prestations||[]).map(p=>[p.label||'Prestation',p.duree||'—',fmtEur(p.prix)]);
+  pdfTable(doc,y,['Prestation','Durée','Montant'],body);
+  let ty=doc.lastAutoTable.finalY+9;
+  const rows=[['Sous-total prestations',fmtEur(d.montantHT)],['Frais de déplacement ('+(d.distanceKm||0)+' km)',fmtEur(d.fraisDeplacement)]];
+  if(d.remise) rows.push(['Remise','- '+fmtEur(d.remise)]);
+  pdfTotaux(doc,ty,rows,['TOTAL TTC',fmtEur(d.montantTTC)]);
+  pdfReglement(doc,doc.lastAutoTable.finalY+9,'CONDITIONS',[
+    'Acompte de réservation de '+fmtEur(acompte)+' ('+(d.acomptePct||0)+' %) à la commande.',
+    'La date n\'est confirmée et bloquée qu\'à réception de l\'acompte.',
+    'Devis valable 30 jours. Solde réglé après la prestation.']);
+  pdfFooter(doc);
+  doc.output('dataurlnewwindow'); logActivite('PDF généré · devis '+id);
+  archivePdfCloud(doc,'Devis',d.id+'.pdf',(d.dateCreation||'').slice(0,4)||new Date().getFullYear());
+}
+
+/* ═══════════ VUE : AGENDA ═══════════ */
+let _calRef=null;
+RENDERERS.agenda=function(){
+  if(!_calRef){ const n=new Date(); _calRef={y:n.getFullYear(),m:n.getMonth()}; }
+  const {y,m}=_calRef;
+  const prestations=DB.all('prestations');
+  const first=new Date(y,m,1), startDow=(first.getDay()+6)%7; // lundi=0
+  const nbDays=new Date(y,m+1,0).getDate();
+  const today=new Date(); const todayStr=today.toISOString().slice(0,10);
+
+  const aVenir=prestations.filter(p=>p.statutRealisation!=='Réalisée'&&daysFromNow(p.dateEvenement)>=0).sort((a,b)=>new Date(a.dateEvenement)-new Date(b.dateEvenement));
+
+  const dows=['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'].map(d=>'<div class="cal-dow">'+d+'</div>').join('');
+  let cells='';
+  for(let i=0;i<startDow;i++) cells+='<div class="cal-cell empty"></div>';
+  for(let day=1;day<=nbDays;day++){
+    const ds=`${y}-${String(m+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+    const evts=prestations.filter(p=>p.dateEvenement===ds);
+    const cls=p=>p.statutRealisation==='Réalisée'?'realisee':(p.statutRealisation==='Option'?'option':'');
+    const evtHtml=evts.map(p=>`<div class="cal-evt ${cls(p)}" onclick="event.stopPropagation();voirPrestation('${p.id}')">${esc(p.horaire||p.creneau||'')} · ${esc(p.typePrestation).slice(0,16)}</div>`).join('');
+    const rq=risqueJour(ds,null);
+    const rqHtml=rq?`<div class="cal-risk ${rq.niveau==='risque'?'soft':''}" onclick="event.stopPropagation();analyseJour('${ds}')">⚠ ${rq.niveau==='conflit'?'conflit':'serré'}</div>`:'';
+    cells+=`<div class="cal-cell ${ds===todayStr?'today':''}"><div class="cal-day">${day}</div>${evtHtml}${rqHtml}</div>`;
+  }
+  const moisLabel=first.toLocaleDateString('fr-FR',{month:'long',year:'numeric'});
+
+  const listAvenir=aVenir.length?aVenir.map(p=>{ const j=daysFromNow(p.dateEvenement);
+    return `<div class="kb-card" onclick="voirPrestation('${p.id}')" style="margin-bottom:8px">
+      <div class="kb-card-title">${esc(p.typePrestation)}</div>
+      <div class="kb-card-sub">${fmtDateFr(p.dateEvenement)} · ${esc(p.creneau||'')} · ${esc(p.lieu||'')}</div>
+      <div class="kb-card-sub" style="color:${j<=7?'var(--or)':'var(--gm)'}">${j===0?"aujourd'hui":'J-'+j}</div></div>`;}).join('')
+    :'<div class="td-dim">Aucune prestation à venir.</div>';
+
+  document.getElementById('view-agenda').innerHTML=`
+    <div class="charts-grid" style="grid-template-columns:2fr 1fr;align-items:start">
+      <div class="panel">
+        <div class="cal-header">
+          <button class="btn btn-ghost btn-sm" onclick="calNav(-1)">‹ Préc.</button>
+          <div class="cal-month">${moisLabel}</div>
+          <button class="btn btn-ghost btn-sm" onclick="calNav(1)">Suiv. ›</button>
+        </div>
+        <div class="cal-grid">${dows}${cells}</div>
+        <div class="td-dim" style="margin-top:12px;display:flex;gap:14px;flex-wrap:wrap">
+          <span><span style="display:inline-block;width:10px;height:10px;border:1px dashed var(--info);border-radius:2px;vertical-align:middle"></span> Option (devis en cours)</span>
+          <span><span style="display:inline-block;width:10px;height:10px;background:var(--or);border-radius:2px;vertical-align:middle"></span> Confirmée</span>
+          <span><span style="display:inline-block;width:10px;height:10px;background:var(--ok);border-radius:2px;vertical-align:middle"></span> Réalisée</span>
+          <span><span style="color:var(--er);font-weight:700">⚠</span> conflit/risque horaire</span>
+        </div>
+      </div>
+      <div class="panel"><div class="panel-title">Prestations à venir</div>${listAvenir}</div>
+    </div>`;
+};
+function calNav(delta){ _calRef.m+=delta; if(_calRef.m<0){_calRef.m=11;_calRef.y--;} if(_calRef.m>11){_calRef.m=0;_calRef.y++;} RENDERERS.agenda(); }
+function voirPrestation(id){
+  const p=DB.get('prestations',id); if(!p)return;
+  const dev=DB.get('devis',p.idDevis);
+  const autres=DB.all('prestations').filter(x=>x.dateEvenement===p.dateEvenement&&x.id!==id&&x.statutRealisation!=='Réalisée');
+  let jourHtml='';
+  if(autres.length){
+    jourHtml='<div class="panel-title" style="font-size:13px;margin:14px 0 4px">Autres prestations ce jour</div>';
+    autres.forEach(a=>{ const r=risqueEntre(p,a);
+      const col=r.niveau==='conflit'?'var(--er)':(r.niveau==='risque'?'var(--warn)':'var(--gm)');
+      jourHtml+=`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--anthr)">
+        <div><div class="td-strong">${esc(a.horaire||a.creneau||'')} · ${esc(a.typePrestation)}</div><div class="td-dim">${esc(a.lieu||'')}</div></div>
+        <div style="text-align:right"><div style="color:${col};font-weight:600;font-size:12px">${r.niveau==='conflit'?'⚠ conflit':(r.niveau==='risque'?'⚠ serré':(r.niveau==='ok'?'OK':'horaire ?'))}</div>
+        <button class="btn btn-ghost btn-sm" style="margin-top:3px" onclick="analyserTrajet('${id}','${a.id}')">Analyser trajet</button></div></div>`; });
+    jourHtml+='<div id="trajet-result" style="margin-top:8px"></div>';
+  }
+  const body=`<div class="info-grid">
+    ${infoItem('Type',esc(p.typePrestation))}${infoItem('Statut',badge(p.statutRealisation))}
+    ${infoItem('Date',fmtDateFr(p.dateEvenement))}${infoItem('Créneau / horaire',esc(p.creneau||'—')+(p.horaire?' · '+esc(p.horaire):''))}
+    ${infoItem('Lieu',esc(p.lieu||'—'))}${infoItem('Durée',esc(p.duree||'—'))}
+    ${infoItem('Contact sur place',esc(p.contactSurPlace||'—'))}${infoItem('Devis lié',esc(p.idDevis||'—')+(dev?' · '+fmtEur(dev.montantTTC):''))}
+  </div>${jourHtml}
+  <div class="form-group" style="margin-top:14px"><label class="form-label">Matériel / notes logistiques</label>
+    <textarea class="form-control" id="pre-notes">${esc(p.materielNotes||'')}</textarea></div>`;
+  let footer=`<button class="btn btn-ghost" onclick="savePrestaNotes('${id}')">Enregistrer notes</button>`;
+  if(p.statutRealisation==='Option') footer+=`<span class="td-dim" style="align-self:center">Devis non accepté — créneau en option</span>`;
+  else if(p.statutRealisation!=='Réalisée') footer+=`<button class="btn btn-success" onclick="marquerRealisee('${id}')">✓ Marquer réalisée</button>`;
+  else {
+    if(dev&&!DB.all('factures').find(f=>f.idDevis===dev.id)) footer+=`<button class="btn btn-ghost" onclick="facturerSolde('${dev.id}')">🧾 Facturer le solde</button>`;
+    footer+=`<button class="btn btn-or" onclick="avisGoogleMail('${id}')">${mailEnvoye('avis',id)?'★ Avis demandé':'★ Demander un avis Google'}</button>`;
+  }
+  openModal('Prestation · '+fmtDateShort(p.dateEvenement),body,footer);
+}
+async function analyserTrajet(idA,idB){
+  const a=DB.get('prestations',idA), b=DB.get('prestations',idB);
+  const box=document.getElementById('trajet-result'); if(box) box.innerHTML='<div class="td-dim">Calcul du trajet…</div>';
+  const [ca,cb]=await Promise.all([geocodeLieu(a.lieu),geocodeLieu(b.lieu)]);
+  const r=risqueEntre(a,b);
+  let html;
+  if(!ca||!cb) html=alertHtml('warning','⚠','Lieux non géolocalisés ('+esc(a.lieu||'?')+' / '+esc(b.lieu||'?')+'). '+(r.gap!=null?('Écart horaire : '+r.gap+' min.'):'Précise des adresses + horaires.'));
+  else { const km=Math.round(haversineKm(ca,cb)), drive=Math.round(km/45*60)+10;
+    if(r.gap==null) html=alertHtml('info','📍','<strong>'+km+' km</strong> entre les 2 lieux (~'+drive+' min de route, marge incluse). Précise les horaires pour évaluer la faisabilité.');
+    else { const ok=r.niveau!=='conflit'&&r.gap>=drive;
+      html=alertHtml(ok?'success':'danger', ok?'✓':'⚠','<strong>'+km+' km</strong> entre les lieux · trajet ~<strong>'+drive+' min</strong> (marge incluse). Tu as <strong>'+r.gap+' min</strong> entre les 2 prestations → '+(ok?'faisable.':'<strong>trop juste / risqué.</strong>')); }
+  }
+  if(box) box.innerHTML=html;
+}
+function analyseJour(date){
+  const ps=DB.all('prestations').filter(p=>p.dateEvenement===date&&p.statutRealisation!=='Réalisée')
+    .sort((a,b)=>((parseHoraire(a.horaire)||{start:9999}).start)-((parseHoraire(b.horaire)||{start:9999}).start));
+  let html='<div class="td-dim" style="margin-bottom:10px">'+ps.length+' prestation(s) le '+fmtDateFr(date)+'. Plusieurs le même jour = OK si horaires/trajets compatibles.</div>';
+  ps.forEach(p=>{ html+=`<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--anthr)"><div><div class="td-strong">${esc(p.horaire||p.creneau||'')} · ${esc(p.typePrestation)}</div><div class="td-dim">${esc(p.lieu||'')}</div></div>${badge(p.statutRealisation)}</div>`; });
+  for(let i=0;i<ps.length;i++) for(let j=i+1;j<ps.length;j++){ const r=risqueEntre(ps[i],ps[j]);
+    const ty=r.niveau==='conflit'?'danger':(r.niveau==='risque'?'warning':(r.niveau==='ok'?'success':'info'));
+    html+='<div style="margin-top:8px">'+alertHtml(ty,(r.niveau==='conflit'?'⚠':(r.niveau==='ok'?'✓':'📍')),'<strong>'+esc(ps[i].typePrestation)+'</strong> ↔ <strong>'+esc(ps[j].typePrestation)+'</strong> : '+r.msg+' · <a onclick="analyserTrajet(\''+ps[i].id+'\',\''+ps[j].id+'\')" style="color:inherit;text-decoration:underline;cursor:pointer">analyser le trajet</a></div>')+'</div>'; }
+  html+='<div id="trajet-result" style="margin-top:8px"></div>';
+  openModal('Journée du '+fmtDateShort(date),html,'<button class="btn btn-ghost" onclick="closeModal()">Fermer</button>');
+}
+function savePrestaNotes(id){ const p=DB.get('prestations',id); p.materielNotes=document.getElementById('pre-notes').value; DB.save('prestations',p); toast('Notes enregistrées','ok'); }
+function marquerRealisee(id){
+  const p=DB.get('prestations',id); p.statutRealisation='Réalisée'; DB.save('prestations',p);
+  logActivite('Prestation réalisée · '+p.typePrestation+' ('+fmtDateShort(p.dateEvenement)+')');
+  closeModal(); RENDERERS.agenda(); toast('✓ Réalisée — solde facturable + avis Google à demander','ok');
+}
+function avisGoogleMail(id){
+  const p=DB.get('prestations',id); if(!p)return;
+  const dev=DB.get('devis',p.idDevis)||{}; const nom=dev.nomClient||(p.contactSurPlace||'');
+  const tpl=EMAIL_TPL.avis(p,nom); if(!tpl.to) tpl.to=dev.email||'';
+  openMailComposer({titre:'Demande d\'avis Google', ...tpl, kind:'avis', ref:id,
+    onSent:()=>RENDERERS.agenda()});
+}
+
+/* ═══════════ VUE : FACTURES ═══════════ */
+RENDERERS.factures=function(){
+  const all=DB.all('factures');
+  const encaisse=all.filter(f=>f.statut==='Payée').reduce((s,f)=>s+(+f.montantTTC||0),0);
+  const attente=all.filter(f=>f.statut!=='Payée').reduce((s,f)=>s+(+f.soldeDu||0),0);
+  const impayes=all.filter(f=>['Relance 1','Relance 2','En contentieux'].includes(f.statut)).length;
+
+  const rows=all.slice().sort((a,b)=>new Date(b.dateEmission)-new Date(a.dateEmission));
+  const body=rows.length?rows.map(f=>{
+    const cli=DB.get('clients',f.idClient); const nom=cli?cli.nom:(DB.get('devis',f.idDevis)||{}).nomClient||'—';
+    const echue=f.statut!=='Payée'&&daysSince(f.dateEcheance)>0;
+    return `<tr style="cursor:pointer" onclick="voirFacture('${f.id}')">
+      <td class="td-strong">${esc(f.id)}</td>
+      <td>${esc(nom)}<div class="td-dim">${esc(f.idDevis)}</div></td>
+      <td class="td-strong">${fmtEur(f.montantTTC)}<div class="td-dim">acompte ${fmtEur(f.acompteVerse)}</div></td>
+      <td class="td-strong" style="color:${f.statut==='Payée'?'var(--ok)':'var(--or)'}">${fmtEur(f.soldeDu)}</td>
+      <td>${fmtDateShort(f.dateEcheance)}${echue?' <span class="badge impaye">échue</span>':''}</td>
+      <td>${badge(f.statut)}</td>
+      <td><div class="td-actions">${factureQuick(f)}</div></td></tr>`;}).join('')
+    :'<tr><td colspan="7"><div class="empty"><div class="empty-icon">🧾</div><div class="empty-text">Aucune facture</div><div class="empty-sub">Les soldes facturés apparaîtront ici.</div></div></td></tr>';
+
+  document.getElementById('view-factures').innerHTML=`
+    <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr)">
+      ${kpi('vert','Encaissé',fmtEur(encaisse))}
+      ${kpi('warn','En attente',fmtEur(attente))}
+      ${kpi('rouge','Factures en relance',impayes)}
+    </div>
+    <div class="table-wrap"><div class="table-header"><div class="table-title">Factures</div></div>
+    <div class="table-scroll"><table><thead><tr><th>N°</th><th>Client</th><th>Montant TTC</th><th>Solde dû</th><th>Échéance</th><th>Statut</th><th></th></tr></thead><tbody>${body}</tbody></table></div></div>`;
+};
+function facturerSolde(idDevis){
+  const d=DB.get('devis',idDevis); if(!d)return;
+  if(DB.all('factures').find(f=>f.idDevis===idDevis)){ toast('Facture déjà émise pour ce devis','err'); return; }
+  const acompte=Math.round((+d.montantTTC||0)*(d.acomptePct||0)/100);
+  const cfg=DB.config(); const ech=new Date(); ech.setDate(ech.getDate()+(cfg.delaiRelance1||30));
+  DB.save('factures',{id:nextId('FAC','factures'),dateEmission:todayISO(),idDevis:d.id,idClient:d.idClient,montantTTC:+d.montantTTC,acompteVerse:acompte,soldeDu:(+d.montantTTC-acompte),dateEcheance:ech.toISOString().slice(0,10),statut:'Émise',datePaiement:'',dateRelance1:'',dateRelance2:''});
+  logActivite('Facture émise · solde devis '+idDevis);
+  closeModal(); updateBadges(); toast('🧾 Facture émise (solde après acompte)','ok'); nav('factures');
+}
+function marquerPayee(id){
+  const f=DB.get('factures',id); const solde=+f.soldeDu||0;
+  f.statut='Payée'; f.datePaiement=todayISO(); f.soldeDu=0; DB.save('factures',f);
+  addRecetteSolde(f,solde);
+  logActivite('Facture '+id+' payée'); updateBadges(); RENDERERS.factures(); toast('✓ Facture payée — recette ajoutée au livre','ok');
+}
+function clientNomFacture(f){ const c=DB.get('clients',f.idClient); return c?(c.prenom+' '+c.nom).trim():((DB.get('devis',f.idDevis)||{}).nomClient||''); }
+function envoyerFactureMail(id){
+  const f=DB.get('factures',id); if(!f)return;
+  const tpl=EMAIL_TPL.facture(f,clientNomFacture(f));
+  openMailComposer({titre:'Envoyer la facture '+id, ...tpl, pdfId:id, pdfType:'Facture', kind:'facture', ref:id,
+    onSent:()=>{ RENDERERS.factures(); voirFacture(id); }});
+}
+function mailDate(kind,ref){ const m=DB.all('mails').filter(x=>x.kind===kind&&x.ref===ref).sort((a,b)=>new Date(b.date)-new Date(a.date))[0]; return m?m.date:''; }
+function voirFacture(id){
+  const f=DB.get('factures',id); if(!f)return;
+  const cfg=DB.config(); const nom=clientNomFacture(f); const dev=DB.get('devis',f.idDevis)||{};
+  const envoi=f.dateEnvoi||mailDate('facture',id);
+  const r1=f.dateRelance1||mailDate('relanceR1',id);
+  const r2=f.dateRelance2||mailDate('relanceR2',id);
+  const paye=f.statut==='Payée';
+  const jEch=daysFromNow(f.dateEcheance);
+  const presta=DB.all('prestations').find(p=>p.idDevis===f.idDevis);
+
+  const bar=progressBar([
+    {label:'Émise',sub:fmtDateShort(f.dateEmission),state:'done'},
+    {label:'Envoyée',sub:envoi?fmtDateShort(envoi):'à faire',state:envoi?'done':(paye?'done':'current')},
+    {label:'Échéance',sub:fmtDateShort(f.dateEcheance),state:paye?'done':(envoi?'current':'todo')},
+    {label:'Payée',sub:paye?fmtDateShort(f.datePaiement):'en attente',state:paye?'done':'todo'},
+  ]);
+  const relInfo=(r1||r2)?`<div class="td-dim" style="text-align:center;margin:-6px 0 10px">${r1?'Relance 1 : '+fmtDateShort(r1):''}${r2?' · Relance 2 : '+fmtDateShort(r2):''}</div>`:'';
+
+  let dueR2='', action;
+  if(paye) action=alertHtml('success','✓','<strong>Facture réglée</strong> le '+fmtDateFr(f.datePaiement)+'.');
+  else if(!envoi) action=alertHtml('warning','✉','<strong>À faire :</strong> envoyer la facture au client.');
+  else if(!r1) action = jEch>=0
+      ? alertHtml('info','⏳','<strong>En attente de paiement</strong> — échéance le '+fmtDateFr(f.dateEcheance)+' (dans '+jEch+' j).')
+      : alertHtml('danger','🔔','<strong>Échéance dépassée de '+(-jEch)+' j</strong> → relance 1.');
+  else if(!r2){ const due=new Date(r1); due.setDate(due.getDate()+(cfg.delaiRelance2||15)); const jr2=daysFromNow(due.toISOString().slice(0,10)); dueR2=fmtDateFr(due.toISOString().slice(0,10));
+      action = jr2>0 ? alertHtml('info','📨','<strong>Relance 1 faite.</strong> Relance 2 le '+dueR2+' si impayé.')
+                     : alertHtml('danger','🔔','<strong>Délai post-relance 1 écoulé</strong> → relance 2.'); }
+  else action=alertHtml('danger','⚠','<strong>Relances 1 & 2 faites, impayé.</strong> Envisager le contentieux.');
+
+  const relType=f.statut==='Relance 1'?'2':'1';
+  const emailBtns=[
+    `<button class="btn btn-or" onclick="envoyerFactureMail('${id}')">✉ ${envoi?'Renvoyer':'Envoyer'} la facture</button>`,
+    (!paye&&['Émise','Relance 1','Relance 2'].includes(f.statut))?`<button class="btn btn-warn" onclick="preparerRelance('${id}')">✉ Relance ${relType} par email</button>`:'',
+    (paye||presta)?`<button class="btn btn-ghost" onclick="avisGoogleFacture('${id}')">★ Demander un avis Google</button>`:''
+  ].filter(Boolean).join('');
+  const manuBtns=[
+    (!envoi&&!paye)?`<button class="btn btn-ghost" onclick="marquerFactureEnvoyee('${id}')">✓ Marquer envoyée</button>`:'',
+    (!paye&&envoi&&['Émise','Relance 1'].includes(f.statut))?`<button class="btn btn-ghost" onclick="marquerRelanceManuelle('${id}')">✓ Relance ${relType} faite</button>`:'',
+    (!paye)?`<button class="btn btn-success" onclick="marquerFacturePayee('${id}')">✓ Marquer payée</button>`:''
+  ].filter(Boolean).join('')||'<div class="td-dim">Rien à marquer.</div>';
+
+  const body=`${bar}${relInfo}
+    <div class="info-grid" style="margin-bottom:12px">
+      ${infoItem('Client',esc(nom))}${infoItem('Devis lié',esc(f.idDevis||'—'))}
+      ${infoItem('Montant TTC',fmtEur(f.montantTTC))}${infoItem('Acompte versé',fmtEur(f.acompteVerse))}
+      ${infoItem('Solde dû',fmtEur(f.soldeDu))}${infoItem('Statut',badge(f.statut))}
+    </div>
+    ${action}
+    <div class="action-grid">
+      <div class="action-box"><div class="action-box-title">📧 Par email (semi-auto)</div>${emailBtns}</div>
+      <div class="action-box"><div class="action-box-title">✋ Déjà fait hors CRM</div>${manuBtns}</div>
+    </div>`;
+  openModal('Facture · '+esc(id),body,`<button class="btn btn-ghost" onclick="event.stopPropagation();pdfFacture('${id}')">⬇ Aperçu PDF</button><button class="btn btn-ghost" onclick="closeModal()">Fermer</button>`);
+}
+function marquerFactureEnvoyee(id){ const f=DB.get('factures',id); f.dateEnvoi=todayISO(); DB.save('factures',f); logActivite('Facture '+id+' marquée envoyée (manuel)'); updateBadges(); RENDERERS.factures(); if(document.getElementById('modal-bg').classList.contains('open')) voirFacture(id); toast('Facture marquée envoyée','ok'); }
+function qbtn(cls,onclick,label){ return `<button class="btn ${cls} btn-sm" onclick="event.stopPropagation();${onclick}">${label}</button>`; }
+function devisQuick(d){
+  let b='';
+  if(d.statut==='Brouillon') b=qbtn('btn-or',`envoyerDevisMail('${d.id}')`,'✉ Envoyer par email')+qbtn('btn-ghost',`majDevis('${d.id}','Envoyé')`,'✓ Déjà envoyé');
+  else if(d.statut==='Envoyé') b=qbtn('btn-success',`majDevis('${d.id}','Accepté')`,'✓ Accepté')+qbtn('btn-warn',`majDevis('${d.id}','Refusé')`,'✗ Refusé');
+  else if(d.statut==='Accepté') b=qbtn('btn-or',`enregistrerAcompte('${d.id}')`,'💰 Acompte reçu');
+  else if(d.statut==='Acompte reçu'&&!DB.all('factures').find(f=>f.idDevis===d.id)) b=qbtn('btn-or',`transformerEnFacture('${d.id}')`,'🧾 Créer la facture');
+  return b+qbtn('btn-ghost',`pdfDevis('${d.id}')`,'PDF');
+}
+function factureQuick(f){
+  const paye=f.statut==='Payée', envoi=f.dateEnvoi||mailDate('facture',f.id);
+  let b=qbtn('btn-or',`envoyerFactureMail('${f.id}')`,(envoi?'✉ Renvoyer':'✉ Envoyer par email'));
+  if(!envoi&&!paye) b+=qbtn('btn-ghost',`marquerFactureEnvoyee('${f.id}')`,'✓ Déjà envoyée');
+  if(!paye&&['Émise','Relance 1','Relance 2'].includes(f.statut)) b+=qbtn('btn-warn',`preparerRelance('${f.id}')`,'🔔 Relancer');
+  if(!paye) b+=qbtn('btn-success',`marquerPayee('${f.id}')`,'✓ Payée');
+  return b+qbtn('btn-ghost',`pdfFacture('${f.id}')`,'PDF');
+}
+function marquerRelanceManuelle(id){ const f=DB.get('factures',id); const type=f.statut==='Relance 1'?'R2':'R1'; confirmerRelance(id,type); voirFacture(id); toast('Relance '+type+' marquée faite','ok'); }
+function marquerFacturePayee(id){ marquerPayee(id); voirFacture(id); }
+function avisGoogleFacture(id){
+  const f=DB.get('factures',id); if(!f)return;
+  const dev=DB.get('devis',f.idDevis)||{};
+  const presta=DB.all('prestations').find(p=>p.idDevis===f.idDevis) || {id:'fac-'+id,dateEvenement:dev.dateEvenement};
+  const nom=clientNomFacture(f);
+  const tpl=EMAIL_TPL.avis(presta,nom); if(!tpl.to) tpl.to=(DB.get('clients',f.idClient)||{}).email||dev.email||'';
+  openMailComposer({titre:'Demande d\'avis Google', ...tpl, kind:'avis', ref:presta.id, onSent:()=>RENDERERS.factures()});
+}
+function preparerRelance(id){
+  const f=DB.get('factures',id); if(!f)return;
+  const type=f.statut==='Relance 1'?'R2':(f.statut==='Relance 2'?'R2':'R1');
+  const tpl=type==='R1'?EMAIL_TPL.relance1(f,clientNomFacture(f)):EMAIL_TPL.relance2(f,clientNomFacture(f));
+  openMailComposer({titre:'Relance '+type+' · facture '+id, ...tpl, kind:'relance'+type, ref:id,
+    onSent:()=>confirmerRelance(id,type)});
+}
+function confirmerRelance(id,type){
+  const f=DB.get('factures',id);
+  f.statut=type==='R1'?'Relance 1':'Relance 2';
+  if(type==='R1') f.dateRelance1=todayISO(); else f.dateRelance2=todayISO();
+  DB.save('factures',f);
+  DB.save('relances',{id:uid('REL'),date:todayISO(),idFacture:id,type,envoyePar:'Louis',statutReponse:'En attente'});
+  logActivite('Relance '+type+' · facture '+id);
+  updateBadges(); RENDERERS.factures();
+}
+/* ───── PDF facture ───── */
+function pdfFacture(id){
+  const f=DB.get('factures',id); if(!f)return;
+  const dev=DB.get('devis',f.idDevis)||{}; const cli=DB.get('clients',f.idClient)||{}; const nom=clientNomFacture(f);
+  const doc=pdfNew();
+  let y=pdfHeader(doc,'FACTURE',f.id,[['Émise le',fmtDateShort(f.dateEmission)],['Échéance',fmtDateShort(f.dateEcheance)]]);
+  y=pdfBlocs(doc,y,
+    {nom,lines:[cli.email,cli.tel,cli.adresse,cli.siren?('SIREN '+cli.siren):'',f.idDevis?('Réf. devis '+f.idDevis):'']},
+    dev.dateEvenement?{titre:'PRESTATION',lines:['Date : '+fmtDateFr(dev.dateEvenement),dev.creneau?('Créneau : '+dev.creneau):'',dev.horaire?('Horaire : '+dev.horaire):'','Lieu : '+(dev.lieu||'—')]}:null);
+  const desc='Prestation de magie'+(dev.dateEvenement?(' — '+fmtDateFr(dev.dateEvenement)):'');
+  const body=[[desc,fmtEur(f.montantTTC)],['Acompte de réservation déjà versé','- '+fmtEur(f.acompteVerse)]];
+  pdfTable(doc,y,['Désignation','Montant'],body);
+  let ty=doc.lastAutoTable.finalY+9;
+  pdfTotaux(doc,ty,[['Montant total TTC',fmtEur(f.montantTTC)],['Acompte versé','- '+fmtEur(f.acompteVerse)]],['SOLDE À RÉGLER',fmtEur(f.soldeDu)]);
+  const cond = f.statut==='Payée'
+    ? ['Facture acquittée le '+fmtDateFr(f.datePaiement)+'. Merci de votre confiance.']
+    : ['Merci de régler le solde de '+fmtEur(f.soldeDu)+' avant le '+fmtDateFr(f.dateEcheance)+'.','En cas de retard : pénalités au taux légal, indemnité forfaitaire de 40 € (art. L441-10 C. com.).'];
+  pdfReglement(doc,doc.lastAutoTable.finalY+9,'CONDITIONS DE PAIEMENT',cond);
+  pdfFooter(doc);
+  doc.output('dataurlnewwindow'); logActivite('PDF généré · facture '+id);
+  archivePdfCloud(doc,'Factures',f.id+'.pdf',(f.dateEmission||'').slice(0,4)||new Date().getFullYear());
+}
+
+/* ═══════════ VUE : CLIENTS ═══════════ */
+let _fCli='';
+function recalcClient(c){
+  const dv=DB.all('devis').filter(d=>d.idClient===c.id);
+  c.nbDevis=dv.length;
+  c.nbPrestations=DB.all('prestations').filter(p=>dv.some(d=>d.id===p.idDevis)).length;
+  c.caTotal=DB.all('factures').filter(f=>f.idClient===c.id&&f.statut==='Payée').reduce((s,f)=>s+(+f.montantTTC||0),0);
+  return c;
+}
+RENDERERS.clients=function(){
+  document.getElementById('topbar-actions').innerHTML=`<button class="btn btn-ghost btn-sm" onclick="exportClientsCSV()">⬇ Exporter CSV</button><button class="btn btn-or btn-sm" onclick="editClient()">+ Nouveau client</button>`;
+  let all=DB.all('clients').map(recalcClient);
+  const top=all.slice().sort((a,b)=>b.caTotal-a.caTotal).slice(0,5);
+  if(_fCli) all=all.filter(c=>c.type===_fCli);
+  all.sort((a,b)=>b.caTotal-a.caTotal);
+
+  const body=all.length?all.map(c=>`<tr>
+    <td class="td-strong">${esc((c.prenom+' '+c.nom).trim())}<div class="td-dim">${esc(c.email||'')}</div></td>
+    <td>${badge(c.type==='partenaire'?'accepte':c.type==='entreprise'?'envoye-info':'brouillon')} ${esc(c.type)}</td>
+    <td>${esc(c.adresse||'—')}</td>
+    <td>${c.nbDevis||0} devis · ${c.nbPrestations||0} presta.</td>
+    <td class="td-strong">${fmtEur(c.caTotal)}</td>
+    <td><div class="td-actions"><button class="btn btn-ghost btn-sm" onclick="voirClient('${c.id}')">Fiche</button>${c.email?`<button class="btn btn-ghost btn-sm" onclick="mailClient('${c.id}')">✉</button>`:''}</div></td></tr>`).join('')
+    :'<tr><td colspan="6"><div class="empty"><div class="empty-icon">👥</div><div class="empty-text">Aucun client</div></div></td></tr>';
+
+  const topHtml=top.map((c,i)=>`<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--anthr)">
+    <span>${i+1}. ${esc((c.prenom+' '+c.nom).trim())}</span><span class="td-strong" style="color:var(--or)">${fmtEur(c.caTotal)}</span></div>`).join('')||'<div class="td-dim">—</div>';
+
+  const opt=(v,l)=>`<option value="${v}"${v===_fCli?' selected':''}>${l}</option>`;
+  document.getElementById('view-clients').innerHTML=`
+    <div class="charts-grid" style="grid-template-columns:2fr 1fr;align-items:start">
+      <div class="table-wrap"><div class="table-header"><div class="table-title">Clients & partenaires</div>
+        <select class="filter-input" onchange="_fCli=this.value;RENDERERS.clients()">
+          ${opt('','Tous les types')}${opt('particulier','Particuliers')}${opt('entreprise','Entreprises')}${opt('partenaire','Partenaires')}
+        </select></div>
+        <div class="table-scroll"><table><thead><tr><th>Nom</th><th>Type</th><th>Ville</th><th>Activité</th><th>CA payé</th><th></th></tr></thead><tbody>${body}</tbody></table></div></div>
+      <div class="panel"><div class="panel-title">Top 5 · CA</div>${topHtml}</div>
+    </div>`;
+};
+function voirClient(id){
+  const c=recalcClient(DB.get('clients',id)); if(!c)return;
+  const dv=DB.all('devis').filter(d=>d.idClient===id);
+  const histDevis=dv.length?dv.map(d=>`<div style="display:flex;justify-content:space-between;padding:5px 0"><span>${esc(d.id)} · ${fmtDateShort(d.dateEvenement)}</span><span>${badge(d.statut)} ${fmtEur(d.montantTTC)}</span></div>`).join(''):'<div class="td-dim">Aucun devis.</div>';
+  const fac=DB.all('factures').filter(f=>f.idClient===id);
+  const histFac=fac.length?fac.map(f=>`<div style="display:flex;justify-content:space-between;padding:5px 0"><span>${esc(f.id)}</span><span>${badge(f.statut)} ${fmtEur(f.montantTTC)}</span></div>`).join(''):'<div class="td-dim">Aucune facture.</div>';
+  let prescriHtml='';
+  if(c.type==='partenaire'){
+    const nomP=(c.prenom+' '+c.nom).trim();
+    const refs=DB.all('clients').filter(x=>x.id!==id&&(x.sourceInitiale||'').toLowerCase().includes(c.nom.toLowerCase()));
+    const caApporte=refs.reduce((s,x)=>s+(+x.caTotal||0),0);
+    prescriHtml=`<div class="panel-title" style="margin-top:14px;font-size:13px">Prescriptions (${refs.length}) · CA apporté ${fmtEur(caApporte)}</div>
+      ${refs.length?refs.map(x=>`<div style="display:flex;justify-content:space-between;padding:5px 0"><span>${esc((x.prenom+' '+x.nom).trim())}</span><span class="td-dim">${fmtEur(x.caTotal)}</span></div>`).join(''):'<div class="td-dim">Aucun client apporté enregistré. (Renseigne ce partenaire dans « Source initiale » des clients qu\'il recommande.)</div>'}`;
+  }
+  const body=`<div class="info-grid">
+    ${infoItem('Type',esc(c.type))}${infoItem('Source initiale',esc(c.sourceInitiale||'—'))}
+    ${infoItem('Email',esc(c.email||'—'))}${infoItem('Téléphone',esc(c.tel||'—'))}
+    ${infoItem('Ville',esc(c.adresse||'—'))}${infoItem('CA total payé',fmtEur(c.caTotal))}
+    ${c.siren?infoItem('SIREN',esc(c.siren)):''}${c.naf?infoItem('Code NAF',esc(c.naf)):''}
+  </div>${prescriHtml}
+  <div class="panel-title" style="margin-top:16px;font-size:13px">Devis (${dv.length})</div>${histDevis}
+  <div class="panel-title" style="margin-top:14px;font-size:13px">Factures (${fac.length})</div>${histFac}`;
+  openModal('Fiche · '+esc((c.prenom+' '+c.nom).trim()),body,
+    `${c.email?`<button class="btn btn-ghost" onclick="closeModal();mailClient('${id}')">✉ Email</button>`:''}
+     <button class="btn btn-ghost" onclick="closeModal();editClient('${id}')">Modifier</button>
+     <button class="btn btn-or" onclick="closeModal();nav('devis-create',{clientId:'${id}'})">→ Nouveau devis</button>`);
+}
+function editClient(id){
+  const c=id?DB.get('clients',id):{id:'',nom:'',prenom:'',email:'',tel:'',adresse:'',type:'particulier',sourceInitiale:'',siren:'',naf:''};
+  const f=(l,k,t)=>`<div class="form-group"><label class="form-label">${l}</label><input class="form-control" id="cli-${k}" value="${esc(c[k]||'')}" type="${t||'text'}"></div>`;
+  const body=`
+    <div class="panel" style="background:var(--noir);margin-bottom:14px">
+      <label class="form-label">🔍 Recherche entreprise (base officielle INSEE/SIRENE — gratuit)</label>
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <input class="form-control" id="ent-q" placeholder="Nom de société, SIREN, dirigeant…" onkeydown="if(event.key==='Enter'){event.preventDefault();searchEntreprise()}">
+        <button class="btn btn-or" type="button" onclick="searchEntreprise()">Rechercher</button>
+      </div>
+      <div id="ent-results" style="margin-top:10px"></div>
+    </div>
+    <div class="form-grid">${f('Nom / Raison sociale','nom')}${f('Prénom (si particulier)','prenom')}${f('Email','email','email')}${f('Téléphone','tel')}${f('Ville / Adresse','adresse')}
+    <div class="form-group"><label class="form-label">Type</label><select class="form-control" id="cli-type">
+      ${['particulier','entreprise','partenaire'].map(t=>`<option${t===c.type?' selected':''}>${t}</option>`).join('')}</select></div>
+    ${f('SIREN','siren')}${f('Code NAF / activité','naf')}${f('Source initiale','sourceInitiale')}</div>`;
+  openModal(id?'Modifier client':'Nouveau client',body,
+    `<button class="btn btn-ghost" onclick="closeModal()">Annuler</button><button class="btn btn-or" onclick="saveClient('${id||''}')">Enregistrer</button>`);
+}
+let _entResults=[];
+function entAdresse(r){ const s=r.siege||{}; return (s.adresse||((s.code_postal||'')+' '+(s.libelle_commune||''))).trim(); }
+async function entLookup(qId,boxId,pickName){
+  const q=(document.getElementById(qId)||{}).value;
+  const box=document.getElementById(boxId);
+  if(!box) return;
+  if(!q||!q.trim()){ box.innerHTML='<div class="td-dim">Saisis un nom, un SIREN ou un SIRET.</div>'; return; }
+  box.innerHTML='<div class="td-dim">Recherche…</div>';
+  try{
+    const res=await fetch('https://recherche-entreprises.api.gouv.fr/search?q='+encodeURIComponent(q.trim())+'&per_page=8');
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    _entResults=(await res.json()).results||[];
+    if(!_entResults.length){ box.innerHTML='<div class="td-dim">Aucun résultat.</div>'; return; }
+    box.innerHTML=_entResults.map((r,i)=>{
+      const s=r.siege||{}; const dir=(r.dirigeants||[]).find(d=>d.type_dirigeant==='personne physique');
+      return `<div class="ent-card" onclick="${pickName}(${i})">
+        <div class="td-strong">${esc(r.nom_complet||r.nom_raison_sociale||'—')}</div>
+        <div class="td-dim">SIREN ${esc(r.siren)} · ${esc(s.libelle_commune||'')} ${esc(s.code_postal||'')} · NAF ${esc(r.activite_principale||'—')}${dir?' · '+esc((dir.prenoms||'')+' '+dir.nom):''}</div>
+      </div>`; }).join('');
+  }catch(e){ box.innerHTML='<div class="alert danger" style="margin:0"><span class="alert-icon">⚠</span><div>Recherche indisponible ('+esc(e.message)+'). Saisie manuelle possible.</div></div>'; }
+}
+function searchEntreprise(){ return entLookup('ent-q','ent-results','pickEntreprise'); }
+function pickEntreprise(i){
+  const r=_entResults[i]; if(!r)return;
+  const set=(k,v)=>{ const e=document.getElementById('cli-'+k); if(e)e.value=v||''; };
+  set('nom', r.nom_complet||r.nom_raison_sociale||''); set('adresse', entAdresse(r));
+  set('siren', r.siren||''); set('naf', r.activite_principale||'');
+  document.getElementById('cli-type').value='entreprise';
+  document.getElementById('ent-results').innerHTML='<div class="alert success" style="margin:0"><span class="alert-icon">✓</span><div>Fiche pré-remplie depuis '+esc(r.nom_complet||'')+'. Complète email/téléphone puis enregistre.</div></div>';
+  toast('Entreprise importée','ok');
+}
+function saveClient(id){
+  const g=k=>document.getElementById('cli-'+k).value.trim();
+  if(!g('nom')){ toast('Le nom est requis','err'); return; }
+  const c=id?DB.get('clients',id):{id:uid('CLI'),date1erDevis:'',nbDevis:0,nbPrestations:0,caTotal:0};
+  ['nom','prenom','email','tel','adresse','type','sourceInitiale','siren','naf'].forEach(k=>{const e=document.getElementById('cli-'+k); if(e)c[k]=e.value.trim();});
+  DB.save('clients',c); logActivite((id?'Client modifié':'Client créé')+' · '+c.nom);
+  closeModal(); RENDERERS.clients(); toast('Client enregistré','ok');
+}
+function mailClient(id){
+  const c=DB.get('clients',id); if(!c)return;
+  openMailComposer({titre:'Email · '+(c.prenom+' '+c.nom).trim(), to:c.email||'', subject:'', body:`Bonjour ${prenomDe(c.prenom||c.nom)},\n\n\n\n${sig()}`, kind:'libre', ref:id});
+}
+function csvCell(v){ v=(v==null?'':String(v)); return /[",;\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; }
+function exportClientsCSV(){
+  let rows=DB.all('clients').map(recalcClient);
+  if(_fCli) rows=rows.filter(c=>c.type===_fCli);
+  const cols=[['Nom','nom'],['Prénom','prenom'],['Email','email'],['Téléphone','tel'],['Ville','adresse'],['Type','type'],['Source initiale','sourceInitiale'],['Nb devis','nbDevis'],['Nb prestations','nbPrestations'],['CA payé (€)','caTotal']];
+  const header=cols.map(c=>c[0]).join(';');
+  const lines=rows.map(c=>cols.map(col=>csvCell(c[col[1]])).join(';'));
+  const csv='﻿'+[header,...lines].join('\n'); // BOM = accents OK dans Excel
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download='clients_louismagie_'+todayISO()+'.csv'; a.click(); URL.revokeObjectURL(a.href);
+  logActivite('Export CSV · '+rows.length+' clients'); toast('Export CSV ('+rows.length+' lignes)','ok');
+}
+
+/* ═══════════ VUE : CRÉER UN DEVIS ═══════════ */
+let DV={};
+RENDERERS['devis-create']=function(params){
+  const cfg=DB.config();
+  let d;
+  if(params.id){ d=Object.assign({},DB.get('devis',params.id)); }
+  else {
+    d={id:'',dateCreation:todayISO(),idClient:'',nomClient:'',email:'',tel:'',dateEvenement:'',creneau:'Soirée',horaire:'',lieu:'',distanceKm:0,nbInvites:'',prestations:[{label:'',prix:0,duree:''}],montantHT:0,fraisDeplacement:0,tva:0,montantTTC:0,remise:0,acomptePct:cfg.acompteDefautPct||30,statut:'Brouillon',dateEnvoi:'',dateAcceptation:'',notes:'',idDemandeOrigine:''};
+    if(params.demandeId){ const dem=DB.get('demandes',params.demandeId); if(dem){
+      Object.assign(d,{nomClient:dem.nom,email:dem.email,tel:dem.tel,dateEvenement:dem.dateEvenement,creneau:dem.creneau||'Soirée',lieu:dem.lieu,distanceKm:dem.distanceKm||0,nbInvites:dem.nbInvites,idDemandeOrigine:dem.id,prestations:[{label:dem.prestationSouhaitee||'',prix:0,duree:dem.duree||''}]}); } }
+    if(params.clientId){ const c=DB.get('clients',params.clientId); if(c){
+      Object.assign(d,{idClient:c.id,nomClient:(c.prenom+' '+c.nom).trim(),email:c.email,tel:c.tel,lieu:c.adresse}); } }
+  }
+  if(!d.prestations||!d.prestations.length) d.prestations=[{label:'',prix:0,duree:''}];
+  DV=d;
+  const clients=DB.all('clients');
+  document.getElementById('view-devis-create').innerHTML=`
+    <div style="max-width:760px">
+    <div class="panel"><div class="panel-title">Client</div>
+      <div style="background:var(--noir);border:1px solid var(--anthr);border-radius:var(--rsm);padding:12px;margin-bottom:14px">
+        <label class="form-label">🔍 Client professionnel — recherche entreprise (SIREN/SIRET, base officielle)</label>
+        <div style="display:flex;gap:8px;margin-top:6px">
+          <input class="form-control" id="dv-ent-q" placeholder="Nom de société, SIREN, SIRET…" onkeydown="if(event.key==='Enter'){event.preventDefault();searchEntrepriseDevis()}">
+          <button class="btn btn-or" type="button" onclick="searchEntrepriseDevis()">Rechercher</button>
+        </div>
+        <div id="dv-ent-results" style="margin-top:10px"></div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group"><label class="form-label">Nom du client <span class="req">*</span></label>
+          <input class="form-control" id="dv-nomClient" list="dv-clients" value="${esc(d.nomClient)}" oninput="dvPickClient(this.value)">
+          <datalist id="dv-clients">${clients.map(c=>`<option value="${esc((c.prenom+' '+c.nom).trim())}">`).join('')}</datalist></div>
+        <div class="form-group"><label class="form-label">Email</label><input class="form-control" id="dv-email" value="${esc(d.email)}" type="email"></div>
+        <div class="form-group"><label class="form-label">Téléphone</label><input class="form-control" id="dv-tel" value="${esc(d.tel)}"></div>
+      </div></div>
+
+    <div class="panel"><div class="panel-title">Événement</div>
+      <div class="form-grid c3">
+        <div class="form-group"><label class="form-label">Type</label>
+          <select class="form-control" id="dv-type">${['Mariage','Anniversaire','Soirée entreprise','Soirée privée','Autre'].map(t=>`<option>${t}</option>`).join('')}</select></div>
+        <div class="form-group"><label class="form-label">Date <span class="req">*</span></label><input class="form-control" id="dv-dateEvenement" type="date" value="${esc(d.dateEvenement)}"></div>
+        <div class="form-group"><label class="form-label">Créneau</label>
+          <select class="form-control" id="dv-creneau">${['Matin','Après-midi','Soirée','Journée'].map(c=>`<option${c===d.creneau?' selected':''}>${c}</option>`).join('')}</select></div>
+      </div>
+      <div class="form-grid c3">
+        <div class="form-group"><label class="form-label">Horaire exact</label><input class="form-control" id="dv-horaire" value="${esc(d.horaire||'')}" placeholder="ex : 20h30  ou  19h00 – 22h00"></div>
+        <div class="form-group"><label class="form-label">Lieu</label><input class="form-control" id="dv-lieu" value="${esc(d.lieu)}"></div>
+        <div class="form-group"><label class="form-label">Distance (km) — frais auto</label><input class="form-control" id="dv-distanceKm" type="number" value="${d.distanceKm||0}" oninput="dvRecalc()"></div>
+      </div>
+      <div class="form-grid c3">
+        <div class="form-group"><label class="form-label">Nb invités</label><input class="form-control" id="dv-nbInvites" value="${esc(d.nbInvites)}"></div>
+      </div></div>
+
+    <div class="panel"><div class="panel-title">Prestations
+        <span style="display:flex;gap:8px"><button class="btn btn-ghost btn-sm" onclick="nav('reglages')">⚙ Catalogue</button><button class="btn btn-ghost btn-sm" onclick="dvAddLine()">+ Ligne libre</button></span></div>
+      <div class="dv-cat-chips" style="display:flex;flex-wrap:wrap;gap:7px;margin-bottom:14px">${dvCatalogueChips()}</div>
+      <div id="dv-lines"></div></div>
+
+    <div class="panel"><div class="panel-title">Récapitulatif</div>
+      <div class="form-grid c3">
+        <div class="form-group"><label class="form-label">Remise (€)</label><input class="form-control" id="dv-remise" type="number" value="${d.remise||0}" oninput="dvRecalc()"></div>
+        <div class="form-group"><label class="form-label">Acompte (%)</label><input class="form-control" id="dv-acomptePct" type="number" value="${d.acomptePct||30}" oninput="dvRecalc()"></div>
+        <div class="form-group"><label class="form-label">Frais /km (config)</label><input class="form-control" value="${(cfg.fraisKm||0.55)} €" disabled></div>
+      </div>
+      <div id="dv-recap"></div>
+      <div class="form-group" style="margin-top:10px"><label class="form-label">Notes</label><textarea class="form-control" id="dv-notes">${esc(d.notes)}</textarea></div>
+    </div>
+
+    <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-bottom:30px">
+      <button class="btn btn-ghost" onclick="nav('devis')">Annuler</button>
+      <button class="btn btn-ghost" onclick="dvSave(false);pdfDevis(DV.id)">Aperçu PDF</button>
+      <button class="btn btn-or" onclick="dvSave(true)">${d.id?'Enregistrer':'Enregistrer le brouillon'}</button>
+    </div></div>`;
+  dvRenderLines(); dvRecalc();
+};
+function searchEntrepriseDevis(){ return entLookup('dv-ent-q','dv-ent-results','pickEntrepriseDevis'); }
+function pickEntrepriseDevis(i){
+  const r=_entResults[i]; if(!r)return;
+  const nom=r.nom_complet||r.nom_raison_sociale||'';
+  document.getElementById('dv-nomClient').value=nom;
+  if(!document.getElementById('dv-lieu').value) document.getElementById('dv-lieu').value=entAdresse(r);
+  DV.idClient=''; DV.siren=r.siren||''; DV.naf=r.activite_principale||''; DV.entreprise=true;
+  document.getElementById('dv-ent-results').innerHTML='<div class="alert success" style="margin:0"><span class="alert-icon">✓</span><div>Entreprise « '+esc(nom)+' » (SIREN '+esc(r.siren)+'). Un client pro sera créé à l\'enregistrement.</div></div>';
+  toast('Entreprise importée','ok');
+}
+function dvPickClient(name){
+  const c=DB.all('clients').find(x=>(x.prenom+' '+x.nom).trim()===name);
+  if(c){ DV.idClient=c.id; document.getElementById('dv-email').value=c.email||''; document.getElementById('dv-tel').value=c.tel||''; if(!document.getElementById('dv-lieu').value)document.getElementById('dv-lieu').value=c.adresse||''; }
+  else DV.idClient='';
+}
+function dvRenderLines(){
+  document.getElementById('dv-lines').innerHTML=DV.prestations.map((p,i)=>`
+    <div class="form-grid" style="grid-template-columns:3fr 1fr 1fr auto;align-items:end;margin-bottom:8px">
+      <div class="form-group"><label class="form-label">Prestation</label><input class="form-control" value="${esc(p.label)}" oninput="DV.prestations[${i}].label=this.value"></div>
+      <div class="form-group"><label class="form-label">Prix (€)</label><input class="form-control" type="number" value="${p.prix||0}" oninput="DV.prestations[${i}].prix=+this.value;dvRecalc()"></div>
+      <div class="form-group"><label class="form-label">Durée</label><input class="form-control" value="${esc(p.duree||'')}" oninput="DV.prestations[${i}].duree=this.value"></div>
+      <button class="btn btn-ghost btn-sm" style="margin-bottom:1px" onclick="dvDelLine(${i})" ${DV.prestations.length<=1?'disabled':''}>✕</button>
+    </div>`).join('');
+}
+function dvCatalogueChips(){
+  const cat=DB.all('catalogue').filter(c=>c.actif!==false);
+  if(!cat.length) return '<span class="td-dim">Catalogue vide. <a onclick="nav(\'reglages\')" style="color:var(--or);cursor:pointer">Ajouter des prestations</a></span>';
+  return cat.map(c=>`<button type="button" class="cat-chip" onclick="dvAddFromCat('${c.id}')">+ ${esc(c.label)} <strong>${fmtEur(c.prix)}</strong></button>`).join('');
+}
+function dvAddFromCat(catId){
+  const c=DB.get('catalogue',catId); if(!c)return;
+  // remplace 1ère ligne vide, sinon ajoute
+  const empty=DV.prestations.findIndex(p=>!p.label&&!p.prix);
+  const line={label:c.label,prix:+c.prix,duree:c.duree||''};
+  if(empty>=0) DV.prestations[empty]=line; else DV.prestations.push(line);
+  dvRenderLines(); dvRecalc(); toast('Ajouté : '+c.label,'ok');
+}
+function dvAddLine(){ DV.prestations.push({label:'',prix:0,duree:''}); dvRenderLines(); }
+function dvDelLine(i){ DV.prestations.splice(i,1); dvRenderLines(); dvRecalc(); }
+function dvRecalc(){
+  const cfg=DB.config();
+  const ht=DV.prestations.reduce((s,p)=>s+(+p.prix||0),0);
+  const dist=+(document.getElementById('dv-distanceKm')||{}).value||0;
+  const remise=+(document.getElementById('dv-remise')||{}).value||0;
+  const pct=+(document.getElementById('dv-acomptePct')||{}).value||0;
+  const frais=Math.round(dist*(cfg.fraisKm||0.55));
+  const ttc=ht+frais-remise;
+  const acompte=Math.round(ttc*pct/100);
+  const el=document.getElementById('dv-recap'); if(!el)return;
+  el.innerHTML=`<div class="dv-recap-box" style="background:var(--noir);border:1px solid var(--anthr);border-radius:var(--rsm);padding:14px 16px">
+    <div style="display:flex;justify-content:space-between;padding:3px 0"><span class="td-dim">Sous-total prestations</span><span>${fmtEur(ht)}</span></div>
+    <div style="display:flex;justify-content:space-between;padding:3px 0"><span class="td-dim">Frais déplacement (${dist} km × ${cfg.fraisKm||0.55} €)</span><span>${fmtEur(frais)}</span></div>
+    ${remise?`<div style="display:flex;justify-content:space-between;padding:3px 0;color:var(--ok)"><span>Remise</span><span>- ${fmtEur(remise)}</span></div>`:''}
+    <div style="display:flex;justify-content:space-between;padding:8px 0 3px;border-top:1px solid var(--anthr);margin-top:6px"><span class="td-strong">Total TTC</span><span class="td-strong" style="color:var(--or);font-size:18px;font-family:'Syne','Trebuchet MS',sans-serif">${fmtEur(ttc)}</span></div>
+    <div style="display:flex;justify-content:space-between;padding:3px 0"><span class="td-dim">Acompte réservation (${pct} %)</span><span>${fmtEur(acompte)}</span></div></div>`;
+  DV._calc={ht,frais,remise,ttc,pct};
+}
+function dvSave(go){
+  const g=id=>{ const e=document.getElementById('dv-'+id); return e?e.value:''; };
+  DV.nomClient=g('nomClient').trim(); DV.email=g('email'); DV.tel=g('tel');
+  DV.typeEvenement=g('type'); DV.dateEvenement=g('dateEvenement'); DV.creneau=g('creneau'); DV.horaire=g('horaire');
+  DV.lieu=g('lieu'); DV.distanceKm=+g('distanceKm')||0; DV.nbInvites=g('nbInvites'); DV.notes=g('notes');
+  DV.remise=+g('remise')||0; DV.acomptePct=+g('acomptePct')||0;
+  if(!DV.nomClient){ toast('Le nom du client est requis','err'); return false; }
+  if(!DV.dateEvenement){ toast('La date de l\'événement est requise','err'); return false; }
+  dvRecalc();
+  DV.montantHT=DV._calc.ht; DV.fraisDeplacement=DV._calc.frais; DV.montantTTC=DV._calc.ttc;
+  if(!DV.id) DV.id=nextId('DEV','devis');
+  // lier/créer client
+  if(!DV.idClient && DV.nomClient){
+    let c;
+    if(DV.entreprise||DV.siren){
+      c={id:uid('CLI'),nom:DV.nomClient,prenom:'',email:DV.email,tel:DV.tel,adresse:DV.lieu,type:'entreprise',siren:DV.siren||'',naf:DV.naf||'',date1erDevis:todayISO(),nbDevis:0,nbPrestations:0,caTotal:0,sourceInitiale:''};
+    } else {
+      const parts=DV.nomClient.split(' '); const nom=parts.length>1?parts.slice(1).join(' '):parts[0]; const prenom=parts.length>1?parts[0]:'';
+      c={id:uid('CLI'),nom,prenom,email:DV.email,tel:DV.tel,adresse:DV.lieu,type:'particulier',date1erDevis:todayISO(),nbDevis:0,nbPrestations:0,caTotal:0,sourceInitiale:''};
+    }
+    DB.save('clients',c); DV.idClient=c.id;
+  }
+  const {_calc,siren,naf,entreprise,...clean}=DV;
+  DB.save('devis',clean);
+  syncPrestationDevis(clean);
+  if(DV.idDemandeOrigine){ const dem=DB.get('demandes',DV.idDemandeOrigine); if(dem&&dem.statut!=='Converti'){ dem.statut='Converti'; DB.save('demandes',dem); } }
+  logActivite('Devis '+DV.id+' enregistré · '+DV.nomClient);
+  updateBadges();
+  if(go){ toast('Devis '+DV.id+' enregistré','ok'); nav('devis'); }
+  return true;
+}
+
+/* ═══════════ MOTEUR EMAIL (mailto semi-auto) ═══════════ */
+function sig(){ return (DB.config().signature||'LouisMagie'); }
+function prenomDe(nom){ return (nom||'').trim().split(' ')[0]||''; }
+
+const EMAIL_TPL={
+  devis(d){ const ac=Math.round((+d.montantTTC||0)*(d.acomptePct||0)/100);
+    return { to:d.email, subject:'Votre devis LouisMagie — '+d.id,
+      body:`Bonjour ${prenomDe(d.nomClient)},\n\nSuite à votre demande, voici votre devis ${d.id} pour la prestation du ${fmtDateFr(d.dateEvenement)} (${d.creneau||''}) à ${d.lieu||''}.\n\nMontant total TTC : ${fmtEur(d.montantTTC)}\nAcompte de réservation (${d.acomptePct||0} %) : ${fmtEur(ac)}\n\nLa date est confirmée et bloquée dès réception de l'acompte. Le devis détaillé est joint en PDF.\n\nJe reste à votre disposition pour toute question.\n\n${sig()}` }; },
+  facture(f,nom){ return { to:(DB.get('clients',f.idClient)||{}).email||'', subject:'Votre facture LouisMagie — '+f.id,
+      body:`Bonjour ${prenomDe(nom)},\n\nVeuillez trouver ci-joint la facture ${f.id}.\n\nMontant total TTC : ${fmtEur(f.montantTTC)}\nAcompte déjà versé : ${fmtEur(f.acompteVerse)}\nSolde à régler : ${fmtEur(f.soldeDu)}\nÉchéance : ${fmtDateFr(f.dateEcheance)}\n\nMerci de votre confiance.\n\n${sig()}` }; },
+  relance1(f,nom){ return { to:(DB.get('clients',f.idClient)||{}).email||'', subject:'Rappel — facture '+f.id+' en attente de règlement',
+      body:`Bonjour ${prenomDe(nom)},\n\nSauf erreur de notre part, la facture ${f.id} (solde de ${fmtEur(f.soldeDu)}), arrivée à échéance le ${fmtDateFr(f.dateEcheance)}, reste impayée.\n\nMerci de bien vouloir procéder au règlement dès que possible.\n\nBien cordialement,\n${sig()}` }; },
+  relance2(f,nom){ return { to:(DB.get('clients',f.idClient)||{}).email||'', subject:'2ème rappel — facture '+f.id,
+      body:`Bonjour ${prenomDe(nom)},\n\nMalgré notre première relance, la facture ${f.id} (${fmtEur(f.soldeDu)}) demeure impayée.\n\nSans règlement sous 8 jours, nous serons contraints d'engager une procédure de recouvrement.\n\nBien cordialement,\n${sig()}` }; },
+  avis(p,nom){ const url=DB.config().googleReviewUrl||'';
+    return { to:'', subject:'Merci pour votre confiance — votre avis compte',
+      body:`Bonjour ${prenomDe(nom)},\n\nMerci encore pour votre accueil lors de la prestation du ${fmtDateFr(p.dateEvenement)}. J'espère que la magie a opéré !\n\nSi vous avez passé un bon moment, un avis Google m'aiderait énormément :\n${url}\n\nMerci infiniment, et au plaisir.\n\n${sig()}` }; },
+};
+
+/* Ouvre un composeur : champs éditables + ouverture messagerie (mailto) + PDF optionnel */
+function openMailComposer(opts){
+  // opts: {titre, to, subject, body, pdfId, pdfType, onSent, kind, ref}
+  const body=`<div class="alert info"><span class="alert-icon">✉</span><div>Semi-automatique : l'email est pré-rempli. <strong>« Ouvrir ma messagerie »</strong> ouvre Mail/Gmail prêt à envoyer.${opts.pdfId?' Pense à joindre le PDF (bouton ci-dessous).':''}</div></div>
+    <div class="form-grid full">
+      <div class="form-group"><label class="form-label">Destinataire</label><input class="form-control" id="mc-to" value="${esc(opts.to||'')}"></div>
+      <div class="form-group"><label class="form-label">Objet</label><input class="form-control" id="mc-subject" value="${esc(opts.subject||'')}"></div>
+      <div class="form-group"><label class="form-label">Message</label><textarea class="form-control" id="mc-body" style="min-height:230px">${esc(opts.body||'')}</textarea></div>
+    </div>`;
+  let footer='';
+  if(opts.pdfId) footer+=`<button class="btn btn-ghost" onclick="pdf${opts.pdfType}('${opts.pdfId}')">⬇ Télécharger le PDF</button>`;
+  footer+=`<button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
+    <button class="btn btn-or" onclick="mcSend('${opts.kind||''}','${opts.ref||''}')">✉ Ouvrir ma messagerie</button>`;
+  openModal(opts.titre||'Composer un email',body,footer);
+  window._mcOnSent=opts.onSent;
+}
+function mcSend(kind,ref){
+  const to=document.getElementById('mc-to').value.trim();
+  const subject=document.getElementById('mc-subject').value;
+  const bodyTxt=document.getElementById('mc-body').value;
+  const url='mailto:'+encodeURIComponent(to)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(bodyTxt);
+  window.open(url,'_blank');
+  DB.save('mails',{id:uid('MAIL'),date:new Date().toISOString(),kind,ref,to,subject});
+  logActivite('Email préparé ('+kind+') → '+(to||'—'));
+  if(typeof window._mcOnSent==='function') window._mcOnSent();
+  closeModal(); toast('Messagerie ouverte — email pré-rempli','ok');
+}
+function mailEnvoye(kind,ref){ return DB.all('mails').some(m=>m.kind===kind&&m.ref===ref); }
+
+/* ═══════════ VUE : COMPTABILITÉ / URSSAF ═══════════ */
+let _comptaYear=null;
+function trimRange(an,t){ const s=['01-01','04-01','07-01','10-01'][t-1], e=['03-31','06-30','09-30','12-31'][t-1]; return [an+'-'+s, an+'-'+e]; }
+function trimEcheance(an,t){ return t===1?an+'-04-30':t===2?an+'-07-31':t===3?an+'-10-31':(an+1)+'-01-31'; }
+const TRIM_LABEL=['1ᵉʳ trimestre · jan→mar','2ᵉ trimestre · avr→juin','3ᵉ trimestre · juil→sep','4ᵉ trimestre · oct→déc'];
+function caTrimestre(an,t){ const [s,e]=trimRange(an,t); return DB.all('recettes').filter(r=>r.date>=s&&r.date<=e).reduce((a,r)=>a+(+r.montant||0),0); }
+function caAnnee(an){ return DB.all('recettes').filter(r=>(r.date||'').slice(0,4)==String(an)).reduce((a,r)=>a+(+r.montant||0),0); }
+function declKey(an,t){ return an+'-T'+t; }
+function declStatut(an,t){ return DB.all('declarations').find(d=>d.id===declKey(an,t)); }
+function trimEtat(an,t){
+  if((declStatut(an,t)||{}).declaree) return 'declaree';
+  const [,e]=trimRange(an,t); const today=todayISO();
+  if(today<=e) return 'en-cours';
+  return today>trimEcheance(an,t)?'retard':'a-declarer';
+}
+function trimsADeclarer(){ // trimestres clos, non déclarés, avec du CA (évite de nagger sur les trimestres vides)
+  const y=new Date().getFullYear(); const out=[];
+  [y-1,y].forEach(an=>[1,2,3,4].forEach(t=>{ const et=trimEtat(an,t); if((et==='a-declarer'||et==='retard')&&caTrimestre(an,t)>0) out.push({an,t,et}); }));
+  return out;
+}
+function cotisTaux(){ return +(DB.config().tauxUrssaf||23.1); }
+function impotTaux(){ const c=DB.config(); return c.versementLiberatoire?+(c.tauxImpotLib||2.2):0; }
+
+RENDERERS.compta=function(){
+  if(!_comptaYear) _comptaYear=new Date().getFullYear();
+  const an=_comptaYear, cfg=DB.config();
+  const tauxC=cotisTaux(), tauxI=impotTaux();
+  const moisT=Math.floor(new Date().getMonth()/3)+1;
+  const caCour=caTrimestre(an,moisT), caAn=caAnnee(an);
+  const prochain=trimsADeclarer()[0];
+
+  document.getElementById('topbar-actions').innerHTML=`<a class="btn btn-or btn-sm" href="${esc(cfg.urssafUrl||'https://www.autoentrepreneur.urssaf.fr')}" target="_blank" rel="noopener">↗ Portail URSSAF</a>`;
+
+  // déclarations table
+  const declRows=[1,2,3,4].map(t=>{
+    const ca=caTrimestre(an,t), cot=Math.round(ca*tauxC/100*100)/100, imp=Math.round(ca*tauxI/100*100)/100;
+    const et=trimEtat(an,t), ech=trimEcheance(an,t), dec=declStatut(an,t);
+    const stMap={declaree:['Déclarée','accepte'],'en-cours':['En cours','brouillon'],'a-declarer':['À déclarer','envoye'],retard:['En retard','refuse']};
+    const [stLbl,stCls]=stMap[et];
+    const jE=daysFromNow(ech);
+    return `<tr>
+      <td class="td-strong">${TRIM_LABEL[t-1]}</td>
+      <td class="td-strong">${fmtEur(ca)}</td>
+      <td>${fmtEur(cot)}<div class="td-dim">${tauxC} %</div></td>
+      ${tauxI?`<td>${fmtEur(imp)}<div class="td-dim">${tauxI} %</div></td>`:''}
+      <td class="td-strong">${fmtEur(cot+imp)}</td>
+      <td>${fmtDateShort(ech)}<div class="td-dim">${et==='declaree'?('déclarée '+(dec.dateDeclaration?fmtDateShort(dec.dateDeclaration):'')):(et==='en-cours'?'clôture à venir':(jE>=0?('dans '+jE+' j'):('retard '+(-jE)+' j')))}</div></td>
+      <td><span class="badge ${stCls}">${stLbl}</span></td>
+      <td><div class="td-actions">
+        ${et==='declaree'
+          ? `<button class="btn btn-ghost btn-sm" onclick="annulerDeclaration(${an},${t})">Annuler</button>`
+          : (et==='en-cours' ? '<span class="td-dim">trimestre en cours</span>'
+             : `<button class="btn btn-or btn-sm" onclick="marquerDeclaree(${an},${t})">✓ Marquée déclarée</button>`)}
+      </div></td></tr>`;
+  }).join('');
+
+  const colImp=tauxI?'<th>Impôt lib.</th>':'';
+  const recettes=DB.all('recettes').filter(r=>(r.date||'').slice(0,4)==String(an)).sort((a,b)=>b.date.localeCompare(a.date));
+  const recRows=recettes.length?recettes.map(r=>`<tr>
+      <td class="td-dim">${fmtDateShort(r.date)}</td>
+      <td>${esc(r.client||'—')}<div class="td-dim">${esc(r.designation||'')}</div></td>
+      <td><span class="badge ${r.type==='Acompte'?'envoye':r.type==='Solde'?'accepte':'brouillon'}">${esc(r.type)}</span></td>
+      <td>${esc(r.mode||'—')}</td>
+      <td class="td-strong">${fmtEur(r.montant)}</td>
+      <td class="td-dim">${esc(r.ref||'')}</td>
+      <td><button class="btn btn-ghost btn-sm" onclick="supprimerRecette('${r.id}')">✕</button></td>
+    </tr>`).join('')
+    :`<tr><td colspan="7"><div class="empty"><div class="empty-icon">📒</div><div class="empty-text">Aucune recette ${an}</div><div class="empty-sub">Les encaissements (acomptes, soldes) s'ajoutent automatiquement.</div></div></td></tr>`;
+
+  document.getElementById('view-compta').innerHTML=`
+    <div class="kpi-grid">
+      ${kpi('vert','CA encaissé '+an,fmtEur(caAn))}
+      ${kpi('or','CA trimestre courant',fmtEur(caCour),'T'+moisT)}
+      ${kpi('warn','Cotisations estimées (T'+moisT+')',fmtEur(Math.round(caCour*tauxC/100)),tauxC+' %')}
+      ${kpi('info','Prochaine déclaration',prochain?TRIM_LABEL[prochain.t-1].split(' · ')[0]:'À jour',prochain?('échéance '+fmtDateShort(trimEcheance(prochain.an,prochain.t))):'rien à déclarer')}
+    </div>
+
+    <div class="table-wrap"><div class="table-header">
+      <div class="table-title">Déclarations trimestrielles ${an}</div>
+      <div class="table-filters">
+        <button class="btn btn-ghost btn-sm" onclick="_comptaYear--;RENDERERS.compta()">‹ ${an-1}</button>
+        <button class="btn btn-ghost btn-sm" onclick="_comptaYear++;RENDERERS.compta()">${an+1} ›</button>
+      </div></div>
+      <div class="td-dim" style="padding:8px 20px">Auto-entrepreneur : déclare ton CA encaissé chaque trimestre sur le portail URSSAF (même si 0 €). Cotisations = CA × taux (modifiable dans Réglages).</div>
+      <div class="table-scroll"><table><thead><tr><th>Trimestre</th><th>CA encaissé</th><th>Cotisations</th>${colImp}<th>Total à payer</th><th>Échéance</th><th>Statut</th><th></th></tr></thead><tbody>${declRows}</tbody></table></div>
+    </div>
+
+    <div class="table-wrap"><div class="table-header">
+      <div class="table-title">Livre des recettes ${an}</div>
+      <div class="table-filters">
+        <button class="btn btn-ghost btn-sm" onclick="exportRecettesCSV(${an})">⬇ Export CSV</button>
+        <button class="btn btn-or btn-sm" onclick="addRecetteManuelle()">+ Recette manuelle</button>
+      </div></div>
+      <div class="table-scroll"><table><thead><tr><th>Date</th><th>Client / désignation</th><th>Type</th><th>Mode</th><th>Montant</th><th>Réf</th><th></th></tr></thead><tbody>${recRows}</tbody></table></div>
+    </div>`;
+};
+function marquerDeclaree(an,t){
+  const ca=caTrimestre(an,t), tauxC=cotisTaux(), tauxI=impotTaux();
+  DB.save('declarations',{id:declKey(an,t),annee:an,trimestre:t,ca,cotisations:Math.round(ca*tauxC/100*100)/100,impot:Math.round(ca*tauxI/100*100)/100,declaree:true,dateDeclaration:todayISO()});
+  logActivite('Déclaration URSSAF '+an+' T'+t+' marquée déclarée (CA '+fmtEur(ca)+')');
+  updateBadges(); RENDERERS.compta(); toast('Déclaration T'+t+' '+an+' enregistrée','ok');
+}
+function annulerDeclaration(an,t){ DB.remove('declarations',declKey(an,t)); updateBadges(); RENDERERS.compta(); toast('Déclaration annulée'); }
+/* ───── Sauvegarde / restauration (filet de sécurité) ───── */
+function exportBackup(){
+  const data={}; ENTITIES.forEach(e=>data[e]=DB.all(e));
+  const blob={_app:'CRM LouisMagie',_version:1,_date:new Date().toISOString(),config:DB.config(),data};
+  const b=new Blob([JSON.stringify(blob,null,2)],{type:'application/json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='sauvegarde_louismagie_'+todayISO()+'.json'; a.click(); URL.revokeObjectURL(a.href);
+  logActivite('Sauvegarde exportée'); toast('Sauvegarde téléchargée','ok');
+}
+function importBackupFile(input){ const f=input.files&&input.files[0]; if(!f)return;
+  const rd=new FileReader(); rd.onload=()=>{ try{ confirmImport(JSON.parse(rd.result)); }catch(_){ toast('Fichier illisible','err'); } }; rd.readAsText(f); input.value=''; }
+function confirmImport(j){
+  if(!j||!j.data){ toast('Sauvegarde non reconnue','err'); return; }
+  const n=Object.values(j.data).reduce((a,arr)=>a+(Array.isArray(arr)?arr.length:0),0);
+  window._importData=j;
+  openModal('Restaurer cette sauvegarde ?',
+    '<div class="alert warning" style="margin:0"><span class="alert-icon">⚠</span><div>Remplace <strong>toutes les données actuelles</strong> par la sauvegarde (<strong>'+n+' enregistrements</strong>, du '+(j._date?fmtDateShort(j._date):'?')+'). Irréversible — exporte d\'abord l\'état actuel si besoin.</div></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Annuler</button><button class="btn btn-danger" onclick="doImport()">Remplacer tout</button>');
+}
+function doImport(){ const j=window._importData; if(!j)return;
+  ENTITIES.forEach(e=>DB._write(e, Array.isArray(j.data[e])?j.data[e]:[]));
+  if(j.config) DB.saveConfig(j.config);
+  closeModal(); toast('Sauvegarde restaurée','ok'); setTimeout(()=>location.reload(),600);
+}
+function supprimerRecette(id){ DB.remove('recettes',id); RENDERERS.compta(); toast('Recette supprimée','ok'); }
+function addRecetteManuelle(){
+  const body=`<div class="form-grid">
+    <div class="form-group"><label class="form-label">Date</label><input class="form-control" id="rec-date" type="date" value="${todayISO()}"></div>
+    <div class="form-group"><label class="form-label">Montant (€)</label><input class="form-control" id="rec-montant" type="number" step="0.01"></div>
+    <div class="form-group"><label class="form-label">Client</label><input class="form-control" id="rec-client"></div>
+    <div class="form-group"><label class="form-label">Type</label><select class="form-control" id="rec-type">${['Acompte','Solde','Autre'].map(t=>`<option>${t}</option>`).join('')}</select></div>
+    <div class="form-group"><label class="form-label">Mode</label><select class="form-control" id="rec-mode">${['Virement','Espèces','Chèque','CB','Autre'].map(m=>`<option>${m}</option>`).join('')}</select></div>
+    <div class="form-group"><label class="form-label">Référence</label><input class="form-control" id="rec-ref"></div>
+  </div><div class="form-group"><label class="form-label">Désignation</label><input class="form-control" id="rec-designation"></div>`;
+  openModal('Ajouter une recette',body,
+    `<button class="btn btn-ghost" onclick="closeModal()">Annuler</button><button class="btn btn-or" onclick="saveRecetteManuelle()">Enregistrer</button>`);
+}
+function saveRecetteManuelle(){
+  const g=k=>document.getElementById('rec-'+k).value;
+  const m=+g('montant')||0; if(m<=0){ toast('Montant requis','err'); return; }
+  DB.save('recettes',{id:uid('REC'),date:g('date')||todayISO(),montant:m,type:g('type'),mode:g('mode'),client:g('client'),designation:g('designation'),ref:g('ref')});
+  logActivite('Recette manuelle ajoutée · '+fmtEur(m));
+  closeModal(); RENDERERS.compta(); toast('Recette ajoutée','ok');
+}
+function exportRecettesCSV(an){
+  const rows=DB.all('recettes').filter(r=>(r.date||'').slice(0,4)==String(an)).sort((a,b)=>a.date.localeCompare(b.date));
+  const cols=[['Date','date'],['Client','client'],['Désignation','designation'],['Type','type'],['Mode','mode'],['Montant','montant'],['Référence','ref']];
+  const csv='﻿'+[cols.map(c=>c[0]).join(';'),...rows.map(r=>cols.map(c=>csvCell(r[c[1]])).join(';'))].join('\n');
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='livre_recettes_'+an+'.csv'; a.click(); URL.revokeObjectURL(a.href);
+  toast('Export CSV ('+rows.length+' recettes)','ok');
+}
+
+/* ═══════════ VUE : RÉGLAGES & CATALOGUE ═══════════ */
+RENDERERS.reglages=function(){
+  const cfg=DB.config();
+  const cat=DB.all('catalogue');
+  const catRows=cat.length?cat.map(c=>`<tr>
+    <td><input class="form-control" value="${esc(c.label)}" onchange="majCat('${c.id}','label',this.value)"></td>
+    <td style="width:110px"><input class="form-control" type="number" value="${c.prix}" onchange="majCat('${c.id}','prix',+this.value)"></td>
+    <td style="width:90px"><input class="form-control" value="${esc(c.duree||'')}" onchange="majCat('${c.id}','duree',this.value)"></td>
+    <td style="width:120px"><select class="form-control" onchange="majCat('${c.id}','categorie',this.value)">
+      <option value="prestation"${c.categorie==='prestation'?' selected':''}>Prestation</option>
+      <option value="option"${c.categorie==='option'?' selected':''}>Option</option></select></td>
+    <td style="width:80px;text-align:center"><input type="checkbox" ${c.actif!==false?'checked':''} onchange="majCat('${c.id}','actif',this.checked)" title="Actif"></td>
+    <td style="width:50px"><button class="btn btn-ghost btn-sm" onclick="delCat('${c.id}')">✕</button></td></tr>`).join('')
+    :'<tr><td colspan="6"><div class="td-dim" style="padding:10px">Catalogue vide.</div></td></tr>';
+
+  document.getElementById('view-reglages').innerHTML=`
+    <div class="table-wrap"><div class="table-header">
+      <div class="table-title">Catalogue de prestations</div>
+      <button class="btn btn-or btn-sm" onclick="addCat()">+ Ajouter une prestation</button></div>
+      <div class="td-dim" style="padding:10px 20px">Ces tarifs alimentent les boutons rapides du formulaire de devis. Modifiable à tout moment.</div>
+      <div class="table-scroll"><table><thead><tr><th>Libellé</th><th>Prix (€)</th><th>Durée</th><th>Catégorie</th><th>Actif</th><th></th></tr></thead><tbody>${catRows}</tbody></table></div>
+    </div>
+
+    <div class="panel"><div class="panel-title">Paramètres facturation & déplacement</div>
+      <div class="form-grid c3">
+        <div class="form-group"><label class="form-label">Frais kilométriques (€/km)</label><input class="form-control" id="cfg-fraisKm" type="number" step="0.01" value="${cfg.fraisKm||0.55}"></div>
+        <div class="form-group"><label class="form-label">Acompte par défaut (%)</label><input class="form-control" id="cfg-acompteDefautPct" type="number" value="${cfg.acompteDefautPct||30}"></div>
+        <div class="form-group"><label class="form-label">Délai 1ère relance (jours)</label><input class="form-control" id="cfg-delaiRelance1" type="number" value="${cfg.delaiRelance1||30}"></div>
+        <div class="form-group"><label class="form-label">Délai 2ème relance (jours)</label><input class="form-control" id="cfg-delaiRelance2" type="number" value="${cfg.delaiRelance2||15}"></div>
+        <div class="form-group"><label class="form-label">Email expéditeur</label><input class="form-control" id="cfg-emailLouis" value="${esc(cfg.emailLouis||'')}"></div>
+        <div class="form-group"><label class="form-label">Lien avis Google</label><input class="form-control" id="cfg-googleReviewUrl" value="${esc(cfg.googleReviewUrl||'')}"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Signature email</label><textarea class="form-control" id="cfg-signature">${esc(cfg.signature||'')}</textarea></div>
+      <div style="text-align:right;margin-top:10px"><button class="btn btn-or" onclick="saveParams()">Enregistrer les paramètres</button></div>
+    </div>
+
+    <div class="panel"><div class="panel-title">Émetteur & mentions (PDF devis / facture)</div>
+      <div class="td-dim" style="margin-bottom:12px">Ces informations apparaissent sur tes devis et factures PDF.</div>
+      <div class="form-grid c3">
+        <div class="form-group"><label class="form-label">Nom / contact</label><input class="form-control" id="cfg-entrepriseContact" value="${esc(cfg.entrepriseContact||'')}"></div>
+        <div class="form-group"><label class="form-label">Statut</label><input class="form-control" id="cfg-entrepriseStatut" value="${esc(cfg.entrepriseStatut||'')}"></div>
+        <div class="form-group"><label class="form-label">SIRET</label><input class="form-control" id="cfg-entrepriseSiret" value="${esc(cfg.entrepriseSiret||'')}"></div>
+        <div class="form-group"><label class="form-label">Adresse</label><input class="form-control" id="cfg-entrepriseAdresse" value="${esc(cfg.entrepriseAdresse||'')}"></div>
+        <div class="form-group"><label class="form-label">Téléphone</label><input class="form-control" id="cfg-entrepriseTel" value="${esc(cfg.entrepriseTel||'')}"></div>
+        <div class="form-group"><label class="form-label">BIC (optionnel)</label><input class="form-control" id="cfg-bic" value="${esc(cfg.bic||'')}"></div>
+      </div>
+      <div class="form-group"><label class="form-label">IBAN</label><input class="form-control" id="cfg-iban" value="${esc(cfg.iban||'')}"></div>
+      <div class="form-grid">
+        <div class="form-group"><label class="form-label">Mention TVA</label><input class="form-control" id="cfg-mentionTva" value="${esc(cfg.mentionTva||'')}"></div>
+        <div class="form-group"><label class="form-label">Délai de paiement</label><input class="form-control" id="cfg-delaiPaiement" value="${esc(cfg.delaiPaiement||'')}"></div>
+      </div>
+      <div style="text-align:right;margin-top:10px"><button class="btn btn-or" onclick="saveParams()">Enregistrer</button></div>
+    </div>
+
+    <div class="panel"><div class="panel-title">URSSAF / cotisations auto-entrepreneur</div>
+      <div class="td-dim" style="margin-bottom:12px">Vérifie ton taux sur autoentrepreneur.urssaf.fr (varie selon l'activité : BNC prestation de service ≈ 23,1 %).</div>
+      <div class="form-grid c3">
+        <div class="form-group"><label class="form-label">Taux cotisations (%)</label><input class="form-control" id="cfg-tauxUrssaf" type="number" step="0.1" value="${cfg.tauxUrssaf||23.1}"></div>
+        <div class="form-group"><label class="form-label">Versement libératoire impôt</label><select class="form-control" id="cfg-versementLiberatoire"><option value="non"${!cfg.versementLiberatoire?' selected':''}>Non</option><option value="oui"${cfg.versementLiberatoire?' selected':''}>Oui</option></select></div>
+        <div class="form-group"><label class="form-label">Taux impôt libératoire (%)</label><input class="form-control" id="cfg-tauxImpotLib" type="number" step="0.1" value="${cfg.tauxImpotLib||2.2}"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Lien portail URSSAF</label><input class="form-control" id="cfg-urssafUrl" value="${esc(cfg.urssafUrl||'')}"></div>
+      <div style="text-align:right;margin-top:10px"><button class="btn btn-or" onclick="saveParams()">Enregistrer</button></div>
+    </div>
+
+    <div class="panel"><div class="panel-title">☁️ Backend de synchronisation</div>
+      <div class="td-dim" style="margin-bottom:12px">Branche ton serveur (Hostinger PHP ou Google Apps Script — voir DEPLOIEMENT.md). Une fois branché : données synchronisées + <strong>PDF factures/devis archivés automatiquement</strong>. Laisse vide = 100 % local.</div>
+      <div class="form-grid">
+        <div class="form-group"><label class="form-label">URL du backend (api.php ou …/exec)</label><input class="form-control" id="cfg-appsScriptUrl" value="${esc(cfg.appsScriptUrl||'')}" placeholder="https://ton-domaine.fr/crm/api.php"></div>
+        <div class="form-group"><label class="form-label">Token secret (Hostinger PHP)</label><input class="form-control" id="cfg-backendToken" value="${esc(cfg.backendToken||'')}" placeholder="le même que dans api.php"></div>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">
+        <button class="btn btn-or" onclick="saveParams();cloudSyncNow()">💾 Enregistrer & synchroniser</button>
+        <button class="btn btn-ghost" onclick="cloudPushAll()">⬆ Tout envoyer vers Google</button>
+        <button class="btn btn-ghost" onclick="cloudSyncNow()">🔄 Récupérer depuis Google</button>
+      </div>
+    </div>
+
+    <div class="panel"><div class="panel-title">💾 Sauvegarde & restauration</div>
+      <div class="td-dim" style="margin-bottom:12px">Filet de sécurité : exporte tout dans un fichier (devis, factures, clients, recettes, réglages…). Garde-le sur ton ordi/Drive. En cas de pépin, restaure en 1 clic — <strong>zéro perte</strong>. Pense à exporter après chaque session importante.</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn btn-or" onclick="exportBackup()">⬇ Exporter la sauvegarde</button>
+        <label class="btn btn-ghost" style="cursor:pointer">⬆ Restaurer une sauvegarde<input type="file" accept="application/json,.json" style="display:none" onchange="importBackupFile(this)"></label>
+      </div>
+    </div>
+
+    <div class="panel"><div class="panel-title">Sécurité</div>
+      <div class="form-grid">
+        <div class="form-group"><label class="form-label">Nouveau mot de passe</label><input class="form-control" id="cfg-pwd" type="password" placeholder="Laisser vide pour ne pas changer"></div>
+        <div class="form-group" style="align-self:end"><button class="btn btn-ghost" onclick="changePwd()">Changer le mot de passe</button></div>
+      </div></div>`;
+};
+function majCat(id,k,v){ const c=DB.get('catalogue',id); if(!c)return; c[k]=v; DB.save('catalogue',c); toast('Catalogue mis à jour','ok'); }
+function addCat(){ const n=DB.all('catalogue').length+1; DB.save('catalogue',{id:uid('CAT'),label:'Nouvelle prestation',prix:0,duree:'',categorie:'prestation',actif:true}); RENDERERS.reglages(); }
+function delCat(id){ DB.remove('catalogue',id); RENDERERS.reglages(); toast('Supprimé','ok'); }
+function saveParams(){
+  const cfg=DB.config();
+  ['fraisKm','acompteDefautPct','delaiRelance1','delaiRelance2','tauxUrssaf','tauxImpotLib'].forEach(k=>{const e=document.getElementById('cfg-'+k); if(e)cfg[k]=+e.value||0;});
+  ['emailLouis','googleReviewUrl','signature','entrepriseContact','entrepriseStatut','entrepriseSiret','entrepriseAdresse','entrepriseTel','bic','iban','mentionTva','delaiPaiement','urssafUrl','appsScriptUrl','backendToken'].forEach(k=>{const e=document.getElementById('cfg-'+k); if(e)cfg[k]=(e.value||'').trim();});
+  const vl=document.getElementById('cfg-versementLiberatoire'); if(vl)cfg.versementLiberatoire=(vl.value==='oui');
+  DB.saveConfig(cfg); logActivite('Paramètres mis à jour'); toast('Paramètres enregistrés','ok');
+}
+async function changePwd(){
+  const v=document.getElementById('cfg-pwd').value;
+  if(!v){ toast('Mot de passe vide','err'); return; }
+  const cfg=DB.config(); cfg.passwordHash=await sha256(v); DB.saveConfig(cfg);
+  document.getElementById('cfg-pwd').value=''; toast('Mot de passe changé','ok');
+}
+
+/* ═══════════ SYNC CLOUD (Google Apps Script + Sheet + Drive) ═══════════
+   localStorage reste le moteur (rapide, hors-ligne). Le cloud est un miroir auto :
+   chaque écriture est poussée (debounce) vers le Sheet ; au démarrage on tire le Sheet.
+   PDF devis/facture archivés automatiquement dans le Drive. */
+function cloudUrl(){ return DB.config().appsScriptUrl||''; }
+let _cloudTimers={};
+function setCloudStatus(s){ const el=document.getElementById('cloud-dot'); if(!el)return;
+  const map={off:['#5A5650','Cloud non configuré'],sync:['#E8A13A','Synchronisation…'],ok:['#3FB97A','Synchronisé avec Google'],err:['#E5564B','Erreur de synchro — réessaie']};
+  const m=map[s]||map.off; el.style.background=m[0]; el.title=m[1]; el.dataset.s=s; }
+function cloudQueueEntity(entity){ if(!cloudUrl())return; clearTimeout(_cloudTimers[entity]);
+  _cloudTimers[entity]=setTimeout(()=>cloudPost({action:'putEntity',entity,rows:DB.all(entity)}),1500); }
+function cloudQueueConfig(){ if(!cloudUrl())return; clearTimeout(_cloudTimers._cfg);
+  _cloudTimers._cfg=setTimeout(()=>cloudPost({action:'putConfig',config:DB.config()}),1500); }
+function cloudPost(payload){ const url=cloudUrl(); if(!url) return Promise.resolve({ok:false});
+  setCloudStatus('sync'); payload.token=DB.config().backendToken||'';
+  return fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload)})
+    .then(r=>r.json()).then(j=>{ setCloudStatus(j&&j.ok?'ok':'err'); return j; })
+    .catch(()=>{ setCloudStatus('err'); return {ok:false}; }); }
+function cloudPushAll(){ if(!cloudUrl())return; ENTITIES.forEach(e=>cloudPost({action:'putEntity',entity:e,rows:DB.all(e)})); cloudPost({action:'putConfig',config:DB.config()}); toast('Envoi de toutes les données vers Google…','ok'); }
+async function cloudPull(){ const url=cloudUrl(); if(!url){ setCloudStatus('off'); return 'off'; }
+  setCloudStatus('sync');
+  try{ const r=await fetch(url+'?action=getAll&token='+encodeURIComponent(DB.config().backendToken||'')); const j=await r.json();
+    if(!j||!j.ok||!j.data){ setCloudStatus('err'); return 'err'; }
+    const total=ENTITIES.reduce((a,e)=>a+((j.data[e]||[]).length),0);
+    if(total===0){ cloudPushAll(); return 'init'; }            // cloud vide → on l'initialise depuis le local
+    ENTITIES.forEach(e=>{ if(Array.isArray(j.data[e])) DB._writeLocal(e,j.data[e]); });  // adopte le cloud (local-only, pas de re-push)
+    if(j.config&&Object.keys(j.config).length){ const cur=DB.config(); localStorage.setItem(LS_PREFIX+'config', JSON.stringify(Object.assign({},j.config,{passwordHash:cur.passwordHash||j.config.passwordHash}))); }
+    setCloudStatus('ok'); return 'pulled';
+  }catch(_){ setCloudStatus('err'); return 'err'; } }
+function archivePdfCloud(doc,kind,filename,year){ if(!cloudUrl())return;
+  try{ const b64=doc.output('datauristring').split(',')[1];
+    cloudPost({action:'archivePdf',kind,filename,base64:b64,year:year||new Date().getFullYear()})
+      .then(j=>{ if(j&&j.ok&&j.url) logActivite('PDF archivé dans Drive : '+filename); }); }catch(_){}
+}
+async function cloudSyncNow(){ const res=await cloudPull(); if(typeof RENDERERS[_currentView]==='function') RENDERERS[_currentView](currentParams); updateBadges();
+  toast(res==='pulled'?'Données récupérées depuis Google':(res==='init'?'Cloud initialisé depuis ce CRM':(res==='off'?'Configure d\'abord l\'URL':'Échec — vérifie l\'URL')), res==='err'?'err':'ok'); }
+
+/* ───── Boot ───── */
+(async function boot(){
+  try{ applyTheme(localStorage.getItem('lm_theme')||'dark'); }catch(_){ applyTheme('dark'); }
+  await ensureSeed();
+  if(cloudUrl()){ try{ await cloudPull(); }catch(_){} } else setCloudStatus('off');
+  if(sessionStorage.getItem('lm_auth')==='1') showApp();
+})();
+</script>
+</body>
+</html>
