@@ -258,6 +258,11 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
 #toast.ok{border-color:var(--ok)}#toast.err{border-color:var(--er)}
 
 /* ── SIDEBAR BACKDROP (tablette/mobile) ── */
+#pdfviewer{display:none;position:fixed;inset:0;z-index:300;background:var(--noir);flex-direction:column}
+#pdfviewer.open{display:flex}
+.pv-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 16px;background:var(--noir2);border-bottom:1px solid var(--anthr);flex-shrink:0}
+.pv-title{font-family:'Syne','Trebuchet MS',sans-serif;font-weight:700;color:var(--creme);font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pv-frame{flex:1;width:100%;border:none;background:#525659}
 #sb-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:90}
 #sb-backdrop.show{display:block}
 .table-scroll{-webkit-overflow-scrolling:touch}
@@ -364,6 +369,7 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
     <button class="mn" data-v="devis" onclick="nav('devis')"><span class="ic">📄</span>Devis</button>
     <button class="mn" data-v="factures" onclick="nav('factures')"><span class="ic">🧾</span>Factures</button>
   </nav>
+  <div id="pdfviewer"></div>
 
   <div id="main">
     <div class="topbar">
@@ -848,7 +854,7 @@ function voirDevis(id){
     </div></details>`;
   const footer=`<button class="btn btn-danger" onclick="supprimerDevis('${id}')">🗑 Supprimer</button>
     ${d.statut!=='Brouillon'?`<button class="btn btn-ghost" onclick="devisBack('${id}')">↩ Étape précédente</button>`:''}
-    <button class="btn btn-ghost" onclick="pdfDevis('${id}')">⬇ PDF</button>
+    <button class="btn btn-ghost" onclick="apercuPdf('Devis','${id}')">👁 Aperçu PDF</button>
     <button class="btn btn-ghost" onclick="closeModal();nav('devis-create',{id:'${id}'})">✎ Modifier</button>
     <button class="btn btn-ghost" onclick="closeModal()">Fermer</button>`;
   openModal('Devis · '+esc(d.id),body,footer);
@@ -1363,7 +1369,7 @@ function voirFacture(id){
       <div class="action-box"><div class="action-box-title">✋ Déjà fait hors CRM</div>${manuBtns}</div>
     </div>`;
   const peutReculer=(f.statut!=='Émise')||f.dateEnvoi||mailDate('facture',id);
-  openModal('Facture · '+esc(id),body,`<button class="btn btn-danger" onclick="supprimerFacture('${id}')">🗑 Supprimer</button>${peutReculer?`<button class="btn btn-ghost" onclick="factureBack('${id}')">↩ Étape précédente</button>`:''}<button class="btn btn-ghost" onclick="event.stopPropagation();pdfFacture('${id}')">⬇ PDF</button><button class="btn btn-ghost" onclick="closeModal()">Fermer</button>`);
+  openModal('Facture · '+esc(id),body,`<button class="btn btn-danger" onclick="supprimerFacture('${id}')">🗑 Supprimer</button>${peutReculer?`<button class="btn btn-ghost" onclick="factureBack('${id}')">↩ Étape précédente</button>`:''}<button class="btn btn-ghost" onclick="event.stopPropagation();apercuPdf('Facture','${id}')">👁 Aperçu PDF</button><button class="btn btn-ghost" onclick="closeModal()">Fermer</button>`);
 }
 function marquerFactureEnvoyee(id){ const f=DB.get('factures',id); f.dateEnvoi=todayISO(); DB.save('factures',f); logActivite('Facture '+id+' marquée envoyée (manuel)'); updateBadges(); RENDERERS.factures(); if(document.getElementById('modal-bg').classList.contains('open')) voirFacture(id); toast('Facture marquée envoyée','ok'); }
 function qbtn(cls,onclick,label){ return `<button class="btn ${cls} btn-sm" onclick="event.stopPropagation();${onclick}">${label}</button>`; }
@@ -1373,7 +1379,7 @@ function devisQuick(d){
   else if(d.statut==='Envoyé') b=qbtn('btn-success',`majDevis('${d.id}','Accepté')`,'✓ Accepté')+qbtn('btn-warn',`majDevis('${d.id}','Refusé')`,'✗ Refusé');
   else if(d.statut==='Accepté') b=qbtn('btn-or',`enregistrerAcompte('${d.id}')`,'💰 Acompte reçu');
   else if(d.statut==='Acompte reçu'&&!DB.all('factures').find(f=>f.idDevis===d.id)) b=qbtn('btn-or',`transformerEnFacture('${d.id}')`,'🧾 Créer la facture');
-  return b+qbtn('btn-ghost',`pdfDevis('${d.id}')`,'PDF');
+  return b+qbtn('btn-ghost',`apercuPdf('Devis','${d.id}')`,'👁 PDF');
 }
 function factureQuick(f){
   const paye=f.statut==='Payée', envoi=f.dateEnvoi||mailDate('facture',f.id);
@@ -1381,7 +1387,7 @@ function factureQuick(f){
   if(!envoi&&!paye) b+=qbtn('btn-ghost',`marquerFactureEnvoyee('${f.id}')`,'✓ Déjà envoyée');
   if(!paye&&['Émise','Relance 1','Relance 2'].includes(f.statut)) b+=qbtn('btn-warn',`preparerRelance('${f.id}')`,'🔔 Relancer');
   if(!paye) b+=qbtn('btn-success',`marquerPayee('${f.id}')`,'✓ Payée');
-  return b+qbtn('btn-ghost',`pdfFacture('${f.id}')`,'PDF');
+  return b+qbtn('btn-ghost',`apercuPdf('Facture','${f.id}')`,'👁 PDF');
 }
 function marquerRelanceManuelle(id){ const f=DB.get('factures',id); const type=f.statut==='Relance 1'?'R2':'R1'; confirmerRelance(id,type); voirFacture(id); toast('Relance '+type+' marquée faite','ok'); }
 function marquerFacturePayee(id){ marquerPayee(id); voirFacture(id); }
@@ -1454,6 +1460,23 @@ function pdfFacture(id,returnDoc){
   archivePdfCloud(doc,'Factures',f.id+'.pdf',(f.dateEmission||'').slice(0,4)||new Date().getFullYear());
 }
 function pdfBase64(kind,id){ try{ const doc=(kind==='Devis'?pdfDevis:pdfFacture)(id,true); return doc?doc.output('datauristring').split(',')[1]:''; }catch(_){ return ''; } }
+/* Visionneuse intégrée (pas de téléchargement forcé) */
+function apercuPdf(kind,id){
+  const doc=(kind==='Devis'?pdfDevis:pdfFacture)(id,true); if(!doc)return;
+  const url=doc.output('bloburl');
+  const rec=kind==='Devis'?DB.get('devis',id):DB.get('factures',id);
+  const year=((kind==='Devis'?(rec&&rec.dateCreation):(rec&&rec.dateEmission))||'').slice(0,4)||(''+new Date().getFullYear());
+  archivePdfCloud(doc, kind==='Devis'?'Devis':'Factures', id+'.pdf', year);   // archive Drive en passant
+  const ov=document.getElementById('pdfviewer');
+  ov.innerHTML=`<div class="pv-bar"><span class="pv-title">${esc(kind)} · ${esc(id)}</span>
+    <span style="display:flex;gap:8px;flex-shrink:0">
+      <button class="btn btn-ghost btn-sm" onclick="pdfTelecharger('${kind}','${id}')">⬇ Télécharger</button>
+      <button class="btn btn-or btn-sm" onclick="closePdfViewer()">✕ Fermer</button>
+    </span></div><iframe src="${url}" class="pv-frame" title="aperçu"></iframe>`;
+  ov.classList.add('open');
+}
+function closePdfViewer(){ const ov=document.getElementById('pdfviewer'); if(ov){ ov.classList.remove('open'); ov.innerHTML=''; } }
+function pdfTelecharger(kind,id){ const doc=(kind==='Devis'?pdfDevis:pdfFacture)(id,true); if(doc) doc.save(id+'.pdf'); }
 
 /* ═══════════ VUE : CLIENTS ═══════════ */
 let _fCli='';
@@ -1666,7 +1689,7 @@ RENDERERS['devis-create']=function(params){
 
     <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-bottom:30px">
       <button class="btn btn-ghost" onclick="nav('devis')">Annuler</button>
-      <button class="btn btn-ghost" onclick="dvSave(false);pdfDevis(DV.id)">Aperçu PDF</button>
+      <button class="btn btn-ghost" onclick="dvSave(false);apercuPdf('Devis',DV.id)">👁 Aperçu PDF</button>
       <button class="btn btn-or" onclick="dvSave(true)">${d.id?'Enregistrer':'Enregistrer le brouillon'}</button>
     </div></div>`;
   dvRenderLines(); dvRecalc();
