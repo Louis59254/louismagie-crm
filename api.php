@@ -26,13 +26,17 @@ function out($o){ echo json_encode($o, JSON_UNESCAPED_UNICODE); exit; }
 
 /* Envoi email via SMTP Gmail (mot de passe d'application). 0 dépendance. */
 function smtpSend($to,$subject,$bodyText,$attachName='',$attachB64=''){
-  $user=getenv('GMAIL_USER'); $pass=getenv('GMAIL_APP_PASSWORD');
-  $from=getenv('GMAIL_FROM') ?: $user;   // alias vérifié "Send mail as" (sinon = compte Gmail)
-  if(!$user||!$pass) return [false,'Gmail non configuré (GMAIL_USER / GMAIL_APP_PASSWORD)'];
+  // SMTP générique : Infomaniak, Gmail, etc. (compat anciennes variables GMAIL_*)
+  $host=getenv('SMTP_HOST') ?: 'smtp.gmail.com';
+  $port=getenv('SMTP_PORT') ?: '587';
+  $user=getenv('SMTP_USER') ?: getenv('GMAIL_USER');
+  $pass=getenv('SMTP_PASS') ?: getenv('GMAIL_APP_PASSWORD');
+  $from=getenv('SMTP_FROM') ?: (getenv('GMAIL_FROM') ?: $user);
+  if(!$user||!$pass) return [false,'SMTP non configuré (SMTP_USER / SMTP_PASS)'];
   if(!$to) return [false,'destinataire vide'];
   $ctx=stream_context_create(['ssl'=>['verify_peer'=>false,'verify_peer_name'=>false]]);
-  $fp=@stream_socket_client('tcp://smtp.gmail.com:587',$en,$es,15,STREAM_CLIENT_CONNECT,$ctx);
-  if(!$fp) return [false,"connexion SMTP impossible: $es"];
+  $fp=@stream_socket_client("tcp://$host:$port",$en,$es,15,STREAM_CLIENT_CONNECT,$ctx);
+  if(!$fp) return [false,"connexion SMTP impossible ($host:$port): $es"];
   $read=function() use($fp){ $d=''; while($l=fgets($fp,515)){ $d.=$l; if(strlen($l)>=4 && $l[3]==' ') break; } return $d; };
   $cmd=function($c) use($fp,$read){ fputs($fp,$c."\r\n"); return $read(); };
   $read();
