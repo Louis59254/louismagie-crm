@@ -23,6 +23,36 @@ $ENTITIES = ['demandes','devis','prestations','factures','clients','relances',
              'activite','mails','catalogue','recettes','declarations'];
 
 function out($o){ echo json_encode($o, JSON_UNESCAPED_UNICODE); exit; }
+
+/* Envoi email via SMTP Gmail (mot de passe d'application). 0 dépendance. */
+function smtpSend($to,$subject,$bodyText,$attachName='',$attachB64=''){
+  $user=getenv('GMAIL_USER'); $pass=getenv('GMAIL_APP_PASSWORD');
+  if(!$user||!$pass) return [false,'Gmail non configuré (GMAIL_USER / GMAIL_APP_PASSWORD)'];
+  if(!$to) return [false,'destinataire vide'];
+  $ctx=stream_context_create(['ssl'=>['verify_peer'=>false,'verify_peer_name'=>false]]);
+  $fp=@stream_socket_client('tcp://smtp.gmail.com:587',$en,$es,15,STREAM_CLIENT_CONNECT,$ctx);
+  if(!$fp) return [false,"connexion SMTP impossible: $es"];
+  $read=function() use($fp){ $d=''; while($l=fgets($fp,515)){ $d.=$l; if(strlen($l)>=4 && $l[3]==' ') break; } return $d; };
+  $cmd=function($c) use($fp,$read){ fputs($fp,$c."\r\n"); return $read(); };
+  $read();
+  $cmd("EHLO louismagie"); $cmd("STARTTLS");
+  if(!stream_socket_enable_crypto($fp,true,STREAM_CRYPTO_METHOD_TLS_CLIENT)) return [false,'TLS échec'];
+  $cmd("EHLO louismagie"); $cmd("AUTH LOGIN"); $cmd(base64_encode($user));
+  $r=$cmd(base64_encode($pass));
+  if(strpos($r,'235')===false){ fclose($fp); return [false,'authentification Gmail refusée']; }
+  $cmd("MAIL FROM:<$user>"); $cmd("RCPT TO:<$to>"); $cmd("DATA");
+  $h="From: $user\r\nTo: $to\r\nSubject: =?UTF-8?B?".base64_encode($subject)."?=\r\nMIME-Version: 1.0\r\n";
+  if($attachB64){
+    $b='b'.md5(uniqid());
+    $m=$h."Content-Type: multipart/mixed; boundary=\"$b\"\r\n\r\n"
+      ."--$b\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n".chunk_split(base64_encode($bodyText))."\r\n"
+      ."--$b\r\nContent-Type: application/pdf; name=\"$attachName\"\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename=\"$attachName\"\r\n\r\n".chunk_split($attachB64)."\r\n--$b--\r\n";
+  } else {
+    $m=$h."Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n".chunk_split(base64_encode($bodyText));
+  }
+  fputs($fp,$m."\r\n.\r\n"); $r=$read(); $cmd("QUIT"); fclose($fp);
+  return [strpos($r,'250')!==false, strpos($r,'250')!==false?'envoyé':('refus: '.trim($r))];
+}
 function readJson($path){ if(!is_file($path)) return null; $c=file_get_contents($path); $v=json_decode($c,true); return $v; }
 function writeJson($path,$val){ file_put_contents($path, json_encode($val, JSON_UNESCAPED_UNICODE)); }
 
@@ -75,6 +105,11 @@ switch ($action) {
       foreach ($it as $f) if ($f->isFile()) $files[] = str_replace($PDF_DIR.'/', '', $f->getPathname());
     }
     out(['ok'=>true, 'files'=>$files]);
+  }
+
+  case 'sendEmail': {
+    list($ok,$info)=smtpSend($req['to']??'', $req['subject']??'', $req['body']??'', $req['attachName']??'', $req['attachB64']??'');
+    out(['ok'=>$ok, 'info'=>$info]);
   }
 
   default: out(['ok'=>false, 'error'=>'action inconnue: '.$action]);
