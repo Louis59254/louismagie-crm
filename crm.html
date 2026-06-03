@@ -1013,68 +1013,84 @@ function pdfNew(){ const {jsPDF}=window.jspdf; return new jsPDF({unit:'mm',forma
 function pdfHeader(doc,type,num,dates){
   const e=emetteur();
   doc.setFillColor(...P_OR); doc.rect(0,0,210,4,'F');
-  doc.setFont('helvetica','bold'); doc.setFontSize(25);
-  doc.setTextColor(...P_NOIR); doc.text('Louis',15,24);
-  const w=doc.getTextWidth('Louis'); doc.setTextColor(...P_OR); doc.text('Magie',15+w,24);
-  doc.setFont('helvetica','normal'); doc.setFontSize(7.2); doc.setTextColor(...P_GRISC);
-  doc.text('MAGICIEN  ·  CLOSE-UP  ·  MENTALISME  ·  MAGIE DIGITALE',15,29.5);
-  doc.setFontSize(8.4); doc.setTextColor(...P_GRIS); let y=37;
+  // marque
+  doc.setFont('helvetica','bold'); doc.setFontSize(24);
+  doc.setTextColor(...P_NOIR); doc.text('Louis',15,23);
+  const w=doc.getTextWidth('Louis'); doc.setTextColor(...P_OR); doc.text('Magie',15+w,23);
+  doc.setFont('helvetica','normal'); doc.setFontSize(7); doc.setTextColor(...P_GRISC);
+  doc.text('MAGICIEN  ·  CLOSE-UP  ·  MENTALISME  ·  MAGIE DIGITALE',15,28.3);
+  // émetteur
+  doc.setFontSize(8.3); doc.setTextColor(...P_GRIS); let y=37;
   [[e.contact,e.statut].filter(Boolean).join(' — '), e.adresse, e.siret?('SIRET '+e.siret):'', [e.tel,e.email].filter(Boolean).join('  ·  '), e.site]
     .filter(Boolean).forEach(l=>{ doc.text(l,15,y); y+=4; });
   // bloc document (droite)
-  doc.setFillColor(...P_LIGHT); doc.roundedRect(138,12,57,37,2.5,2.5,'F');
-  doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.setTextColor(...P_OR);
-  doc.text(type,166.5,22,{align:'center'});
-  doc.setFontSize(11); doc.setTextColor(...P_NOIR); doc.text(num,166.5,29.5,{align:'center'});
-  doc.setFont('helvetica','normal'); doc.setFontSize(8.2); doc.setTextColor(...P_GRIS);
-  let dy=37; dates.forEach(d=>{ doc.text(d[0]+' : '+d[1],166.5,dy,{align:'center'}); dy+=4.6; });
-  return 58;
+  const bx=133,bw=62,by=12;
+  doc.setFillColor(...P_LIGHT); doc.roundedRect(bx,by,bw,40,2.5,2.5,'F');
+  doc.setFont('helvetica','bold'); doc.setFontSize(13); doc.setTextColor(...P_OR);
+  doc.text(type,bx+bw/2,by+9,{align:'center'});
+  doc.setFontSize(11.5); doc.setTextColor(...P_NOIR); doc.text(num,bx+bw/2,by+16,{align:'center'});
+  doc.setDrawColor(...P_LINE); doc.setLineWidth(.3); doc.line(bx+6,by+20,bx+bw-6,by+20);
+  doc.setFontSize(8.3); let dy=by+26;
+  dates.forEach(d=>{ doc.setFont('helvetica','normal'); doc.setTextColor(...P_GRIS); doc.text(d[0],bx+6,dy);
+    doc.setFont('helvetica','bold'); doc.setTextColor(...P_NOIR); doc.text(String(d[1]),bx+bw-6,dy,{align:'right'}); dy+=5.6; });
+  // séparateur
+  doc.setDrawColor(...P_LINE); doc.setLineWidth(.4); doc.line(15,58,195,58);
+  return 66;
 }
 function pdfBlocs(doc,y,client,presta){
-  doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(...P_OR); doc.text('ADRESSÉ À',15,y);
-  doc.setTextColor(...P_NOIR); doc.setFontSize(12); doc.text(client.nom||'—',15,y+7);
-  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(...P_GRIS);
-  let cy=y+13; (client.lines||[]).filter(Boolean).forEach(l=>{ doc.text(l,15,cy); cy+=4.6; });
+  const lh=4.6, cl=(client.lines||[]).filter(Boolean), pl=presta?(presta.lines||[]).filter(Boolean):[];
+  const h=18+Math.max(cl.length,pl.length)*lh+3;
+  // carte client
+  doc.setFillColor(...P_LIGHT); doc.roundedRect(15,y,88,h,2,2,'F');
+  doc.setFont('helvetica','bold'); doc.setFontSize(7.5); doc.setTextColor(...P_OR); doc.text(client.titre||'ADRESSÉ À',20,y+6);
+  doc.setFontSize(11.5); doc.setTextColor(...P_NOIR); doc.splitTextToSize(client.nom||'—',80).slice(0,2).forEach((s,i)=>doc.text(s,20,y+12.5+i*5));
+  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(...P_GRIS); let cy=y+18.5;
+  cl.forEach(l=>{ doc.splitTextToSize(l,78).forEach(s=>{ doc.text(s,20,cy); cy+=lh; }); });
+  // carte prestation
   if(presta){
-    doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(...P_OR); doc.text(presta.titre||'PRESTATION',115,y);
-    doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(...P_NOIR); let py=y+7;
-    (presta.lines||[]).filter(Boolean).forEach(l=>{ doc.text(l,115,py); py+=4.6; });
-    cy=Math.max(cy,py);
+    doc.setFillColor(...P_LIGHT); doc.roundedRect(107,y,88,h,2,2,'F');
+    doc.setFont('helvetica','bold'); doc.setFontSize(7.5); doc.setTextColor(...P_OR); doc.text(presta.titre||'PRESTATION',112,y+6);
+    doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(...P_NOIR); let py=y+12.5;
+    pl.forEach(l=>{ doc.splitTextToSize(l,78).forEach(s=>{ doc.text(s,112,py); py+=lh; }); });
   }
-  return cy+5;
+  return y+h+7;
 }
 function pdfTable(doc,y,head,body,amtWidth){
-  doc.autoTable({startY:y,head:[head],body,theme:'striped',
-    headStyles:{fillColor:P_NOIR,textColor:P_BLANC,fontStyle:'bold',fontSize:9.5,cellPadding:3.6},
-    alternateRowStyles:{fillColor:[248,245,241]},
-    styles:{fontSize:10,cellPadding:3.6,textColor:P_NOIR,lineColor:P_LINE,lineWidth:.1},
-    columnStyles:head.length===3?{1:{halign:'center',cellWidth:26},2:{halign:'right',cellWidth:amtWidth||34}}:{1:{halign:'right',cellWidth:amtWidth||42}},
+  const three=head.length===3;
+  doc.autoTable({startY:y,head:[head],body,theme:'grid',
+    headStyles:{fillColor:P_NOIR,textColor:P_BLANC,fontStyle:'bold',fontSize:9.5,cellPadding:3.8,lineWidth:0},
+    alternateRowStyles:{fillColor:[249,246,242]},
+    styles:{fontSize:10,cellPadding:3.8,textColor:P_NOIR,lineColor:P_LINE,lineWidth:.1,valign:'middle'},
+    columnStyles: three
+      ? {0:{fontStyle:'bold'},1:{halign:'center',cellWidth:26,textColor:P_GRIS},2:{halign:'right',cellWidth:amtWidth||34,fontStyle:'bold'}}
+      : {0:{fontStyle:'bold'},1:{halign:'right',cellWidth:amtWidth||42,fontStyle:'bold'}},
     margin:{left:15,right:15}});
   return doc.lastAutoTable.finalY;
 }
 function pdfTotaux(doc,y,rows,total){
-  const x0=122,x1=195,w=73;
+  const x0=120,x1=193,bw=75;
   doc.setFontSize(9.5);
   rows.forEach(r=>{ doc.setFont('helvetica','normal'); doc.setTextColor(...P_GRIS); doc.text(r[0],x0,y);
     doc.setTextColor(...P_NOIR); doc.text(r[1],x1,y,{align:'right'}); y+=6.2; });
-  y+=1.5;
-  doc.setFillColor(...P_OR); doc.roundedRect(x0-3,y-5.2,w+3,11,2,2,'F');
-  doc.setFont('helvetica','bold'); doc.setFontSize(11.5); doc.setTextColor(...P_NOIR);
-  doc.text(total[0],x0,y+1.4); doc.text(total[1],x1,y+1.4,{align:'right'});
-  return y+12;
+  y+=1;
+  doc.setFillColor(...P_OR); doc.roundedRect(x0-4,y-5.6,bw+4,12,2,2,'F');
+  doc.setFont('helvetica','bold'); doc.setFontSize(12.5); doc.setTextColor(...P_NOIR);
+  doc.text(total[0],x0,y+1.7); doc.text(total[1],x1,y+1.7,{align:'right'});
+  return y+13;
 }
 function pdfReglement(doc,y,condTitle,condLines){
   const e=emetteur();
   doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(...P_OR); doc.text('RÈGLEMENT',15,y);
-  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(...P_NOIR);
-  let ry=y+6; doc.text('IBAN : '+e.iban,15,ry); ry+=4.6;
-  if(e.bic){ doc.text('BIC : '+e.bic,15,ry); ry+=4.6; }
-  doc.setTextColor(...P_GRIS);
-  doc.splitTextToSize(e.delaiPaiement,95).forEach(l=>{ doc.text(l,15,ry); ry+=4.4; });
+  let ry=y+6; doc.setFontSize(9);
+  const kv=(label,val)=>{ doc.setFont('helvetica','bold'); doc.setTextColor(...P_NOIR); doc.text(label,15,ry);
+    const w=doc.getTextWidth(label); doc.setFont('helvetica','normal'); doc.text(' '+val,15+w,ry); ry+=4.8; };
+  kv('IBAN :',e.iban); if(e.bic) kv('BIC :',e.bic);
+  doc.setFont('helvetica','normal'); doc.setTextColor(...P_GRIS);
+  doc.splitTextToSize(e.delaiPaiement,98).forEach(l=>{ doc.text(l,15,ry); ry+=4.4; });
   if(condLines&&condLines.length){
-    ry+=3.5; doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(...P_OR); doc.text(condTitle||'CONDITIONS',15,ry); ry+=5;
+    ry+=3; doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(...P_OR); doc.text(condTitle||'CONDITIONS',15,ry); ry+=5;
     doc.setFont('helvetica','normal'); doc.setFontSize(8.4); doc.setTextColor(...P_GRIS);
-    condLines.forEach(c=>{ const ws=doc.splitTextToSize('•  '+c,98); ws.forEach(l=>{ doc.text(l,15,ry); ry+=4.1; }); });
+    condLines.forEach(c=>{ doc.splitTextToSize('•  '+c,100).forEach(l=>{ doc.text(l,15,ry); ry+=4.1; }); });
   }
   return ry;
 }
@@ -1421,7 +1437,7 @@ function pdfFacture(id,returnDoc){
   const doc=pdfNew();
   let y=pdfHeader(doc,'FACTURE',f.id,[['Émise le',fmtDateShort(f.dateEmission)],['Échéance',fmtDateShort(f.dateEcheance)]]);
   y=pdfBlocs(doc,y,
-    {nom,lines:[cli.email,cli.tel,cli.adresse,cli.siren?('SIREN '+cli.siren):'',f.idDevis?('Réf. devis '+f.idDevis):'']},
+    {titre:'FACTURÉ À',nom,lines:[cli.email,cli.tel,cli.adresse,cli.siren?('SIREN '+cli.siren):'',f.idDevis?('Réf. devis '+f.idDevis):'']},
     dev.dateEvenement?{titre:'PRESTATION',lines:['Date : '+fmtDateFr(dev.dateEvenement),dev.creneau?('Créneau : '+dev.creneau):'',dev.horaire?('Horaire : '+dev.horaire):'','Lieu : '+(dev.lieu||'—')]}:null);
   const desc='Prestation de magie'+(dev.dateEvenement?(' — '+fmtDateFr(dev.dateEvenement)):'');
   const body=[[desc,fmtEur(f.montantTTC)],['Acompte de réservation déjà versé','- '+fmtEur(f.acompteVerse)]];
