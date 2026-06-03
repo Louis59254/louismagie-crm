@@ -27,6 +27,7 @@ function out($o){ echo json_encode($o, JSON_UNESCAPED_UNICODE); exit; }
 /* Envoi email via SMTP Gmail (mot de passe d'application). 0 dépendance. */
 function smtpSend($to,$subject,$bodyText,$attachName='',$attachB64=''){
   $user=getenv('GMAIL_USER'); $pass=getenv('GMAIL_APP_PASSWORD');
+  $from=getenv('GMAIL_FROM') ?: $user;   // alias vérifié "Send mail as" (sinon = compte Gmail)
   if(!$user||!$pass) return [false,'Gmail non configuré (GMAIL_USER / GMAIL_APP_PASSWORD)'];
   if(!$to) return [false,'destinataire vide'];
   $ctx=stream_context_create(['ssl'=>['verify_peer'=>false,'verify_peer_name'=>false]]);
@@ -40,8 +41,8 @@ function smtpSend($to,$subject,$bodyText,$attachName='',$attachB64=''){
   $cmd("EHLO louismagie"); $cmd("AUTH LOGIN"); $cmd(base64_encode($user));
   $r=$cmd(base64_encode($pass));
   if(strpos($r,'235')===false){ fclose($fp); return [false,'authentification Gmail refusée']; }
-  $cmd("MAIL FROM:<$user>"); $cmd("RCPT TO:<$to>"); $cmd("DATA");
-  $h="From: $user\r\nTo: $to\r\nSubject: =?UTF-8?B?".base64_encode($subject)."?=\r\nMIME-Version: 1.0\r\n";
+  $cmd("MAIL FROM:<$from>"); $cmd("RCPT TO:<$to>"); $cmd("DATA");
+  $h="From: $from\r\nReply-To: $from\r\nTo: $to\r\nSubject: =?UTF-8?B?".base64_encode($subject)."?=\r\nMIME-Version: 1.0\r\n";
   if($attachB64){
     $b='b'.md5(uniqid());
     $m=$h."Content-Type: multipart/mixed; boundary=\"$b\"\r\n\r\n"
