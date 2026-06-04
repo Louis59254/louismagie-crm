@@ -1547,12 +1547,29 @@ function voirClient(id){
     ${infoItem('Ville',esc(c.adresse||'—'))}${infoItem('CA total payé',fmtEur(c.caTotal))}
     ${c.siren?infoItem('SIREN',esc(c.siren)):''}${c.naf?infoItem('Code NAF',esc(c.naf)):''}
   </div>${prescriHtml}
+  ${c.email?`<div class="panel-title" style="margin-top:16px;font-size:13px">📣 Emails marketing (1 clic)</div>
+    <div style="display:flex;flex-wrap:wrap;gap:7px">
+      <button class="btn btn-ghost btn-sm" onclick="mailMarketing('${id}','mktAnniversaire')">🎂 Anniversaire collaboration</button>
+      <button class="btn btn-ghost btn-sm" onclick="mailMarketing('${id}','mktReprise')">👋 Reprendre contact</button>
+      <button class="btn btn-ghost btn-sm" onclick="mailMarketing('${id}','mktDispos')">📅 Mes disponibilités</button>
+      <button class="btn btn-ghost btn-sm" onclick="mailMarketing('${id}','mktVoeux')">🎉 Vœux</button>
+    </div>`:'<div class="td-dim" style="margin-top:12px">Ajoute un email au client pour activer les envois marketing.</div>'}
   <div class="panel-title" style="margin-top:16px;font-size:13px">Devis (${dv.length})</div>${histDevis}
   <div class="panel-title" style="margin-top:14px;font-size:13px">Factures (${fac.length})</div>${histFac}`;
   openModal('Fiche · '+esc((c.prenom+' '+c.nom).trim()),body,
     `${c.email?`<button class="btn btn-ghost" onclick="closeModal();mailClient('${id}')">✉ Email</button>`:''}
      <button class="btn btn-ghost" onclick="closeModal();editClient('${id}')">Modifier</button>
      <button class="btn btn-or" onclick="closeModal();nav('devis-create',{clientId:'${id}'})">→ Nouveau devis</button>`);
+}
+function mailMarketing(id,type){
+  const c=DB.get('clients',id); if(!c)return;
+  const nom=(c.prenom+' '+c.nom).trim();
+  let tpl;
+  if(type==='mktAnniversaire'){ const dv=DB.all('devis').filter(d=>d.idClient===id).sort((a,b)=>new Date(a.dateEvenement||a.dateCreation)-new Date(b.dateEvenement||b.dateCreation));
+    const ref=c.date1erDevis||(dv[0]&&(dv[0].dateEvenement||dv[0].dateCreation))||''; tpl=EMAIL_TPL.mktAnniversaire(nom,ref); }
+  else tpl=EMAIL_TPL[type](nom);
+  tpl.to=c.email||'';
+  openMailComposer({titre:'Email marketing · '+nom, ...tpl, kind:'marketing', ref:id});
 }
 function editClient(id){
   const c=id?DB.get('clients',id):{id:'',nom:'',prenom:'',email:'',tel:'',adresse:'',type:'particulier',sourceInitiale:'',siren:'',naf:''};
@@ -1810,6 +1827,16 @@ const EMAIL_TPL={
   avis(p,nom){ const url=DB.config().googleReviewUrl||'';
     return { to:'', subject:'Merci pour votre confiance — votre avis compte',
       body:`Bonjour ${prenomDe(nom)},\n\nMerci encore pour votre accueil lors de la prestation du ${fmtDateFr(p.dateEvenement)}. J'espère que la magie a opéré !\n\nSi vous avez passé un bon moment, un avis Google m'aiderait énormément :\n${url}\n\nMerci infiniment, et au plaisir.\n\n${sig()}` }; },
+  /* ── Marketing ── */
+  mktAnniversaire(nom,ref){ const an=ref?Math.max(1,Math.round(daysSince(ref)/365)):1;
+    return { subject:'Il y a déjà '+an+' an'+(an>1?'s':'')+'… on remet la magie ?',
+      body:`Bonjour ${prenomDe(nom)},\n\nIl y a ${an} an${an>1?'s':''}${ref?(' (le '+fmtDateFr(ref)+')'):''}, j'avais le plaisir d'animer votre événement en magie. Le temps file !\n\nSi vous préparez une nouvelle occasion — soirée, anniversaire, événement d'entreprise — je serais ravi de remettre un peu de magie chez vous. Dites-moi la date envisagée, je vous fais une proposition.\n\nMagiquement,\n${sig()}` }; },
+  mktReprise(nom){ return { subject:'On se refait un peu de magie ?',
+      body:`Bonjour ${prenomDe(nom)},\n\nCela fait un moment ! Je reste à votre disposition pour vos prochains événements : close-up, mentalisme, spectacle ou magie digitale personnalisée.\n\nUn projet en vue ? Donnez-moi la date et le type d'événement, je vous envoie un devis sur mesure.\n\nÀ très vite,\n${sig()}` }; },
+  mktVoeux(nom){ return { subject:'Belle année — et un peu de magie pour 2026',
+      body:`Bonjour ${prenomDe(nom)},\n\nJe vous souhaite une excellente année, pleine de réussite et de beaux moments.\n\nEt si l'un d'eux était… magique ? Pour vos événements de l'année, pensez à réserver tôt : les plus belles dates partent vite.\n\nBien à vous,\n${sig()}` }; },
+  mktDispos(nom){ return { subject:'Mes dates se remplissent — réservez la vôtre',
+      body:`Bonjour ${prenomDe(nom)},\n\nMa saison se remplit et certaines dates clés partent rapidement. Si vous avez un événement en préparation, c'est le bon moment pour bloquer votre créneau.\n\nDites-moi la date et le lieu, je vous prépare une proposition adaptée.\n\nÀ bientôt,\n${sig()}` }; },
 };
 
 /* Ouvre un composeur : champs éditables + ouverture messagerie (mailto) + PDF optionnel */
