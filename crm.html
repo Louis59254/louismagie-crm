@@ -310,10 +310,24 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
   .kpi-grid,.kanban{grid-template-columns:1fr!important}
   .content{padding:14px}.topbar{padding:11px 14px}
   .topbar-title{font-size:18px}.topbar-title span{display:none}
-  th,td{padding:9px 10px;font-size:12px}
-  th{font-size:9px}
-  .td-actions .btn{padding:8px 10px}
   .table-header{padding:12px 14px}
+  .kpi{padding:14px}.kpi-val{font-size:22px}
+  /* ── Tables → cartes empilées (mobile) ── */
+  .table-scroll{overflow-x:visible}
+  .table-scroll table,.table-scroll tbody,.table-scroll tr,.table-scroll td{display:block;width:100%}
+  .table-scroll thead{display:none}
+  .table-scroll tr{border-bottom:6px solid var(--noir);background:var(--noir3);border-radius:var(--rsm);margin:0 10px 10px;padding:6px 0;width:auto}
+  .table-scroll td{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;text-align:right;padding:7px 14px;border:none;border-bottom:1px solid var(--anthr);font-size:13px;overflow-wrap:anywhere;word-break:break-word}
+  .table-scroll tr td:last-child{border-bottom:none}
+  .table-scroll td::before{content:attr(data-label);color:var(--gm);font-size:10px;letter-spacing:.5px;text-transform:uppercase;font-weight:600;text-align:left;flex-shrink:0;padding-top:2px}
+  .table-scroll td[data-label=""]::before,.table-scroll td:not([data-label])::before{display:none}
+  .table-scroll td>*{min-width:0}
+  .table-scroll td .td-dim{font-size:11px}
+  .table-scroll .td-actions{justify-content:stretch;flex-wrap:wrap;width:100%;gap:6px}
+  .table-scroll .td-actions .btn{flex:1 1 45%;justify-content:center;min-width:0}
+  .table-scroll tr td:has(.td-actions){background:var(--noir);border-radius:0 0 var(--rsm) var(--rsm)}
+  .table-scroll tr td:has(.empty){display:block;text-align:center}
+  .table-scroll tr td:has(.empty)::before{display:none}
   .cal-grid{gap:3px}.cal-cell{min-height:62px;font-size:10px;padding:4px 5px}
   /* lignes de devis : empile proprement */
   #dv-lines .form-grid{grid-template-columns:1fr 1fr!important}
@@ -723,13 +737,13 @@ RENDERERS.demandes=function(){
   const tauxConv=total?Math.round(convertis/total*100):0;
 
   const body=rows.length?rows.map(d=>`<tr>
-    <td class="td-dim">${fmtDateShort(d.date)}</td>
-    <td class="td-strong">${esc(d.nom)}<div class="td-dim">${esc(d.email)}</div></td>
-    <td>${esc(d.typeEvenement)}<div class="td-dim">${d.dateEvenement?fmtDateShort(d.dateEvenement):'date ?'} · ${esc(d.creneau||'')}</div></td>
-    <td>${esc(d.lieu||'—')}</td>
-    <td><span class="badge brouillon">${esc(d.source||'—')}</span></td>
-    <td>${badge(d.statut)}</td>
-    <td><div class="td-actions">
+    <td class="td-dim" data-label="Reçue">${fmtDateShort(d.date)}</td>
+    <td class="td-strong" data-label="Contact">${esc(d.nom)}<div class="td-dim">${esc(d.email)}</div></td>
+    <td data-label="Événement">${esc(d.typeEvenement)}<div class="td-dim">${d.dateEvenement?fmtDateShort(d.dateEvenement):'date ?'} · ${esc(d.creneau||'')}</div></td>
+    <td data-label="Lieu">${esc(d.lieu||'—')}</td>
+    <td data-label="Source"><span class="badge brouillon">${esc(d.source||'—')}</span></td>
+    <td data-label="Statut">${badge(d.statut)}</td>
+    <td data-label=""><div class="td-actions">
       <button class="btn btn-ghost btn-sm" onclick="voirDemande('${d.id}')">Détails</button>
       ${d.statut!=='Converti'?`<button class="btn btn-or btn-sm" onclick="nav('devis-create',{demandeId:'${d.id}'})">→ Devis</button>`:''}
     </div></td></tr>`).join('')
@@ -818,12 +832,12 @@ RENDERERS.devis=function(){
 
   const rows=all.slice().sort((a,b)=>new Date(b.dateCreation)-new Date(a.dateCreation));
   const body=rows.length?rows.map(d=>`<tr style="cursor:pointer" onclick="voirDevis('${d.id}')">
-    <td class="td-strong">${esc(d.id)}</td>
-    <td>${esc(d.nomClient)}<div class="td-dim">${fmtDateShort(d.dateEvenement)} · ${esc(d.creneau||'')}</div></td>
-    <td>${esc(d.lieu||'—')}</td>
-    <td class="td-strong">${fmtEur(d.montantTTC)}</td>
-    <td>${badge(d.statut)}</td>
-    <td><div class="td-actions">${devisQuick(d)}</div></td></tr>`).join('')
+    <td class="td-strong" data-label="N°">${esc(d.id)}</td>
+    <td data-label="Client">${esc(d.nomClient)}<div class="td-dim">${fmtDateShort(d.dateEvenement)} · ${esc(d.creneau||'')}</div></td>
+    <td data-label="Lieu">${esc(d.lieu||'—')}</td>
+    <td class="td-strong" data-label="Montant">${fmtEur(d.montantTTC)}</td>
+    <td data-label="Statut">${badge(d.statut)}</td>
+    <td data-label=""><div class="td-actions">${devisQuick(d)}</div></td></tr>`).join('')
     :'<tr><td colspan="6"><div class="empty"><div class="empty-icon">📄</div><div class="empty-text">Aucun devis</div><div class="empty-sub">Créez votre premier devis.</div></div></td></tr>';
   document.getElementById('view-devis').innerHTML=head+`
     <div class="table-wrap"><div class="table-header"><div class="table-title">Tous les devis</div></div>
@@ -1297,13 +1311,13 @@ RENDERERS.factures=function(){
     const cli=DB.get('clients',f.idClient); const nom=cli?cli.nom:(DB.get('devis',f.idDevis)||{}).nomClient||'—';
     const echue=f.statut!=='Payée'&&daysSince(f.dateEcheance)>0;
     return `<tr style="cursor:pointer" onclick="voirFacture('${f.id}')">
-      <td class="td-strong">${esc(f.id)}</td>
-      <td>${esc(nom)}<div class="td-dim">${esc(f.idDevis)}</div></td>
-      <td class="td-strong">${fmtEur(f.montantTTC)}<div class="td-dim">acompte ${fmtEur(f.acompteVerse)}</div></td>
-      <td class="td-strong" style="color:${f.statut==='Payée'?'var(--ok)':'var(--or)'}">${fmtEur(f.soldeDu)}</td>
-      <td>${fmtDateShort(f.dateEcheance)}${echue?' <span class="badge impaye">échue</span>':''}</td>
-      <td>${badge(f.statut)}</td>
-      <td><div class="td-actions">${factureQuick(f)}</div></td></tr>`;}).join('')
+      <td class="td-strong" data-label="N°">${esc(f.id)}</td>
+      <td data-label="Client">${esc(nom)}<div class="td-dim">${esc(f.idDevis)}</div></td>
+      <td class="td-strong" data-label="Montant TTC">${fmtEur(f.montantTTC)}<div class="td-dim">acompte ${fmtEur(f.acompteVerse)}</div></td>
+      <td class="td-strong" data-label="Solde dû" style="color:${f.statut==='Payée'?'var(--ok)':'var(--or)'}">${fmtEur(f.soldeDu)}</td>
+      <td data-label="Échéance">${fmtDateShort(f.dateEcheance)}${echue?' <span class="badge impaye">échue</span>':''}</td>
+      <td data-label="Statut">${badge(f.statut)}</td>
+      <td data-label=""><div class="td-actions">${factureQuick(f)}</div></td></tr>`;}).join('')
     :'<tr><td colspan="7"><div class="empty"><div class="empty-icon">🧾</div><div class="empty-text">Aucune facture</div><div class="empty-sub">Les soldes facturés apparaîtront ici.</div></div></td></tr>';
 
   document.getElementById('view-factures').innerHTML=`
@@ -1517,12 +1531,12 @@ RENDERERS.clients=function(){
   all.sort((a,b)=>b.caTotal-a.caTotal);
 
   const body=all.length?all.map(c=>`<tr>
-    <td class="td-strong">${esc((c.prenom+' '+c.nom).trim())}<div class="td-dim">${esc(c.email||'')}</div></td>
-    <td>${badge(c.type==='partenaire'?'accepte':c.type==='entreprise'?'envoye-info':'brouillon')} ${esc(c.type)}</td>
-    <td>${esc(c.adresse||'—')}</td>
-    <td>${c.nbDevis||0} devis · ${c.nbPrestations||0} presta.</td>
-    <td class="td-strong">${fmtEur(c.caTotal)}</td>
-    <td><div class="td-actions"><button class="btn btn-ghost btn-sm" onclick="voirClient('${c.id}')">Fiche</button>${c.email?`<button class="btn btn-ghost btn-sm" onclick="mailClient('${c.id}')">✉</button>`:''}</div></td></tr>`).join('')
+    <td class="td-strong" data-label="Nom">${esc((c.prenom+' '+c.nom).trim())}<div class="td-dim">${esc(c.email||'')}</div></td>
+    <td data-label="Type">${badge(c.type==='partenaire'?'accepte':c.type==='entreprise'?'envoye-info':'brouillon')} ${esc(c.type)}</td>
+    <td data-label="Ville">${esc(c.adresse||'—')}</td>
+    <td data-label="Activité">${c.nbDevis||0} devis · ${c.nbPrestations||0} presta.</td>
+    <td class="td-strong" data-label="CA payé">${fmtEur(c.caTotal)}</td>
+    <td data-label=""><div class="td-actions"><button class="btn btn-ghost btn-sm" onclick="voirClient('${c.id}')">Fiche</button>${c.email?`<button class="btn btn-ghost btn-sm" onclick="mailClient('${c.id}')">✉ Email</button>`:''}</div></td></tr>`).join('')
     :'<tr><td colspan="6"><div class="empty"><div class="empty-icon">👥</div><div class="empty-text">Aucun client</div></div></td></tr>';
 
   const topHtml=top.map((c,i)=>`<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--anthr)">
@@ -1935,14 +1949,14 @@ RENDERERS.compta=function(){
     const [stLbl,stCls]=stMap[et];
     const jE=daysFromNow(ech);
     return `<tr>
-      <td class="td-strong">${TRIM_LABEL[t-1]}</td>
-      <td class="td-strong">${fmtEur(ca)}</td>
-      <td>${fmtEur(cot)}<div class="td-dim">${tauxC} %</div></td>
-      ${tauxI?`<td>${fmtEur(imp)}<div class="td-dim">${tauxI} %</div></td>`:''}
-      <td class="td-strong">${fmtEur(cot+imp)}</td>
-      <td>${fmtDateShort(ech)}<div class="td-dim">${et==='declaree'?('déclarée '+(dec.dateDeclaration?fmtDateShort(dec.dateDeclaration):'')):(et==='en-cours'?'clôture à venir':(jE>=0?('dans '+jE+' j'):('retard '+(-jE)+' j')))}</div></td>
-      <td><span class="badge ${stCls}">${stLbl}</span></td>
-      <td><div class="td-actions">
+      <td class="td-strong" data-label="Trimestre">${TRIM_LABEL[t-1]}</td>
+      <td class="td-strong" data-label="CA encaissé">${fmtEur(ca)}</td>
+      <td data-label="Cotisations">${fmtEur(cot)}<div class="td-dim">${tauxC} %</div></td>
+      ${tauxI?`<td data-label="Impôt lib.">${fmtEur(imp)}<div class="td-dim">${tauxI} %</div></td>`:''}
+      <td class="td-strong" data-label="Total à payer">${fmtEur(cot+imp)}</td>
+      <td data-label="Échéance">${fmtDateShort(ech)}<div class="td-dim">${et==='declaree'?('déclarée '+(dec.dateDeclaration?fmtDateShort(dec.dateDeclaration):'')):(et==='en-cours'?'clôture à venir':(jE>=0?('dans '+jE+' j'):('retard '+(-jE)+' j')))}</div></td>
+      <td data-label="Statut"><span class="badge ${stCls}">${stLbl}</span></td>
+      <td data-label=""><div class="td-actions">
         ${et==='declaree'
           ? `<button class="btn btn-ghost btn-sm" onclick="annulerDeclaration(${an},${t})">Annuler</button>`
           : (et==='en-cours' ? '<span class="td-dim">trimestre en cours</span>'
@@ -1953,13 +1967,13 @@ RENDERERS.compta=function(){
   const colImp=tauxI?'<th>Impôt lib.</th>':'';
   const recettes=DB.all('recettes').filter(r=>(r.date||'').slice(0,4)==String(an)).sort((a,b)=>b.date.localeCompare(a.date));
   const recRows=recettes.length?recettes.map(r=>`<tr>
-      <td class="td-dim">${fmtDateShort(r.date)}</td>
-      <td>${esc(r.client||'—')}<div class="td-dim">${esc(r.designation||'')}</div></td>
-      <td><span class="badge ${r.type==='Acompte'?'envoye':r.type==='Solde'?'accepte':'brouillon'}">${esc(r.type)}</span></td>
-      <td>${esc(r.mode||'—')}</td>
-      <td class="td-strong">${fmtEur(r.montant)}</td>
-      <td class="td-dim">${esc(r.ref||'')}</td>
-      <td><button class="btn btn-ghost btn-sm" onclick="supprimerRecette('${r.id}')">✕</button></td>
+      <td class="td-dim" data-label="Date">${fmtDateShort(r.date)}</td>
+      <td data-label="Client">${esc(r.client||'—')}<div class="td-dim">${esc(r.designation||'')}</div></td>
+      <td data-label="Type"><span class="badge ${r.type==='Acompte'?'envoye':r.type==='Solde'?'accepte':'brouillon'}">${esc(r.type)}</span></td>
+      <td data-label="Mode">${esc(r.mode||'—')}</td>
+      <td class="td-strong" data-label="Montant">${fmtEur(r.montant)}</td>
+      <td class="td-dim" data-label="Réf">${esc(r.ref||'')}</td>
+      <td data-label=""><button class="btn btn-ghost btn-sm" onclick="supprimerRecette('${r.id}')">✕ Suppr.</button></td>
     </tr>`).join('')
     :`<tr><td colspan="7"><div class="empty"><div class="empty-icon">📒</div><div class="empty-text">Aucune recette ${an}</div><div class="empty-sub">Les encaissements (acomptes, soldes) s'ajoutent automatiquement.</div></div></td></tr>`;
 
