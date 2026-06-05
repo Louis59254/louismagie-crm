@@ -2085,31 +2085,34 @@ const MKT_CAMPAIGNS=[
 ];
 function mktApply(str,c){ return str.replace(/{prenom}/g,prenomDe(c?(c.prenom||c.nom):'')).replace(/{sig}/g,sig()).replace(/{avisurl}/g,DB.config().googleReviewUrl||''); }
 
-let _mktFiltre='', _mktTpl='anniv';
+let _mktFiltre='', _mktTpl='anniv', _mktSearch='';
 function clientDernierEvt(id){ const ds=DB.all('devis').filter(d=>d.idClient===id).map(d=>d.dateEvenement||d.dateCreation).filter(Boolean).sort(); return ds[ds.length-1]||''; }
-function mktRappels(){ // {c, raison, info}
+function mktRappels(){ // {c, raison, info, key}
   const now=new Date(), mois=now.getMonth(), an=now.getFullYear(); const out=[]; const vus=new Set();
+  const add=(c,raison,info)=>{ const key='mkt-'+raison+'-'+c.id; if(isSnoozed(key))return; out.push({c,raison,info,key}); };
   // anniversaires ce mois (prestation/devis passé, même mois, >=1 an)
   DB.all('devis').forEach(d=>{ if(!d.idClient||!d.dateEvenement)return; const dt=new Date(d.dateEvenement); if(isNaN(dt))return;
-    const ya=an-dt.getFullYear(); if(dt.getMonth()===mois&&ya>=1){ const c=DB.get('clients',d.idClient); if(c&&c.email&&!vus.has('a'+c.id)){ vus.add('a'+c.id); out.push({c,raison:'anniv',info:'Prestation il y a '+ya+' an'+(ya>1?'s':'')+' ('+fmtDateShort(d.dateEvenement)+')'}); } } });
+    const ya=an-dt.getFullYear(); if(dt.getMonth()===mois&&ya>=1){ const c=DB.get('clients',d.idClient); if(c&&c.email&&!vus.has('a'+c.id)){ vus.add('a'+c.id); add(c,'anniv','Prestation il y a '+ya+' an'+(ya>1?'s':'')+' ('+fmtDateShort(d.dateEvenement)+')'); } } });
   // dormants : dernier devis > 8 mois
-  DB.all('clients').filter(c=>c.email).forEach(c=>{ const last=clientDernierEvt(c.id); if(last&&daysSince(last)>240&&!vus.has('a'+c.id)&&!vus.has('d'+c.id)){ vus.add('d'+c.id); out.push({c,raison:'dormant',info:'Pas de prestation depuis '+Math.round(daysSince(last)/30)+' mois'}); } });
+  DB.all('clients').filter(c=>c.email).forEach(c=>{ const last=clientDernierEvt(c.id); if(last&&daysSince(last)>240&&!vus.has('a'+c.id)&&!vus.has('d'+c.id)){ vus.add('d'+c.id); add(c,'dormant','Pas de prestation depuis '+Math.round(daysSince(last)/30)+' mois'); } });
   return out;
 }
+function dismissRappel(key){ const c=DB.config(); c.dismissed=c.dismissed||{}; const u=new Date(); u.setDate(u.getDate()+90); c.dismissed[key]=u.toISOString(); DB.saveConfig(c); RENDERERS.marketing(); updateBadges(); toast('Suggestion masquée','ok'); }
 RENDERERS.marketing=function(){
   const clients=DB.all('clients').filter(c=>c.email);
   const rappels=mktRappels();
   const auto=DB.config().gmailEnvoi&&cloudUrl();
 
   const rappelHtml=rappels.length?rappels.map(r=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--anthr)">
-      <div><div class="td-strong">${esc((r.c.prenom+' '+r.c.nom).trim())}</div><div class="td-dim">${r.raison==='anniv'?'🎂 ':'😴 '}${esc(r.info)}</div></div>
-      <button class="btn btn-or btn-sm" onclick="mailMarketing('${r.c.id}','${r.raison==='anniv'?'mktAnniversaire':'mktReprise'}')">✉ Préparer</button></div>`).join('')
+      <div style="flex:1;min-width:0"><div class="td-strong">${esc((r.c.prenom+' '+r.c.nom).trim())}</div><div class="td-dim">${r.raison==='anniv'?'🎂 ':'😴 '}${esc(r.info)}</div></div>
+      <button class="btn btn-or btn-sm" onclick="mailMarketing('${r.c.id}','${r.raison==='anniv'?'mktAnniversaire':'mktReprise'}')">✉ Préparer</button>
+      <button class="qa" title="Masquer cette suggestion" onclick="dismissRappel('${r.key}')">✕</button></div>`).join('')
     :'<div class="td-dim">Aucun rappel — tu es à jour 👌</div>';
 
   const opt=(v,l)=>`<option value="${v}"${v===_mktFiltre?' selected':''}>${l}</option>`;
   let liste=clients;
-  if(_mktFiltre) liste=clients.filter(c=>c.type===_mktFiltre);
-  const cbList=liste.map(c=>`<label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--anthr);cursor:pointer">
+  if(_mktFiltre) liste=liste.filter(c=>c.type===_mktFiltre);
+  const cbList=liste.map(c=>`<label class="mkt-row" data-s="${esc((c.prenom+' '+c.nom+' '+c.email).toLowerCase())}" style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--anthr);cursor:pointer">
       <input type="checkbox" class="mkt-cb" value="${c.id}" checked>
       <span style="flex:1">${esc((c.prenom+' '+c.nom).trim())}<span class="td-dim"> · ${esc(c.email)}</span></span>
       <span class="badge ${c.type==='partenaire'?'accepte':c.type==='entreprise'?'nouveau':'brouillon'}">${esc(c.type)}</span></label>`).join('');
@@ -2143,14 +2146,15 @@ RENDERERS.marketing=function(){
       <div class="form-group"><label class="form-label">Message <span class="td-dim">({prenom} remplacé par le prénom de chacun)</span></label>
         <textarea class="form-control" id="mkt-body" style="min-height:170px">${esc(tpl.body.replace(/{sig}/g,sig()).replace(/{avisurl}/g,DB.config().googleReviewUrl||''))}</textarea></div>
 
-      <div style="display:flex;justify-content:space-between;align-items:center;margin:10px 0 4px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin:10px 0 4px;flex-wrap:wrap">
         <div class="td-strong">Destinataires (<span id="mkt-count">${liste.length}</span>)</div>
         <div style="display:flex;gap:8px">
           <button class="btn btn-ghost btn-sm" onclick="mktToggleAll(true)">Tout cocher</button>
           <button class="btn btn-ghost btn-sm" onclick="mktToggleAll(false)">Tout décocher</button>
         </div>
       </div>
-      <div style="max-height:230px;overflow-y:auto;border:1px solid var(--anthr);border-radius:var(--rsm)" onchange="mktCount()">${cbList||'<div class="td-dim" style="padding:10px">Aucun contact avec email.</div>'}</div>
+      <input class="form-control" id="mkt-search" placeholder="🔍 Rechercher un contact (nom, email)…" oninput="mktSearchFilter(this.value)" style="margin-bottom:8px">
+      <div style="max-height:230px;overflow-y:auto;border:1px solid var(--anthr);border-radius:var(--rsm)" onchange="mktCount()">${cbList||'<div class="td-dim" style="padding:10px">Aucun contact trouvé.</div>'}</div>
 
       <div id="mkt-progress" class="td-dim" style="margin-top:10px"></div>
       <div class="form-grid" style="margin-top:10px;align-items:end">
@@ -2192,7 +2196,8 @@ function planifsHtml(){
     <div class="td-dim" style="margin-bottom:6px">Envoyées automatiquement le jour J par le serveur (cron). Voir DEPLOIEMENT.md pour activer la tâche planifiée.</div>
     ${all.map(row).join('')}</div>`;
 }
-function mktToggleAll(v){ document.querySelectorAll('#view-marketing .mkt-cb').forEach(cb=>cb.checked=v); mktCount(); }
+function mktToggleAll(v){ document.querySelectorAll('#view-marketing .mkt-row').forEach(l=>{ if(l.style.display!=='none') l.querySelector('.mkt-cb').checked=v; }); mktCount(); }
+function mktSearchFilter(q){ q=(q||'').toLowerCase().trim(); document.querySelectorAll('#view-marketing .mkt-row').forEach(l=>{ l.style.display=(!q||(l.dataset.s||'').includes(q))?'':'none'; }); }
 function mktCount(){ const n=document.querySelectorAll('#view-marketing .mkt-cb:checked').length; const el=document.getElementById('mkt-count'); if(el)el.textContent=n; }
 async function envoyerCampagne(){
   const ids=[...document.querySelectorAll('#view-marketing .mkt-cb:checked')].map(cb=>cb.value);
