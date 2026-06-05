@@ -355,6 +355,7 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
       <div class="sb-item" onclick="nav('devis')" id="nav-devis"><span class="ic">📄</span>Devis <span class="badge-count" id="badge-devis" style="display:none">0</span></div>
       <div class="sb-item" onclick="nav('factures')" id="nav-factures"><span class="ic">🧾</span>Factures <span class="badge-count" id="badge-factures" style="display:none">0</span></div>
       <div class="sb-item" onclick="nav('clients')" id="nav-clients"><span class="ic">👥</span>Clients & partenaires</div>
+      <div class="sb-item" onclick="nav('marketing')" id="nav-marketing"><span class="ic">📣</span>Marketing <span class="badge-count" id="badge-marketing" style="display:none">0</span></div>
       <div class="sb-item" onclick="nav('compta')" id="nav-compta"><span class="ic">📊</span>Compta / URSSAF <span class="badge-count" id="badge-compta" style="display:none">0</span></div>
       <div class="sb-section">Configuration</div>
       <div class="sb-item" onclick="nav('reglages')" id="nav-reglages"><span class="ic">⚙️</span>Réglages & catalogue</div>
@@ -394,6 +395,7 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
       <div class="view" id="view-factures"></div>
       <div class="view" id="view-clients"></div>
       <div class="view" id="view-devis-create"></div>
+      <div class="view" id="view-marketing"></div>
       <div class="view" id="view-compta"></div>
       <div class="view" id="view-reglages"></div>
     </div>
@@ -532,7 +534,7 @@ function showApp(){
 }
 
 /* ───── Navigation ───── */
-const VIEW_TITLES={dashboard:'Tableau de bord',demandes:'Demandes',agenda:'Agenda',devis:'Devis',factures:'Factures',clients:'Clients & partenaires',compta:'Comptabilité / URSSAF','devis-create':'Créer un devis',reglages:'Réglages & catalogue'};
+const VIEW_TITLES={dashboard:'Tableau de bord',demandes:'Demandes',agenda:'Agenda',devis:'Devis',factures:'Factures',clients:'Clients & partenaires',marketing:'Marketing',compta:'Comptabilité / URSSAF','devis-create':'Créer un devis',reglages:'Réglages & catalogue'};
 const RENDERERS={}; // remplis par les modules de vue (tours suivants)
 let currentParams={};
 let _currentView='dashboard';
@@ -560,6 +562,7 @@ function updateBadges(){
   const nf=DB.all('factures').filter(f=>['Émise','Relance 1','Relance 2'].includes(f.statut)).length;
   setBadge('badge-demandes',nd); setBadge('badge-devis',ndv); setBadge('badge-factures',nf);
   setBadge('badge-compta',trimsADeclarer().length);
+  try{ setBadge('badge-marketing',mktRappels().length); }catch(_){}
 }
 function setBadge(id,n){ const el=document.getElementById(id); if(!el)return;
   if(n>0){ el.textContent=n; el.style.display='inline-block'; } else el.style.display='none'; }
@@ -2047,6 +2050,125 @@ function exportRecettesCSV(an){
   const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='livre_recettes_'+an+'.csv'; a.click(); URL.revokeObjectURL(a.href);
   toast('Export CSV ('+rows.length+' recettes)','ok');
+}
+
+/* ═══════════ VUE : MARKETING ═══════════ */
+const MKT_CAMPAIGNS=[
+  {key:'anniv',label:'🎂 Anniversaire de collaboration',subject:'On remet un peu de magie, {prenom} ?',
+   body:'Bonjour {prenom},\n\nCela fait un moment que je n\'ai pas eu le plaisir d\'animer un de vos événements ! Le temps file.\n\nSi vous préparez une occasion — soirée, anniversaire, événement d\'entreprise — je serais ravi de remettre un peu de magie chez vous. Dites-moi la date envisagée, je vous fais une proposition sur mesure.\n\nMagiquement,\n{sig}'},
+  {key:'reprise',label:'👋 Reprendre contact',subject:'On se refait un peu de magie ?',
+   body:'Bonjour {prenom},\n\nJe reste à votre disposition pour vos prochains événements : close-up, mentalisme, spectacle ou magie digitale personnalisée.\n\nUn projet en vue ? Donnez-moi la date et le type d\'événement, je vous envoie un devis.\n\nÀ très vite,\n{sig}'},
+  {key:'dispos',label:'📅 Mes disponibilités se remplissent',subject:'Mes dates se remplissent — réservez la vôtre',
+   body:'Bonjour {prenom},\n\nMa saison se remplit et certaines dates clés partent vite. Si vous avez un événement en préparation, c\'est le bon moment pour bloquer votre créneau.\n\nDites-moi la date et le lieu, je vous prépare une proposition.\n\nÀ bientôt,\n{sig}'},
+  {key:'voeux',label:'🎉 Vœux de fin d\'année',subject:'Belle année — et un peu de magie pour la suite',
+   body:'Bonjour {prenom},\n\nJe vous souhaite une excellente année, pleine de réussite et de beaux moments.\n\nEt si l\'un d\'eux était… magique ? Pour vos événements à venir, pensez à réserver tôt.\n\nBien à vous,\n{sig}'},
+  {key:'offre',label:'✨ Offre / nouveauté',subject:'Une nouveauté magique pour vos événements',
+   body:'Bonjour {prenom},\n\nJe propose désormais de nouvelles formules (close-up, mentalisme, magie digitale personnalisée à votre marque).\n\nEnvie d\'en savoir plus pour un prochain événement ? Répondez-moi, je vous explique tout.\n\nMagiquement,\n{sig}'},
+  {key:'avis',label:'⭐ Demander un avis',subject:'Votre avis compte beaucoup',
+   body:'Bonjour {prenom},\n\nSi vous avez apprécié l\'une de mes prestations, un avis Google m\'aiderait énormément :\n{avisurl}\n\nMerci infiniment !\n{sig}'},
+];
+function mktApply(str,c){ return str.replace(/{prenom}/g,prenomDe(c?(c.prenom||c.nom):'')).replace(/{sig}/g,sig()).replace(/{avisurl}/g,DB.config().googleReviewUrl||''); }
+
+let _mktFiltre='', _mktTpl='anniv';
+function clientDernierEvt(id){ const ds=DB.all('devis').filter(d=>d.idClient===id).map(d=>d.dateEvenement||d.dateCreation).filter(Boolean).sort(); return ds[ds.length-1]||''; }
+function mktRappels(){ // {c, raison, info}
+  const now=new Date(), mois=now.getMonth(), an=now.getFullYear(); const out=[]; const vus=new Set();
+  // anniversaires ce mois (prestation/devis passé, même mois, >=1 an)
+  DB.all('devis').forEach(d=>{ if(!d.idClient||!d.dateEvenement)return; const dt=new Date(d.dateEvenement); if(isNaN(dt))return;
+    const ya=an-dt.getFullYear(); if(dt.getMonth()===mois&&ya>=1){ const c=DB.get('clients',d.idClient); if(c&&c.email&&!vus.has('a'+c.id)){ vus.add('a'+c.id); out.push({c,raison:'anniv',info:'Prestation il y a '+ya+' an'+(ya>1?'s':'')+' ('+fmtDateShort(d.dateEvenement)+')'}); } } });
+  // dormants : dernier devis > 8 mois
+  DB.all('clients').filter(c=>c.email).forEach(c=>{ const last=clientDernierEvt(c.id); if(last&&daysSince(last)>240&&!vus.has('a'+c.id)&&!vus.has('d'+c.id)){ vus.add('d'+c.id); out.push({c,raison:'dormant',info:'Pas de prestation depuis '+Math.round(daysSince(last)/30)+' mois'}); } });
+  return out;
+}
+RENDERERS.marketing=function(){
+  const clients=DB.all('clients').filter(c=>c.email);
+  const rappels=mktRappels();
+  const auto=DB.config().gmailEnvoi&&cloudUrl();
+
+  const rappelHtml=rappels.length?rappels.map(r=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--anthr)">
+      <div><div class="td-strong">${esc((r.c.prenom+' '+r.c.nom).trim())}</div><div class="td-dim">${r.raison==='anniv'?'🎂 ':'😴 '}${esc(r.info)}</div></div>
+      <button class="btn btn-or btn-sm" onclick="mailMarketing('${r.c.id}','${r.raison==='anniv'?'mktAnniversaire':'mktReprise'}')">✉ Préparer</button></div>`).join('')
+    :'<div class="td-dim">Aucun rappel — tu es à jour 👌</div>';
+
+  const opt=(v,l)=>`<option value="${v}"${v===_mktFiltre?' selected':''}>${l}</option>`;
+  let liste=clients;
+  if(_mktFiltre) liste=clients.filter(c=>c.type===_mktFiltre);
+  const cbList=liste.map(c=>`<label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--anthr);cursor:pointer">
+      <input type="checkbox" class="mkt-cb" value="${c.id}" checked>
+      <span style="flex:1">${esc((c.prenom+' '+c.nom).trim())}<span class="td-dim"> · ${esc(c.email)}</span></span>
+      <span class="badge ${c.type==='partenaire'?'accepte':c.type==='entreprise'?'nouveau':'brouillon'}">${esc(c.type)}</span></label>`).join('');
+
+  const tplOpts=MKT_CAMPAIGNS.map(t=>`<option value="${t.key}"${t.key===_mktTpl?' selected':''}>${t.label}</option>`).join('');
+  const tpl=MKT_CAMPAIGNS.find(t=>t.key===_mktTpl)||MKT_CAMPAIGNS[0];
+
+  document.getElementById('view-marketing').innerHTML=`
+    <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr)">
+      ${kpi('info','Contacts emailables',clients.length)}
+      ${kpi('or','Rappels à faire',rappels.length)}
+      ${kpi(auto?'vert':'warn','Envoi',auto?'Gmail auto ✓':'Messagerie',auto?'direct + perso':'mailto groupé')}
+    </div>
+    ${!auto?alertHtml('warning','✉','Envoi auto Gmail désactivé → l\'envoi groupé ouvrira ta messagerie avec les destinataires en copie cachée (Cci). Active Gmail (Réglages) pour un envoi direct et personnalisé.'):''}
+
+    <div class="panel"><div class="panel-title">🔔 Rappels intelligents</div>
+      <div class="td-dim" style="margin-bottom:8px">Basés sur tes dates de prestation (anniversaires de collaboration ce mois, clients dormants).</div>
+      ${rappelHtml}
+    </div>
+
+    <div class="panel"><div class="panel-title">📤 Campagne groupée</div>
+      <div class="form-grid">
+        <div class="form-group"><label class="form-label">Modèle d'email</label>
+          <select class="form-control" id="mkt-tpl" onchange="_mktTpl=this.value;RENDERERS.marketing()">${tplOpts}</select></div>
+        <div class="form-group"><label class="form-label">Filtrer les destinataires</label>
+          <select class="form-control" onchange="_mktFiltre=this.value;RENDERERS.marketing()">
+            ${opt('','Tous les contacts')}${opt('particulier','Particuliers')}${opt('entreprise','Entreprises')}${opt('partenaire','Partenaires')}</select></div>
+      </div>
+      <div class="form-group"><label class="form-label">Objet <span class="td-dim">({prenom} = prénom auto)</span></label>
+        <input class="form-control" id="mkt-subject" value="${esc(tpl.subject)}"></div>
+      <div class="form-group"><label class="form-label">Message <span class="td-dim">({prenom} remplacé par le prénom de chacun)</span></label>
+        <textarea class="form-control" id="mkt-body" style="min-height:170px">${esc(tpl.body.replace(/{sig}/g,sig()).replace(/{avisurl}/g,DB.config().googleReviewUrl||''))}</textarea></div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center;margin:10px 0 4px">
+        <div class="td-strong">Destinataires (<span id="mkt-count">${liste.length}</span>)</div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-ghost btn-sm" onclick="mktToggleAll(true)">Tout cocher</button>
+          <button class="btn btn-ghost btn-sm" onclick="mktToggleAll(false)">Tout décocher</button>
+        </div>
+      </div>
+      <div style="max-height:230px;overflow-y:auto;border:1px solid var(--anthr);border-radius:var(--rsm)" onchange="mktCount()">${cbList||'<div class="td-dim" style="padding:10px">Aucun contact avec email.</div>'}</div>
+
+      <div id="mkt-progress" class="td-dim" style="margin-top:10px"></div>
+      <div style="text-align:right;margin-top:10px">
+        <button class="btn btn-or" onclick="envoyerCampagne()">📤 Envoyer la campagne</button>
+      </div>
+    </div>`;
+};
+function mktToggleAll(v){ document.querySelectorAll('#view-marketing .mkt-cb').forEach(cb=>cb.checked=v); mktCount(); }
+function mktCount(){ const n=document.querySelectorAll('#view-marketing .mkt-cb:checked').length; const el=document.getElementById('mkt-count'); if(el)el.textContent=n; }
+async function envoyerCampagne(){
+  const ids=[...document.querySelectorAll('#view-marketing .mkt-cb:checked')].map(cb=>cb.value);
+  if(!ids.length){ toast('Aucun destinataire coché','err'); return; }
+  const subjectTpl=document.getElementById('mkt-subject').value;
+  const bodyTpl=document.getElementById('mkt-body').value;
+  const auto=DB.config().gmailEnvoi&&cloudUrl();
+  const prog=document.getElementById('mkt-progress');
+  if(auto){
+    let ok=0,fail=0;
+    for(let i=0;i<ids.length;i++){ const c=DB.get('clients',ids[i]); if(!c||!c.email){fail++;continue;}
+      const subj=subjectTpl.replace(/{prenom}/g,prenomDe(c.prenom||c.nom));
+      const body=bodyTpl.replace(/{prenom}/g,prenomDe(c.prenom||c.nom));
+      if(prog) prog.textContent='Envoi '+(i+1)+'/'+ids.length+' → '+c.email+'…';
+      const j=await cloudPost({action:'sendEmail',to:c.email,subject:subj,body:body});
+      if(j&&j.ok){ ok++; DB.save('mails',{id:uid('MAIL'),date:new Date().toISOString(),kind:'campagne',ref:c.id,to:c.email,subject:subj}); } else fail++;
+    }
+    if(prog) prog.textContent='';
+    logActivite('Campagne envoyée : '+ok+' email(s)'+(fail?', '+fail+' échec(s)':''));
+    toast('✅ '+ok+' envoyé(s)'+(fail?' · '+fail+' échec(s)':''),'ok');
+  } else {
+    const emails=ids.map(id=>(DB.get('clients',id)||{}).email).filter(Boolean).join(',');
+    const subj=subjectTpl.replace(/{prenom}/g,''); const body=bodyTpl.replace(/{prenom}/g,'');
+    window.open('mailto:?bcc='+encodeURIComponent(emails)+'&subject='+encodeURIComponent(subj)+'&body='+encodeURIComponent(body),'_blank');
+    toast('Messagerie ouverte ('+ids.length+' contacts en Cci)','ok');
+  }
 }
 
 /* ═══════════ VUE : RÉGLAGES & CATALOGUE ═══════════ */
