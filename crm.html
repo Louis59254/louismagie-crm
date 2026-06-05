@@ -504,22 +504,31 @@ function progressBar(steps){ // [{label,sub,state:'done'|'current'|'todo'|'skip'
 const DEFAULT_PWD='louismagie';
 async function doLogin(){
   const pwd=document.getElementById('pwd').value;
-  const cfg=DB.config();
   const hash=await sha256(pwd);
-  if(hash===cfg.passwordHash){
-    sessionStorage.setItem('lm_auth','1');
-    showApp();
-  } else {
-    document.getElementById('login-err').style.display='block';
+  const errEl=document.getElementById('login-err');
+  if(cloudUrl()){
+    // Vérif côté serveur : le mot de passe = clé de sync. 1er appareil = définit le mot de passe.
+    const j=await cloudPost({action:'login',auth:hash});
+    if(j&&j.ok){
+      sessionStorage.setItem('lm_authh',hash); sessionStorage.setItem('lm_auth','1');
+      const c=DB.config(); if(c.passwordHash!==hash){ c.passwordHash=hash; DB.saveConfig(c); } // garde pour le mode hors-ligne
+      showApp(); return;
+    }
+    // serveur joignable mais refus → mauvais mdp ; serveur injoignable → essaie le mode local
+    if(j && j.ok===false && j.error==='non autorisé'){ errEl.style.display='block'; return; }
   }
+  // hors-ligne : comparaison locale
+  if(hash===DB.config().passwordHash){ sessionStorage.setItem('lm_authh',hash); sessionStorage.setItem('lm_auth','1'); showApp(); }
+  else errEl.style.display='block';
 }
-function doLogout(){ sessionStorage.removeItem('lm_auth'); location.reload(); }
+function doLogout(){ sessionStorage.removeItem('lm_auth'); sessionStorage.removeItem('lm_authh'); location.reload(); }
 function showApp(){
   document.getElementById('login-screen').style.display='none';
   document.getElementById('app').style.display='flex';
   document.getElementById('topbar-date').textContent='· '+new Date().toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'});
   updateBadges();
   nav('dashboard');
+  if(cloudUrl()&&sessionStorage.getItem('lm_authh')){ cloudPull().then(()=>{ if(RENDERERS[_currentView])RENDERERS[_currentView](currentParams); updateBadges(); }); }
 }
 
 /* ───── Navigation ───── */
@@ -2106,10 +2115,10 @@ RENDERERS.reglages=function(){
     </div>
 
     <div class="panel"><div class="panel-title">☁️ Backend de synchronisation</div>
-      <div class="td-dim" style="margin-bottom:12px">Branche ton serveur (Hostinger PHP ou Google Apps Script — voir DEPLOIEMENT.md). Une fois branché : données synchronisées + <strong>PDF factures/devis archivés automatiquement</strong>. Laisse vide = 100 % local.</div>
+      <div class="td-dim" style="margin-bottom:12px">Synchro sécurisée par <strong>ton mot de passe</strong> : connecte-toi avec sur n'importe quel appareil → données synchronisées + PDF archivés. Plus de token à recopier. Laisse l'URL vide = 100 % local.</div>
       <div class="form-grid">
         <div class="form-group"><label class="form-label">URL backend — laisse VIDE = auto (même domaine)</label><input class="form-control" id="cfg-appsScriptUrl" value="${esc(cfg.appsScriptUrl||'')}" placeholder="auto : ${location.origin}/api.php"></div>
-        <div class="form-group"><label class="form-label">Token secret <span class="req">*</span> (à coller sur chaque appareil)</label><input class="form-control" id="cfg-backendToken" value="${esc(cfg.backendToken||'')}" placeholder="= CRM_TOKEN du serveur"></div>
+        <div class="form-group"><label class="form-label">Token (optionnel — Apps Script uniquement)</label><input class="form-control" id="cfg-backendToken" value="${esc(cfg.backendToken||'')}" placeholder="laisse vide avec Hostinger/PHP"></div>
         <div class="form-group"><label class="form-label">Envoi auto via Gmail (serveur)</label><select class="form-control" id="cfg-gmailEnvoi"><option value="non"${!cfg.gmailEnvoi?' selected':''}>Non — ouvre ma messagerie</option><option value="oui"${cfg.gmailEnvoi?' selected':''}>Oui — envoi direct + PDF joint</option></select></div>
       </div>
       <div class="td-dim" style="margin-top:4px">Envoi auto = nécessite <code>GMAIL_USER</code> + <code>GMAIL_APP_PASSWORD</code> dans Coolify (mot de passe d'application Gmail, 2FA requise).</div>
@@ -2148,8 +2157,14 @@ function saveParams(){
 async function changePwd(){
   const v=document.getElementById('cfg-pwd').value;
   if(!v){ toast('Mot de passe vide','err'); return; }
-  const cfg=DB.config(); cfg.passwordHash=await sha256(v); DB.saveConfig(cfg);
-  document.getElementById('cfg-pwd').value=''; toast('Mot de passe changé','ok');
+  const nh=await sha256(v);
+  if(cloudUrl()){
+    const j=await cloudPost({action:'setAuth',auth:cloudAuth(),new:nh});
+    if(!j||!j.ok){ toast('Échec serveur : '+((j&&j.error)||'?'),'err'); return; }
+    sessionStorage.setItem('lm_authh',nh);
+  }
+  const cfg=DB.config(); cfg.passwordHash=nh; DB.saveConfig(cfg);
+  document.getElementById('cfg-pwd').value=''; toast('Mot de passe changé (synchronisé)','ok');
 }
 
 /* ═══════════ SYNC CLOUD (Google Apps Script + Sheet + Drive) ═══════════
@@ -2168,15 +2183,16 @@ function cloudQueueEntity(entity){ if(!cloudUrl())return; clearTimeout(_cloudTim
   _cloudTimers[entity]=setTimeout(()=>cloudPost({action:'putEntity',entity,rows:DB.all(entity)}),1500); }
 function cloudQueueConfig(){ if(!cloudUrl())return; clearTimeout(_cloudTimers._cfg);
   _cloudTimers._cfg=setTimeout(()=>cloudPost({action:'putConfig',config:DB.config()}),1500); }
+function cloudAuth(){ return sessionStorage.getItem('lm_authh')||''; }
 function cloudPost(payload){ const url=cloudUrl(); if(!url) return Promise.resolve({ok:false});
-  setCloudStatus('sync'); payload.token=DB.config().backendToken||'';
+  setCloudStatus('sync'); payload.token=DB.config().backendToken||''; if(!payload.auth) payload.auth=cloudAuth();
   return fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload)})
     .then(r=>r.json()).then(j=>{ setCloudStatus(j&&j.ok?'ok':'err'); return j; })
     .catch(()=>{ setCloudStatus('err'); return {ok:false}; }); }
 function cloudPushAll(){ if(!cloudUrl())return; ENTITIES.forEach(e=>cloudPost({action:'putEntity',entity:e,rows:DB.all(e)})); cloudPost({action:'putConfig',config:DB.config()}); toast('Envoi de toutes les données vers Google…','ok'); }
 async function cloudPull(){ const url=cloudUrl(); if(!url){ setCloudStatus('off'); return 'off'; }
   setCloudStatus('sync');
-  try{ const r=await fetch(url+'?action=getAll&token='+encodeURIComponent(DB.config().backendToken||'')); const j=await r.json();
+  try{ const r=await fetch(url+'?action=getAll&auth='+encodeURIComponent(cloudAuth())+'&token='+encodeURIComponent(DB.config().backendToken||'')); const j=await r.json();
     if(!j||!j.ok||!j.data){ setCloudStatus('err'); return 'err'; }
     const total=ENTITIES.reduce((a,e)=>a+((j.data[e]||[]).length),0);
     if(total===0){ cloudPushAll(); return 'init'; }            // cloud vide → on l'initialise depuis le local
@@ -2204,8 +2220,9 @@ async function cloudSyncNow(){ const res=await cloudPull(); if(typeof RENDERERS[
   try{ applyTheme(localStorage.getItem('lm_theme')||'dark'); }catch(_){ applyTheme('dark'); }
   try{ document.querySelectorAll('.brand-logo').forEach(i=>i.src=LOGO_B64); }catch(_){}
   await ensureSeed();
-  if(cloudUrl()){ try{ await cloudPull(); }catch(_){} } else setCloudStatus('off');
-  if(sessionStorage.getItem('lm_auth')==='1') showApp();
+  setCloudStatus(cloudUrl()?'sync':'off');
+  // pull se fait après login (showApp), car l'API exige le mot de passe
+  if(sessionStorage.getItem('lm_auth')==='1' && sessionStorage.getItem('lm_authh')) showApp();
 })();
 </script>
 </body>

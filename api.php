@@ -65,20 +65,32 @@ $raw = file_get_contents('php://input');
 $req = $raw ? json_decode($raw, true) : [];
 if (!is_array($req)) $req = [];
 $action = $_GET['action'] ?? ($req['action'] ?? '');
-$token  = $_GET['token']  ?? ($req['token']  ?? '');
+$auth   = $_GET['auth']   ?? ($req['auth']   ?? '');   // sha256(mot de passe) envoyé par le CRM
+$token  = $_GET['token']  ?? ($req['token']  ?? '');   // legacy / Apps Script
 
 if ($action === '' || $action === 'ping') out(['ok'=>true, 'msg'=>'CRM LouisMagie API (PHP) en ligne']);
 
-// Requêtes émises par le CRM lui-même (même domaine) = autorisées sans token (évite la config par appareil/contexte).
-// Le token reste exigé pour les accès externes (autre site, curl, etc.).
-$selfHost = $_SERVER['HTTP_HOST'] ?? '';
-$origin   = $_SERVER['HTTP_ORIGIN'] ?? '';
-$referer  = $_SERVER['HTTP_REFERER'] ?? '';
-$sameOrigin = ($selfHost && (($origin && strpos($origin, $selfHost) !== false) || ($referer && strpos($referer, $selfHost) !== false)));
-if (!$sameOrigin && $token !== $TOKEN) out(['ok'=>false, 'error'=>'token invalide']);
-
 if (!is_dir($DATA_DIR)) @mkdir($DATA_DIR, 0775, true);
 if (!is_dir($DATA_DIR)) out(['ok'=>false, 'error'=>'dossier data non créable']);
+
+/* ===== Auth par mot de passe (1 seul secret = le mot de passe du CRM) ===== */
+$AUTH_FILE = $DATA_DIR.'/_auth';
+$stored = is_file($AUTH_FILE) ? trim(file_get_contents($AUTH_FILE)) : '';
+if ($stored === '') { $env = getenv('CRM_PASSWORD_HASH'); if ($env) { file_put_contents($AUTH_FILE, $env); $stored = $env; } }
+
+if ($action === 'login') {
+  if ($stored === '') { file_put_contents($AUTH_FILE, $auth); out(['ok'=>true, 'first'=>true]); } // 1er appareil définit le mot de passe
+  out(['ok'=> ($auth !== '' && hash_equals($stored, $auth))]);
+}
+if ($action === 'setAuth') {
+  if ($stored !== '' && !hash_equals($stored, $auth)) out(['ok'=>false, 'error'=>'mot de passe actuel invalide']);
+  file_put_contents($AUTH_FILE, $req['new'] ?? '');
+  out(['ok'=>true]);
+}
+
+// Toute action data exige le bon mot de passe (ou, en secours, le token legacy s'il est configuré)
+$okAuth = ($stored !== '' && $auth !== '' && hash_equals($stored, $auth)) || ($token !== '' && $token === $TOKEN);
+if (!$okAuth) out(['ok'=>false, 'error'=>'non autorisé']);
 
 switch ($action) {
 
