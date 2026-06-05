@@ -68,7 +68,14 @@ $action = $_GET['action'] ?? ($req['action'] ?? '');
 $token  = $_GET['token']  ?? ($req['token']  ?? '');
 
 if ($action === '' || $action === 'ping') out(['ok'=>true, 'msg'=>'CRM LouisMagie API (PHP) en ligne']);
-if ($token !== $TOKEN) out(['ok'=>false, 'error'=>'token invalide']);
+
+// Requêtes émises par le CRM lui-même (même domaine) = autorisées sans token (évite la config par appareil/contexte).
+// Le token reste exigé pour les accès externes (autre site, curl, etc.).
+$selfHost = $_SERVER['HTTP_HOST'] ?? '';
+$origin   = $_SERVER['HTTP_ORIGIN'] ?? '';
+$referer  = $_SERVER['HTTP_REFERER'] ?? '';
+$sameOrigin = ($selfHost && (($origin && strpos($origin, $selfHost) !== false) || ($referer && strpos($referer, $selfHost) !== false)));
+if (!$sameOrigin && $token !== $TOKEN) out(['ok'=>false, 'error'=>'token invalide']);
 
 if (!is_dir($DATA_DIR)) @mkdir($DATA_DIR, 0775, true);
 if (!is_dir($DATA_DIR)) out(['ok'=>false, 'error'=>'dossier data non créable']);
