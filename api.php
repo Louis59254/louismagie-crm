@@ -20,12 +20,12 @@ header('Content-Type: application/json; charset=utf-8');
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') { exit; }
 
 $ENTITIES = ['demandes','devis','prestations','factures','clients','relances',
-             'activite','mails','catalogue','recettes','declarations'];
+             'activite','mails','catalogue','recettes','declarations','planifs'];
 
 function out($o){ echo json_encode($o, JSON_UNESCAPED_UNICODE); exit; }
 
 /* Envoi email via SMTP Gmail (mot de passe d'application). 0 dépendance. */
-function smtpSend($to,$subject,$bodyText,$attachName='',$attachB64=''){
+function smtpSend($to,$subject,$bodyText,$attachName='',$attachB64='',$trackUrl=''){
   // SMTP générique : Infomaniak, Gmail, etc. (compat anciennes variables GMAIL_*)
   $host=getenv('SMTP_HOST') ?: 'smtp.gmail.com';
   $port=getenv('SMTP_PORT') ?: '587';
@@ -47,11 +47,21 @@ function smtpSend($to,$subject,$bodyText,$attachName='',$attachB64=''){
   if(strpos($r,'235')===false){ fclose($fp); return [false,'auth refusée ('.$host.', user '.$user.') : '.trim($r)]; }
   $cmd("MAIL FROM:<$from>"); $cmd("RCPT TO:<$to>"); $cmd("DATA");
   $h="From: $from\r\nReply-To: $from\r\nTo: $to\r\nSubject: =?UTF-8?B?".base64_encode($subject)."?=\r\nMIME-Version: 1.0\r\n";
+  $html = $trackUrl ? ('<div style="white-space:pre-wrap;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222">'.htmlspecialchars($bodyText)."</div><img src=\"$trackUrl\" width=\"1\" height=\"1\" alt=\"\" style=\"display:none\">") : '';
+  $bP=function() use($bodyText,$html){ // partie corps (texte seul, ou alternative texte+html si tracking)
+    if(!$html) return "Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n".chunk_split(base64_encode($bodyText));
+    $a='alt'.md5(uniqid());
+    return "Content-Type: multipart/alternative; boundary=\"$a\"\r\n\r\n"
+      ."--$a\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n".chunk_split(base64_encode($bodyText))."\r\n"
+      ."--$a\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n".chunk_split(base64_encode($html))."\r\n--$a--\r\n";
+  };
   if($attachB64){
-    $b='b'.md5(uniqid());
+    $b='mix'.md5(uniqid());
     $m=$h."Content-Type: multipart/mixed; boundary=\"$b\"\r\n\r\n"
-      ."--$b\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n".chunk_split(base64_encode($bodyText))."\r\n"
+      ."--$b\r\n".$bP()."\r\n"
       ."--$b\r\nContent-Type: application/pdf; name=\"$attachName\"\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename=\"$attachName\"\r\n\r\n".chunk_split($attachB64)."\r\n--$b--\r\n";
+  } else if($html){
+    $m=$h.$bP();
   } else {
     $m=$h."Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n".chunk_split(base64_encode($bodyText));
   }
@@ -72,6 +82,33 @@ if ($action === '' || $action === 'ping') out(['ok'=>true, 'msg'=>'CRM LouisMagi
 
 if (!is_dir($DATA_DIR)) @mkdir($DATA_DIR, 0775, true);
 if (!is_dir($DATA_DIR)) out(['ok'=>false, 'error'=>'dossier data non créable']);
+
+/* ===== Pixel de suivi d'ouverture (public, pas d'auth) ===== */
+if ($action === 'track') {
+  $m = $_GET['m'] ?? '';
+  if ($m !== '') { $f=$DATA_DIR.'/_opens.json'; $arr=readJson($f); if(!is_array($arr))$arr=[];
+    if(!array_filter($arr, function($o) use($m){ return ($o['m']??'')===$m; })) $arr[]=['m'=>$m,'at'=>date('c')];
+    writeJson($f,$arr); }
+  header('Content-Type: image/gif'); header('Cache-Control: no-store');
+  echo base64_decode('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'); exit;
+}
+
+/* ===== Envoi planifié (déclenché par cron Coolify, protégé par CRON_KEY) ===== */
+if ($action === 'runScheduled') {
+  if (($_GET['key'] ?? '') === '' || ($_GET['key'] ?? '') !== getenv('CRON_KEY')) out(['ok'=>false,'error'=>'cron key invalide']);
+  $f=$DATA_DIR.'/planifs.json'; $arr=readJson($f); if(!is_array($arr))$arr=[];
+  $today=date('Y-m-d'); $sent=0; $fail=0;
+  foreach ($arr as &$p) {
+    if (($p['statut']??'')==='prévu' && ($p['date']??'9999') <= $today) {
+      $tu='';
+      if(!empty($p['trackId'])){ $base=(isset($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off'?'https':'http').'://'.$_SERVER['HTTP_HOST'].$_SERVER['SCRIPT_NAME']; $tu=$base.'?action=track&m='.rawurlencode($p['trackId']); }
+      list($ok,$info)=smtpSend($p['to']??'',$p['subject']??'',$p['body']??'','','',$tu);
+      $p['statut']=$ok?'envoyé':'échec'; $p['sentAt']=date('c'); $p['info']=$info; $ok?$sent++:$fail++;
+    }
+  }
+  unset($p); writeJson($f,$arr);
+  out(['ok'=>true,'sent'=>$sent,'fail'=>$fail,'total'=>count($arr)]);
+}
 
 /* ===== Auth par mot de passe (1 seul secret = le mot de passe du CRM) ===== */
 $AUTH_FILE = $DATA_DIR.'/_auth';
@@ -97,7 +134,8 @@ switch ($action) {
   case 'getAll': {
     $data = []; foreach ($ENTITIES as $e) { $v = readJson("$DATA_DIR/$e.json"); $data[$e] = is_array($v) ? $v : []; }
     $config = readJson("$DATA_DIR/config.json"); if(!is_array($config)) $config = [];
-    out(['ok'=>true, 'data'=>$data, 'config'=>$config]);
+    $opens = readJson($DATA_DIR.'/_opens.json'); if(!is_array($opens)) $opens = [];
+    out(['ok'=>true, 'data'=>$data, 'config'=>$config, 'opens'=>$opens]);
   }
 
   case 'putEntity': {
@@ -132,7 +170,9 @@ switch ($action) {
   }
 
   case 'sendEmail': {
-    list($ok,$info)=smtpSend($req['to']??'', $req['subject']??'', $req['body']??'', $req['attachName']??'', $req['attachB64']??'');
+    $tu='';
+    if(!empty($req['trackId'])){ $base=(isset($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off'?'https':'http').'://'.$_SERVER['HTTP_HOST'].$_SERVER['SCRIPT_NAME']; $tu=$base.'?action=track&m='.rawurlencode($req['trackId']); }
+    list($ok,$info)=smtpSend($req['to']??'', $req['subject']??'', $req['body']??'', $req['attachName']??'', $req['attachB64']??'', $tu);
     out(['ok'=>$ok, 'info'=>$info]);
   }
 

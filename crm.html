@@ -420,7 +420,7 @@ const LOGO_B64="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAfQAAAH0CAYAAADL1t
    ════════════════════════════════════════════════════ */
 
 /* ───── Couche données (abstraction) ───── */
-const ENTITIES = ['demandes','devis','prestations','factures','clients','relances','activite','mails','catalogue','recettes','declarations'];
+const ENTITIES = ['demandes','devis','prestations','factures','clients','relances','activite','mails','catalogue','recettes','declarations','planifs'];
 const LS_PREFIX = 'lm_crm_';
 const DB = {
   all(e){ try{ return JSON.parse(localStorage.getItem(LS_PREFIX+e)) || []; }catch(_){ return []; } },
@@ -574,7 +574,7 @@ async function ensureSeed(){
     cfg={ passwordHash: await sha256(DEFAULT_PWD), emailLouis:'contact@louismagie.fr',
       acompteDefautPct:30, delaiRelance1:30, delaiRelance2:15, fraisKm:0.55, notificationsOn:true,
       signature:'Louis · LouisMagie\nMagicien — Dunkerque\ncontact@louismagie.fr · louismagie.fr',
-      googleReviewUrl:'https://g.page/r/VOTRE-ID-GOOGLE/review',
+      googleReviewUrl:'https://g.page/r/CaADDh0tfuLFEAE/review',
       entrepriseContact:'Louis Slosse', entrepriseStatut:'Magicien — Entrepreneur individuel',
       entrepriseAdresse:'Dunkerque, Hauts-de-France', entrepriseSiret:'',
       entrepriseTel:'', iban:'FR76 3000 3029 0400 0205 0334 532', bic:'',
@@ -583,7 +583,7 @@ async function ensureSeed(){
       tauxUrssaf:23.1, versementLiberatoire:false, tauxImpotLib:2.2,
       urssafUrl:'https://www.autoentrepreneur.urssaf.fr', appsScriptUrl:'', backendToken:'', gmailEnvoi:false };
     DB.saveConfig(cfg);
-  }
+  } else if((cfg.googleReviewUrl||'').includes('VOTRE-ID')){ cfg.googleReviewUrl='https://g.page/r/CaADDh0tfuLFEAE/review'; DB.saveConfig(cfg); }
   if(!DB.all('catalogue').length) seedCatalogue();
   if(DB.all('clients').length || DB.all('demandes').length) return; // déjà des données
   seedDemo();
@@ -1875,13 +1875,14 @@ async function mcSend(kind,ref){
   const to=document.getElementById('mc-to').value.trim();
   const subject=document.getElementById('mc-subject').value;
   const bodyTxt=document.getElementById('mc-body').value;
-  const done=()=>{ DB.save('mails',{id:uid('MAIL'),date:new Date().toISOString(),kind,ref,to,subject});
+  const mailId=uid('MAIL');
+  const done=()=>{ DB.save('mails',{id:mailId,date:new Date().toISOString(),kind,ref,to,subject});
     if(typeof window._mcOnSent==='function') window._mcOnSent(); closeModal(); };
   if(DB.config().gmailEnvoi && cloudUrl()){
     const btn=document.getElementById('mc-send'); if(btn){btn.disabled=true;btn.textContent='Envoi…';}
     let attachB64='',attachName='';
     if(window._mcPdf&&window._mcPdf.id){ attachB64=pdfBase64(window._mcPdf.type,window._mcPdf.id); attachName=window._mcPdf.id+'.pdf'; }
-    const j=await cloudPost({action:'sendEmail',to,subject,body:bodyTxt,attachB64,attachName});
+    const j=await cloudPost({action:'sendEmail',to,subject,body:bodyTxt,attachB64,attachName,trackId:mailId});
     if(j&&j.ok){ logActivite('Email envoyé ('+kind+') → '+to); done(); toast('✅ Email envoyé à '+to,'ok'); }
     else { if(btn){btn.disabled=false;btn.textContent='📤 Envoyer maintenant';} toast('Échec envoi : '+((j&&j.info)||'serveur')+'. Ouverture messagerie…','err'); mailtoOpen(to,subject,bodyTxt); logActivite('Email préparé (mailto) → '+to); done(); }
     return;
@@ -1891,6 +1892,7 @@ async function mcSend(kind,ref){
 }
 function mailtoOpen(to,subject,bodyTxt){ window.open('mailto:'+encodeURIComponent(to)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(bodyTxt),'_blank'); }
 function mailEnvoye(kind,ref){ return DB.all('mails').some(m=>m.kind===kind&&m.ref===ref); }
+function isOpened(id){ try{ return (JSON.parse(localStorage.getItem('lm_opens'))||[]).includes(id); }catch(_){ return false; } }
 
 /* ═══════════ VUE : COMPTABILITÉ / URSSAF ═══════════ */
 let _comptaYear=null;
@@ -2137,11 +2139,45 @@ RENDERERS.marketing=function(){
       <div style="max-height:230px;overflow-y:auto;border:1px solid var(--anthr);border-radius:var(--rsm)" onchange="mktCount()">${cbList||'<div class="td-dim" style="padding:10px">Aucun contact avec email.</div>'}</div>
 
       <div id="mkt-progress" class="td-dim" style="margin-top:10px"></div>
-      <div style="text-align:right;margin-top:10px">
-        <button class="btn btn-or" onclick="envoyerCampagne()">📤 Envoyer la campagne</button>
+      <div class="form-grid" style="margin-top:10px;align-items:end">
+        <div class="form-group"><label class="form-label">📅 Planifier (optionnel — vide = envoi immédiat)</label><input class="form-control" type="date" id="mkt-date" min="${todayISO()}"></div>
+        <div style="text-align:right"><button class="btn btn-or" onclick="envoyerCampagne()">📤 Envoyer / Planifier</button></div>
       </div>
-    </div>`;
+      ${!auto?'<div class="td-dim" style="margin-top:6px">Planification + suivi des ouvertures = nécessitent l\'envoi auto Gmail.</div>':''}
+    </div>
+
+    ${marketingStatsHtml()}
+    ${planifsHtml()}`;
 };
+function marketingStatsHtml(){
+  const sent=DB.all('mails').filter(m=>m.to);
+  const opened=sent.filter(m=>isOpened(m.id));
+  const taux=sent.length?Math.round(opened.length/sent.length*100):0;
+  const recent=sent.slice().sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,8);
+  const rows=recent.length?recent.map(m=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--anthr)">
+      <div style="min-width:0"><div class="td-strong" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(m.subject||'(sans objet)')}</div><div class="td-dim">${esc(m.to)} · ${fmtDateShort(m.date)}</div></div>
+      <span class="badge ${isOpened(m.id)?'accepte':'brouillon'}" style="align-self:center">${isOpened(m.id)?'👁 ouvert':'envoyé'}</span></div>`).join(''):'<div class="td-dim">Aucun email envoyé.</div>';
+  return `<div class="panel"><div class="panel-title">📈 Statistiques d'envoi</div>
+    <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
+      ${kpi('info','Emails envoyés',sent.length)}
+      ${kpi('vert','Ouvertures',opened.length)}
+      ${kpi('or','Taux d\'ouverture',taux+' %')}
+    </div>
+    <div class="td-dim" style="margin-bottom:6px">Derniers envois (le suivi d'ouverture peut être sous-estimé : certains clients mail bloquent le pixel).</div>
+    ${rows}</div>`;
+}
+function planifsHtml(){
+  const all=DB.all('planifs').slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  const prevus=all.filter(p=>p.statut==='prévu');
+  if(!all.length) return '';
+  const row=p=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--anthr)">
+      <div style="min-width:0"><div class="td-strong">${fmtDateShort(p.date)} · ${esc(p.subject||'')}</div><div class="td-dim">${esc(p.to)}${esc(p.client?(' · '+p.client):'')}</div></div>
+      <div style="display:flex;gap:6px;align-items:center">${badge(p.statut==='prévu'?'envoye':(p.statut==='envoyé'?'accepte':'refuse'))}
+        ${p.statut==='prévu'?`<button class="btn btn-ghost btn-sm" onclick="annulerPlanif('${p.id}')">Annuler</button>`:''}</div></div>`;
+  return `<div class="panel"><div class="panel-title">📅 Planifications (${prevus.length} à venir)</div>
+    <div class="td-dim" style="margin-bottom:6px">Envoyées automatiquement le jour J par le serveur (cron). Voir DEPLOIEMENT.md pour activer la tâche planifiée.</div>
+    ${all.map(row).join('')}</div>`;
+}
 function mktToggleAll(v){ document.querySelectorAll('#view-marketing .mkt-cb').forEach(cb=>cb.checked=v); mktCount(); }
 function mktCount(){ const n=document.querySelectorAll('#view-marketing .mkt-cb:checked').length; const el=document.getElementById('mkt-count'); if(el)el.textContent=n; }
 async function envoyerCampagne(){
@@ -2149,27 +2185,40 @@ async function envoyerCampagne(){
   if(!ids.length){ toast('Aucun destinataire coché','err'); return; }
   const subjectTpl=document.getElementById('mkt-subject').value;
   const bodyTpl=document.getElementById('mkt-body').value;
+  const date=(document.getElementById('mkt-date')||{}).value||'';
   const auto=DB.config().gmailEnvoi&&cloudUrl();
   const prog=document.getElementById('mkt-progress');
+  const perso=(s,c)=>s.replace(/{prenom}/g,prenomDe(c.prenom||c.nom));
+
+  // PLANIFICATION
+  if(date && date>todayISO()){
+    if(!auto){ toast('Planification = nécessite l\'envoi auto Gmail (Réglages)','err'); return; }
+    let n=0;
+    ids.forEach(id=>{ const c=DB.get('clients',id); if(!c||!c.email)return;
+      DB.save('planifs',{id:uid('PLN'),date,to:c.email,subject:perso(subjectTpl,c),body:perso(bodyTpl,c),trackId:uid('MAIL'),client:(c.prenom+' '+c.nom).trim(),statut:'prévu',createdAt:new Date().toISOString()}); n++; });
+    logActivite('Campagne planifiée : '+n+' email(s) le '+fmtDateFr(date));
+    toast('📅 '+n+' email(s) planifié(s) le '+fmtDateShort(date),'ok'); RENDERERS.marketing(); return;
+  }
+
+  // ENVOI IMMÉDIAT
   if(auto){
     let ok=0,fail=0;
     for(let i=0;i<ids.length;i++){ const c=DB.get('clients',ids[i]); if(!c||!c.email){fail++;continue;}
-      const subj=subjectTpl.replace(/{prenom}/g,prenomDe(c.prenom||c.nom));
-      const body=bodyTpl.replace(/{prenom}/g,prenomDe(c.prenom||c.nom));
+      const mailId=uid('MAIL');
       if(prog) prog.textContent='Envoi '+(i+1)+'/'+ids.length+' → '+c.email+'…';
-      const j=await cloudPost({action:'sendEmail',to:c.email,subject:subj,body:body});
-      if(j&&j.ok){ ok++; DB.save('mails',{id:uid('MAIL'),date:new Date().toISOString(),kind:'campagne',ref:c.id,to:c.email,subject:subj}); } else fail++;
+      const j=await cloudPost({action:'sendEmail',to:c.email,subject:perso(subjectTpl,c),body:perso(bodyTpl,c),trackId:mailId});
+      if(j&&j.ok){ ok++; DB.save('mails',{id:mailId,date:new Date().toISOString(),kind:'campagne',ref:c.id,to:c.email,subject:perso(subjectTpl,c)}); } else fail++;
     }
     if(prog) prog.textContent='';
     logActivite('Campagne envoyée : '+ok+' email(s)'+(fail?', '+fail+' échec(s)':''));
-    toast('✅ '+ok+' envoyé(s)'+(fail?' · '+fail+' échec(s)':''),'ok');
+    toast('✅ '+ok+' envoyé(s)'+(fail?' · '+fail+' échec(s)':''),'ok'); RENDERERS.marketing();
   } else {
     const emails=ids.map(id=>(DB.get('clients',id)||{}).email).filter(Boolean).join(',');
-    const subj=subjectTpl.replace(/{prenom}/g,''); const body=bodyTpl.replace(/{prenom}/g,'');
-    window.open('mailto:?bcc='+encodeURIComponent(emails)+'&subject='+encodeURIComponent(subj)+'&body='+encodeURIComponent(body),'_blank');
+    window.open('mailto:?bcc='+encodeURIComponent(emails)+'&subject='+encodeURIComponent(subjectTpl.replace(/{prenom}/g,''))+'&body='+encodeURIComponent(bodyTpl.replace(/{prenom}/g,'')),'_blank');
     toast('Messagerie ouverte ('+ids.length+' contacts en Cci)','ok');
   }
 }
+function annulerPlanif(id){ DB.remove('planifs',id); RENDERERS.marketing(); toast('Planification annulée','ok'); }
 
 /* ═══════════ VUE : RÉGLAGES & CATALOGUE ═══════════ */
 RENDERERS.reglages=function(){
@@ -2320,6 +2369,7 @@ async function cloudPull(){ const url=cloudUrl(); if(!url){ setCloudStatus('off'
     if(total===0){ cloudPushAll(); return 'init'; }            // cloud vide → on l'initialise depuis le local
     ENTITIES.forEach(e=>{ if(Array.isArray(j.data[e])) DB._writeLocal(e,j.data[e]); });  // adopte le cloud (local-only, pas de re-push)
     if(j.config&&Object.keys(j.config).length){ const cur=DB.config(); localStorage.setItem(LS_PREFIX+'config', JSON.stringify(Object.assign({},j.config,{passwordHash:cur.passwordHash||j.config.passwordHash}))); }
+    try{ if(Array.isArray(j.opens)) localStorage.setItem('lm_opens', JSON.stringify(j.opens.map(o=>o.m))); }catch(_){}
     setCloudStatus('ok'); return 'pulled';
   }catch(_){ setCloudStatus('err'); return 'err'; } }
 function archivePdfCloud(doc,kind,filename,year){ if(!cloudUrl())return;
