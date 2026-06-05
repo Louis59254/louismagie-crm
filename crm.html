@@ -2307,8 +2307,7 @@ RENDERERS.reglages=function(){
     <div class="panel"><div class="panel-title">☁️ Backend de synchronisation</div>
       <div class="td-dim" style="margin-bottom:12px">Synchro sécurisée par <strong>ton mot de passe</strong> : connecte-toi avec sur n'importe quel appareil → données synchronisées + PDF archivés. Plus de token à recopier. Laisse l'URL vide = 100 % local.</div>
       <div class="form-grid">
-        <div class="form-group"><label class="form-label">URL backend — laisse VIDE = auto (même domaine)</label><input class="form-control" id="cfg-appsScriptUrl" value="${esc(cfg.appsScriptUrl||'')}" placeholder="auto : ${location.origin}/api.php"></div>
-        <div class="form-group"><label class="form-label">Token (optionnel — Apps Script uniquement)</label><input class="form-control" id="cfg-backendToken" value="${esc(cfg.backendToken||'')}" placeholder="laisse vide avec Hostinger/PHP"></div>
+        <div class="form-group full"><label class="form-label">URL backend — laisse VIDE = auto (même domaine)</label><input class="form-control" id="cfg-appsScriptUrl" value="${esc(cfg.appsScriptUrl||'')}" placeholder="auto : ${location.origin}/api.php"></div>
         <div class="form-group"><label class="form-label">Envoi auto via Gmail (serveur)</label><select class="form-control" id="cfg-gmailEnvoi"><option value="non"${!cfg.gmailEnvoi?' selected':''}>Non — ouvre ma messagerie</option><option value="oui"${cfg.gmailEnvoi?' selected':''}>Oui — envoi direct + PDF joint</option></select></div>
       </div>
       <div class="td-dim" style="margin-top:4px">Envoi auto = nécessite <code>GMAIL_USER</code> + <code>GMAIL_APP_PASSWORD</code> dans Coolify (mot de passe d'application Gmail, 2FA requise).</div>
