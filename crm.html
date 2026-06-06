@@ -847,7 +847,8 @@ function voirDevis(id){
   const d=DB.get('devis',id); if(!d)return;
   const acompte=Math.round((+d.montantTTC||0)*(d.acomptePct||0)/100);
   const lignes=(d.prestations||[]).map(p=>`<tr><td>${esc(p.label)}${p.duree?' <span class="td-dim">('+esc(p.duree)+')</span>':''}</td><td style="text-align:right">${fmtEur(p.prix)}</td></tr>`).join('');
-  const facturee=!!DB.all('factures').find(f=>f.idDevis===id);
+  const facturee=!!factSoldeDe(id);           // facture solde/complète existe
+  const facAcompte=factAcompteDe(id);          // facture d'acompte existe ?
   const refuse=d.statut==='Refusé';
   const order=['Brouillon','Envoyé','Accepté','Acompte reçu'];
   const cur=facturee?4:order.indexOf(d.statut);
@@ -862,12 +863,12 @@ function voirDevis(id){
   if(d.statut==='Brouillon') manu=`<button class="btn btn-ghost" onclick="majDevis('${id}','Envoyé');voirDevis('${id}')">✓ Marquer envoyé</button>`;
   else if(d.statut==='Envoyé') manu=`<button class="btn btn-success" onclick="majDevis('${id}','Accepté');voirDevis('${id}')">✓ Accepté</button><button class="btn btn-warn" onclick="majDevis('${id}','Refusé');voirDevis('${id}')">✗ Refusé</button>`;
   else if(d.statut==='Accepté') manu=`<button class="btn btn-or" onclick="enregistrerAcompte('${id}');voirDevis('${id}')">💰 Acompte reçu</button>${facturee?'':`<button class="btn btn-ghost" onclick="transformerEnFacture('${id}')">🧾 Facturer</button>`}`;
-  else if(d.statut==='Acompte reçu') manu=`${facturee?'':`<button class="btn btn-or" onclick="transformerEnFacture('${id}')">🧾 Facturer le solde</button>`}<button class="btn btn-ghost" onclick="annulerAcompte('${id}')">↩ Annuler l'acompte</button><button class="btn btn-ghost" onclick="closeModal();nav('agenda')">📅 Agenda</button>`;
+  else if(d.statut==='Acompte reçu') manu=`${facAcompte?'<span class="td-dim" style="align-self:center">✓ Facture d\'acompte '+esc(facAcompte.id)+'</span>':`<button class="btn btn-ghost" onclick="genererFactureAcompte('${id}')">🧾 Facture d'acompte</button>`}${facturee?'':`<button class="btn btn-or" onclick="transformerEnFacture('${id}')">🧾 Facturer le solde</button>`}<button class="btn btn-ghost" onclick="annulerAcompte('${id}')">↩ Annuler l'acompte</button>`;
   else manu='<div class="td-dim">—</div>';
 
   const body=`${bar}
   <div class="info-grid">
-    ${infoItem('Client',esc(d.nomClient))}${infoItem('Statut',badge(d.statut)+(facturee?' '+badge('Facturé'):''))}
+    ${infoItem('Client',esc(d.nomClient))}${infoItem('Statut',badge(d.statut)+(d.acompteRecu>0?' <span class="badge accepte">💰 acompte encaissé</span>':'')+(facturee?' '+badge('Facturé'):''))}
     ${infoItem('Événement',fmtDateFr(d.dateEvenement)+' · '+esc(d.creneau||'')+(d.horaire?' · '+esc(d.horaire):''))}${infoItem('Lieu',esc(d.lieu||'—'))}
     ${infoItem('Invités',esc(d.nbInvites||'—'))}${infoItem('Distance',(d.distanceKm||0)+' km')}
   </div>
@@ -900,10 +901,7 @@ function envoyerDevisMail(id){
   openMailComposer({titre:'Envoyer le devis '+id, ...tpl, pdfId:id, pdfType:'Devis', kind:'devis', ref:id,
     onSent:()=>{ if(d.statut==='Brouillon'){ d.statut='Envoyé'; d.dateEnvoi=todayISO(); DB.save('devis',d); updateBadges(); } RENDERERS.devis(); }});
 }
-function transformerEnFacture(id){
-  if(DB.all('factures').find(f=>f.idDevis===id)){ toast('Facture déjà créée pour ce devis','err'); return; }
-  facturerSolde(id);
-}
+function transformerEnFacture(id){ facturerSolde(id); }
 function prestaFields(d){ return {dateEvenement:d.dateEvenement,creneau:d.creneau,horaire:d.horaire||'',lieu:d.lieu,distanceKm:d.distanceKm||0,typePrestation:(d.prestations||[]).map(p=>p.label).join(' + '),duree:(d.prestations||[]).map(p=>p.duree).filter(Boolean).join(' / '),contactSurPlace:d.nomClient+' '+(d.tel||'')}; }
 function statutPrestaCible(statutDevis){
   if(statutDevis==='Refusé') return null;                       // pas dans l'agenda
@@ -1311,10 +1309,10 @@ RENDERERS.factures=function(){
     const cli=DB.get('clients',f.idClient); const nom=cli?cli.nom:(DB.get('devis',f.idDevis)||{}).nomClient||'—';
     const echue=f.statut!=='Payée'&&daysSince(f.dateEcheance)>0;
     return `<tr style="cursor:pointer" onclick="voirFacture('${f.id}')">
-      <td class="td-strong" data-label="N°">${esc(f.id)}</td>
+      <td class="td-strong" data-label="N°">${esc(f.id)}<div class="td-dim">${factTypeLabel(f)}</div></td>
       <td data-label="Client">${esc(nom)}<div class="td-dim">${esc(f.idDevis)}</div></td>
-      <td class="td-strong" data-label="Montant TTC">${fmtEur(f.montantTTC)}<div class="td-dim">acompte ${fmtEur(f.acompteVerse)}</div></td>
-      <td class="td-strong" data-label="Solde dû" style="color:${f.statut==='Payée'?'var(--ok)':'var(--or)'}">${fmtEur(f.soldeDu)}</td>
+      <td class="td-strong" data-label="Montant">${fmtEur(factMontant(f))}${f.type==='solde'?`<div class="td-dim">sur ${fmtEur(f.montantTTC)} − acompte ${fmtEur(f.acompteVerse)}</div>`:''}</td>
+      <td class="td-strong" data-label="Reste dû" style="color:${f.statut==='Payée'?'var(--ok)':'var(--or)'}">${fmtEur(f.soldeDu)}</td>
       <td data-label="Échéance">${fmtDateShort(f.dateEcheance)}${echue?' <span class="badge impaye">échue</span>':''}</td>
       <td data-label="Statut">${badge(f.statut)}</td>
       <td data-label=""><div class="td-actions">${factureQuick(f)}</div></td></tr>`;}).join('')
@@ -1329,14 +1327,38 @@ RENDERERS.factures=function(){
     <div class="table-wrap"><div class="table-header"><div class="table-title">Factures</div></div>
     <div class="table-scroll"><table><thead><tr><th>N°</th><th>Client</th><th>Montant TTC</th><th>Solde dû</th><th>Échéance</th><th>Statut</th><th></th></tr></thead><tbody>${body}</tbody></table></div></div>`;
 };
+function factMontant(f){ return f.montantFacture!=null?+f.montantFacture:(+f.montantTTC||0); }   // montant facturé par CETTE facture
+function factTypeLabel(f){ return f.type==='acompte'?'💰 Acompte':(f.type==='solde'?'Solde':'Facture'); }
+function factAcompteDe(idDevis){ return DB.all('factures').find(f=>f.idDevis===idDevis&&f.type==='acompte'); }
+function factSoldeDe(idDevis){ return DB.all('factures').find(f=>f.idDevis===idDevis&&f.type!=='acompte'); } // solde ou complète
+
+// Facture d'ACOMPTE (document pour l'acompte encaissé). Statut Payée (déjà encaissé).
+function genererFactureAcompte(idDevis){
+  const d=DB.get('devis',idDevis); if(!d)return;
+  const m=+d.acompteRecu||0;
+  if(m<=0){ toast('Aucun acompte encaissé sur ce devis','err'); return; }
+  if(factAcompteDe(idDevis)){ toast('Facture d\'acompte déjà émise','err'); return; }
+  DB.save('factures',{id:nextId('FAC','factures'),type:'acompte',dateEmission:todayISO(),idDevis:d.id,idClient:d.idClient,
+    montantTTC:+d.montantTTC,montantFacture:m,acompteVerse:0,soldeDu:0,
+    dateEcheance:todayISO(),statut:'Payée',datePaiement:d.dateAcceptation||todayISO(),dateEnvoi:'',dateRelance1:'',dateRelance2:''});
+  logActivite('Facture d\'acompte émise · '+idDevis+' ('+fmtEur(m)+')');
+  closeModal(); updateBadges(); toast('🧾 Facture d\'acompte créée ('+fmtEur(m)+')','ok'); nav('factures');
+}
+// Facture de SOLDE (si acompte) ou COMPLÈTE (sans acompte)
 function facturerSolde(idDevis){
   const d=DB.get('devis',idDevis); if(!d)return;
-  if(DB.all('factures').find(f=>f.idDevis===idDevis)){ toast('Facture déjà émise pour ce devis','err'); return; }
-  const acompte=+d.acompteRecu||0;   // SEULEMENT l'acompte réellement encaissé (0 si pas reçu)
+  if(factSoldeDe(idDevis)){ toast('Facture (solde) déjà émise pour ce devis','err'); return; }
+  const acompte=+d.acompteRecu||0;
+  const total=+d.montantTTC||0;
+  const facAc=factAcompteDe(idDevis);
+  const montantFacture=total-acompte;
+  const type=acompte>0?'solde':'complete';
   const cfg=DB.config(); const ech=new Date(); ech.setDate(ech.getDate()+(cfg.delaiRelance1||30));
-  DB.save('factures',{id:nextId('FAC','factures'),dateEmission:todayISO(),idDevis:d.id,idClient:d.idClient,montantTTC:+d.montantTTC,acompteVerse:acompte,soldeDu:(+d.montantTTC-acompte),dateEcheance:ech.toISOString().slice(0,10),statut:'Émise',datePaiement:'',dateRelance1:'',dateRelance2:''});
-  logActivite('Facture émise · devis '+idDevis+(acompte?' (acompte '+fmtEur(acompte)+' déduit)':' (sans acompte)'));
-  closeModal(); updateBadges(); toast(acompte?'🧾 Facture émise (acompte déduit)':'🧾 Facture émise (montant total)','ok'); nav('factures');
+  DB.save('factures',{id:nextId('FAC','factures'),type,dateEmission:todayISO(),idDevis:d.id,idClient:d.idClient,
+    montantTTC:total,montantFacture,acompteVerse:acompte,acompteRef:facAc?facAc.id:'',soldeDu:montantFacture,
+    dateEcheance:ech.toISOString().slice(0,10),statut:'Émise',datePaiement:'',dateEnvoi:'',dateRelance1:'',dateRelance2:''});
+  logActivite('Facture '+type+' émise · '+idDevis+(acompte?' (acompte '+fmtEur(acompte)+' déduit)':''));
+  closeModal(); updateBadges(); toast(acompte?'🧾 Facture de solde émise':'🧾 Facture émise','ok'); nav('factures');
 }
 function marquerPayee(id){
   const f=DB.get('factures',id); const solde=+f.soldeDu||0;
@@ -1395,16 +1417,16 @@ function voirFacture(id){
 
   const body=`${bar}${relInfo}
     <div class="info-grid" style="margin-bottom:12px">
-      ${infoItem('Client',esc(nom))}${infoItem('Devis lié',esc(f.idDevis||'—'))}
-      ${infoItem('Montant TTC',fmtEur(f.montantTTC))}${infoItem('Acompte versé',fmtEur(f.acompteVerse))}
-      ${infoItem('Solde dû',fmtEur(f.soldeDu))}${infoItem('Statut',badge(f.statut))}
+      ${infoItem('Type',factTypeLabel(f)+(f.type==='solde'?' (acompte déduit)':''))}${infoItem('Client',esc(nom))}
+      ${infoItem(f.type==='acompte'?'Montant acompte':'Montant facturé',fmtEur(factMontant(f)))}${infoItem('Total prestation',fmtEur(f.montantTTC))}
+      ${f.type==='solde'?infoItem('Acompte déjà versé',fmtEur(f.acompteVerse)):infoItem('Devis lié',esc(f.idDevis||'—'))}${infoItem('Reste dû',fmtEur(f.soldeDu))}
     </div>
     ${action}
     <div class="action-grid">
       <div class="action-box"><div class="action-box-title">📧 Par email (semi-auto)</div>${emailBtns}</div>
       <div class="action-box"><div class="action-box-title">✋ Déjà fait hors CRM</div>${manuBtns}</div>
     </div>`;
-  const peutReculer=(f.statut!=='Émise')||f.dateEnvoi||mailDate('facture',id);
+  const peutReculer=f.type!=='acompte'&&((f.statut!=='Émise')||f.dateEnvoi||mailDate('facture',id));
   openModal('Facture · '+esc(id),body,`<button class="btn btn-danger" onclick="supprimerFacture('${id}')">🗑 Supprimer</button>${peutReculer?`<button class="btn btn-ghost" onclick="factureBack('${id}')">↩ Étape précédente</button>`:''}<button class="btn btn-ghost" onclick="event.stopPropagation();apercuPdf('Facture','${id}')">👁 Aperçu PDF</button><button class="btn btn-ghost" onclick="closeModal()">Fermer</button>`);
 }
 function marquerFactureEnvoyee(id){ const f=DB.get('factures',id); f.dateEnvoi=todayISO(); DB.save('factures',f); logActivite('Facture '+id+' marquée envoyée (manuel)'); updateBadges(); RENDERERS.factures(); if(document.getElementById('modal-bg').classList.contains('open')) voirFacture(id); toast('Facture marquée envoyée','ok'); }
@@ -1477,18 +1499,33 @@ function pdfFacture(id,returnDoc){
   const f=DB.get('factures',id); if(!f)return;
   const dev=DB.get('devis',f.idDevis)||{}; const cli=DB.get('clients',f.idClient)||{}; const nom=clientNomFacture(f);
   const doc=pdfNew();
-  let y=pdfHeader(doc,'FACTURE',f.id,[['Émise le',fmtDateShort(f.dateEmission)],['Échéance',fmtDateShort(f.dateEcheance)]]);
+  const titre=f.type==='acompte'?'FACTURE D\'ACOMPTE':(f.type==='solde'?'FACTURE DE SOLDE':'FACTURE');
+  let y=pdfHeader(doc,titre,f.id,[['Émise le',fmtDateShort(f.dateEmission)],['Échéance',fmtDateShort(f.dateEcheance)]]);
   y=pdfBlocs(doc,y,
     {titre:'FACTURÉ À',nom,lines:[cli.email,cli.tel,cli.adresse,cli.siren?('SIREN '+cli.siren):'',f.idDevis?('Réf. devis '+f.idDevis):'']},
     dev.dateEvenement?{titre:'PRESTATION',lines:['Date : '+fmtDateFr(dev.dateEvenement),dev.creneau?('Créneau : '+dev.creneau):'',dev.horaire?('Horaire : '+dev.horaire):'','Lieu : '+(dev.lieu||'—')]}:null);
-  const desc='Prestation de magie'+(dev.dateEvenement?(' — '+fmtDateFr(dev.dateEvenement)):'');
-  const body=[[desc,fmtEurPdf(f.montantTTC)],['Acompte de réservation déjà versé','- '+fmtEurPdf(f.acompteVerse)]];
+  const dateP=dev.dateEvenement?(' — '+fmtDateFr(dev.dateEvenement)):'';
+  let body, totaux, totalLabel, totalVal, cond;
+  if(f.type==='acompte'){
+    body=[['Acompte de réservation sur prestation de magie'+dateP,fmtEurPdf(f.montantFacture)]];
+    totaux=[['Montant total de la prestation',fmtEurPdf(f.montantTTC)]];
+    totalLabel='ACOMPTE ENCAISSÉ'; totalVal=fmtEurPdf(f.montantFacture);
+    cond=['Acompte encaissé le '+fmtDateFr(f.datePaiement)+'. Le solde sera facturé après la prestation.','Cette facture d\'acompte sera déduite de la facture de solde.'];
+  } else if(f.type==='solde'){
+    body=[['Prestation de magie'+dateP,fmtEurPdf(f.montantTTC)],['Acompte déjà facturé'+(f.acompteRef?(' (facture '+f.acompteRef+')'):''),'- '+fmtEurPdf(f.acompteVerse)]];
+    totaux=[['Montant total prestation',fmtEurPdf(f.montantTTC)],['Acompte déjà versé','- '+fmtEurPdf(f.acompteVerse)]];
+    totalLabel='SOLDE À RÉGLER'; totalVal=fmtEurPdf(f.soldeDu);
+    cond = f.statut==='Payée'?['Solde acquitté le '+fmtDateFr(f.datePaiement)+'. Merci de votre confiance.']
+      :['Merci de régler le solde de '+fmtEurPdf(f.soldeDu)+' avant le '+fmtDateFr(f.dateEcheance)+'.','En cas de retard : pénalités au taux légal, indemnité forfaitaire de 40 € (art. L441-10 C. com.).'];
+  } else {
+    body=[['Prestation de magie'+dateP,fmtEurPdf(f.montantFacture)]];
+    totaux=[['Montant prestation',fmtEurPdf(f.montantFacture)]];
+    totalLabel='TOTAL À RÉGLER'; totalVal=fmtEurPdf(f.soldeDu);
+    cond = f.statut==='Payée'?['Facture acquittée le '+fmtDateFr(f.datePaiement)+'. Merci de votre confiance.']
+      :['Merci de régler '+fmtEurPdf(f.soldeDu)+' avant le '+fmtDateFr(f.dateEcheance)+'.','En cas de retard : pénalités au taux légal, indemnité forfaitaire de 40 € (art. L441-10 C. com.).'];
+  }
   pdfTable(doc,y,['Désignation','Montant'],body);
-  let ty=doc.lastAutoTable.finalY+9;
-  pdfTotaux(doc,ty,[['Montant total TTC',fmtEurPdf(f.montantTTC)],['Acompte versé','- '+fmtEurPdf(f.acompteVerse)]],['SOLDE À RÉGLER',fmtEurPdf(f.soldeDu)]);
-  const cond = f.statut==='Payée'
-    ? ['Facture acquittée le '+fmtDateFr(f.datePaiement)+'. Merci de votre confiance.']
-    : ['Merci de régler le solde de '+fmtEurPdf(f.soldeDu)+' avant le '+fmtDateFr(f.dateEcheance)+'.','En cas de retard : pénalités au taux légal, indemnité forfaitaire de 40 € (art. L441-10 C. com.).'];
+  pdfTotaux(doc,doc.lastAutoTable.finalY+9,totaux,[totalLabel,totalVal]);
   pdfReglement(doc,doc.lastAutoTable.finalY+9,'CONDITIONS DE PAIEMENT',cond);
   pdfFooter(doc);
   if(returnDoc) return doc;
@@ -1844,8 +1881,14 @@ const EMAIL_TPL={
   devis(d){ const ac=Math.round((+d.montantTTC||0)*(d.acomptePct||0)/100);
     return { to:d.email, subject:'Votre devis LouisMagie — '+d.id,
       body:`Bonjour ${prenomDe(d.nomClient)},\n\nSuite à votre demande, voici votre devis ${d.id} pour la prestation du ${fmtDateFr(d.dateEvenement)} (${d.creneau||''}) à ${d.lieu||''}.\n\nMontant total TTC : ${fmtEur(d.montantTTC)}\nAcompte de réservation (${d.acomptePct||0} %) : ${fmtEur(ac)}\n\nLa date est confirmée et bloquée dès réception de l'acompte. Le devis détaillé est joint en PDF.\n\nJe reste à votre disposition pour toute question.\n\n${sig()}` }; },
-  facture(f,nom){ return { to:(DB.get('clients',f.idClient)||{}).email||'', subject:'Votre facture LouisMagie — '+f.id,
-      body:`Bonjour ${prenomDe(nom)},\n\nVeuillez trouver ci-joint la facture ${f.id}.\n\nMontant total TTC : ${fmtEur(f.montantTTC)}\nAcompte déjà versé : ${fmtEur(f.acompteVerse)}\nSolde à régler : ${fmtEur(f.soldeDu)}\nÉchéance : ${fmtDateFr(f.dateEcheance)}\n\nMerci de votre confiance.\n\n${sig()}` }; },
+  facture(f,nom){ const lbl=f.type==='acompte'?'facture d\'acompte':(f.type==='solde'?'facture de solde':'facture');
+    const corps=f.type==='acompte'
+      ? `Montant de l'acompte : ${fmtEur(factMontant(f))}\n(acompte de réservation encaissé — le solde sera facturé après la prestation)`
+      : (f.type==='solde'
+        ? `Montant total prestation : ${fmtEur(f.montantTTC)}\nAcompte déjà versé : ${fmtEur(f.acompteVerse)}\nSolde à régler : ${fmtEur(f.soldeDu)}\nÉchéance : ${fmtDateFr(f.dateEcheance)}`
+        : `Montant à régler : ${fmtEur(f.soldeDu)}\nÉchéance : ${fmtDateFr(f.dateEcheance)}`);
+    return { to:(DB.get('clients',f.idClient)||{}).email||'', subject:'Votre '+lbl+' LouisMagie — '+f.id,
+      body:`Bonjour ${prenomDe(nom)},\n\nVeuillez trouver ci-joint votre ${lbl} ${f.id}.\n\n${corps}\n\nMerci de votre confiance.\n\n${sig()}` }; },
   relance1(f,nom){ return { to:(DB.get('clients',f.idClient)||{}).email||'', subject:'Rappel — facture '+f.id+' en attente de règlement',
       body:`Bonjour ${prenomDe(nom)},\n\nSauf erreur de notre part, la facture ${f.id} (solde de ${fmtEur(f.soldeDu)}), arrivée à échéance le ${fmtDateFr(f.dateEcheance)}, reste impayée.\n\nMerci de bien vouloir procéder au règlement dès que possible.\n\nBien cordialement,\n${sig()}` }; },
   relance2(f,nom){ return { to:(DB.get('clients',f.idClient)||{}).email||'', subject:'2ème rappel — facture '+f.id,
