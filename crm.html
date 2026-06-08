@@ -1567,13 +1567,13 @@ RENDERERS.clients=function(){
   if(_fCli) all=all.filter(c=>c.type===_fCli);
   all.sort((a,b)=>b.caTotal-a.caTotal);
 
-  const body=all.length?all.map(c=>`<tr>
+  const body=all.length?all.map(c=>`<tr class="cli-row" data-s="${esc((c.prenom+' '+c.nom+' '+(c.email||'')+' '+(c.adresse||'')+' '+c.type).toLowerCase())}">
     <td class="td-strong" data-label="Nom">${esc((c.prenom+' '+c.nom).trim())}<div class="td-dim">${esc(c.email||'')}</div></td>
     <td data-label="Type">${badge(c.type==='partenaire'?'accepte':c.type==='entreprise'?'envoye-info':'brouillon')} ${esc(c.type)}</td>
     <td data-label="Ville">${esc(c.adresse||'—')}</td>
     <td data-label="Activité">${c.nbDevis||0} devis · ${c.nbPrestations||0} presta.</td>
     <td class="td-strong" data-label="CA payé">${fmtEur(c.caTotal)}</td>
-    <td data-label=""><div class="td-actions"><button class="btn btn-ghost btn-sm" onclick="voirClient('${c.id}')">Fiche</button>${c.email?`<button class="btn btn-ghost btn-sm" onclick="mailClient('${c.id}')">✉ Email</button>`:''}</div></td></tr>`).join('')
+    <td data-label=""><div class="td-actions"><button class="btn btn-ghost btn-sm" onclick="voirClient('${c.id}')">👁 Fiche</button>${c.email?`<button class="btn btn-ghost btn-sm" onclick="mailClient('${c.id}')">✉ Email</button>`:''}</div></td></tr>`).join('')
     :'<tr><td colspan="6"><div class="empty"><div class="empty-icon">👥</div><div class="empty-text">Aucun client</div></div></td></tr>';
 
   const topHtml=top.map((c,i)=>`<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--anthr)">
@@ -1582,14 +1582,17 @@ RENDERERS.clients=function(){
   const opt=(v,l)=>`<option value="${v}"${v===_fCli?' selected':''}>${l}</option>`;
   document.getElementById('view-clients').innerHTML=`
     <div class="charts-grid" style="grid-template-columns:2fr 1fr;align-items:start">
-      <div class="table-wrap"><div class="table-header"><div class="table-title">Clients & partenaires</div>
+      <div class="table-wrap"><div class="table-header" style="flex-wrap:wrap">
+        <div class="table-title">Clients & partenaires <span class="td-dim" style="font-weight:400">(${all.length})</span></div>
         <select class="filter-input" onchange="_fCli=this.value;RENDERERS.clients()">
           ${opt('','Tous les types')}${opt('particulier','Particuliers')}${opt('entreprise','Entreprises')}${opt('partenaire','Partenaires')}
         </select></div>
+        <div style="padding:0 16px 12px"><input class="form-control" id="cli-search" placeholder="🔍 Rechercher (nom, email, ville…)" oninput="cliSearchFilter(this.value)"></div>
         <div class="table-scroll"><table><thead><tr><th>Nom</th><th>Type</th><th>Ville</th><th>Activité</th><th>CA payé</th><th></th></tr></thead><tbody>${body}</tbody></table></div></div>
       <div class="panel"><div class="panel-title">Top 5 · CA</div>${topHtml}</div>
     </div>`;
 };
+function cliSearchFilter(q){ q=(q||'').toLowerCase().trim(); document.querySelectorAll('#view-clients .cli-row').forEach(l=>{ l.style.display=(!q||(l.dataset.s||'').includes(q))?'':'none'; }); }
 function voirClient(id){
   const c=recalcClient(DB.get('clients',id)); if(!c)return;
   const dv=DB.all('devis').filter(d=>d.idClient===id);
@@ -1638,14 +1641,14 @@ function editClient(id){
   const c=id?DB.get('clients',id):{id:'',nom:'',prenom:'',email:'',tel:'',adresse:'',type:'particulier',sourceInitiale:'',siren:'',naf:''};
   const f=(l,k,t)=>`<div class="form-group"><label class="form-label">${l}</label><input class="form-control" id="cli-${k}" value="${esc(c[k]||'')}" type="${t||'text'}"></div>`;
   const body=`
-    <div class="panel" style="background:var(--noir);margin-bottom:14px">
-      <label class="form-label">🔍 Recherche entreprise (base officielle INSEE/SIRENE — gratuit)</label>
-      <div style="display:flex;gap:8px;margin-top:6px">
-        <input class="form-control" id="ent-q" placeholder="Nom de société, SIREN, dirigeant…" onkeydown="if(event.key==='Enter'){event.preventDefault();searchEntreprise()}">
+    <details ${id?'':'open'} style="margin-bottom:14px;background:var(--noir);border:1px solid var(--anthr);border-radius:var(--rsm);padding:10px 12px">
+      <summary style="cursor:pointer;font-size:12px;color:var(--or);font-weight:600">🔍 Pré-remplir depuis une entreprise (INSEE/SIRENE)</summary>
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+        <input class="form-control" id="ent-q" style="flex:1;min-width:160px" placeholder="Nom de société, SIREN, dirigeant…" onkeydown="if(event.key==='Enter'){event.preventDefault();searchEntreprise()}">
         <button class="btn btn-or" type="button" onclick="searchEntreprise()">Rechercher</button>
       </div>
       <div id="ent-results" style="margin-top:10px"></div>
-    </div>
+    </details>
     <div class="form-grid">${f('Nom / Raison sociale','nom')}${f('Prénom (si particulier)','prenom')}${f('Email','email','email')}${f('Téléphone','tel')}${f('Ville / Adresse','adresse')}
     <div class="form-group"><label class="form-label">Type</label><select class="form-control" id="cli-type">
       ${['particulier','entreprise','partenaire'].map(t=>`<option${t===c.type?' selected':''}>${t}</option>`).join('')}</select></div>
@@ -1685,12 +1688,12 @@ function pickEntreprise(i){
   toast('Entreprise importée','ok');
 }
 function saveClient(id){
-  const g=k=>document.getElementById('cli-'+k).value.trim();
-  if(!g('nom')){ toast('Le nom est requis','err'); return; }
-  const c=id?DB.get('clients',id):{id:uid('CLI'),date1erDevis:'',nbDevis:0,nbPrestations:0,caTotal:0};
-  ['nom','prenom','email','tel','adresse','type','sourceInitiale','siren','naf'].forEach(k=>{const e=document.getElementById('cli-'+k); if(e)c[k]=e.value.trim();});
+  const el=k=>document.getElementById('cli-'+k);
+  if(!el('nom')||!el('nom').value.trim()){ toast('Le nom est requis','err'); return; }
+  const c=(id&&DB.get('clients',id))||{id:(id||uid('CLI')),date1erDevis:'',nbDevis:0,nbPrestations:0,caTotal:0};
+  ['nom','prenom','email','tel','adresse','type','sourceInitiale','siren','naf'].forEach(k=>{const e=el(k); if(e)c[k]=e.value.trim();});
   DB.save('clients',c); logActivite((id?'Client modifié':'Client créé')+' · '+c.nom);
-  closeModal(); RENDERERS.clients(); toast('Client enregistré','ok');
+  closeModal(); RENDERERS.clients(); toast(id?'Client modifié ✓':'Client créé ✓','ok');
 }
 function mailClient(id){
   const c=DB.get('clients',id); if(!c)return;
