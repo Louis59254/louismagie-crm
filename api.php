@@ -34,6 +34,8 @@ function smtpSend($to,$subject,$bodyText,$attachName='',$attachB64='',$trackUrl=
   $from=getenv('SMTP_FROM') ?: (getenv('GMAIL_FROM') ?: $user);
   if(!$user||!$pass) return [false,'SMTP non configuré (SMTP_USER / SMTP_PASS)'];
   if(!$to) return [false,'destinataire vide'];
+  // Infomaniak : force SSL implicite sur 465 (leur 587 STARTTLS rejette nos requêtes anti-pipelining)
+  if(strpos($host,'infomaniak')!==false){ $port='465'; }
   $secure = ($port=='465') || (getenv('SMTP_SECURE')==='ssl');   // SSL implicite (évite l'anti-pipelining STARTTLS)
   $ctx=stream_context_create(['ssl'=>['verify_peer'=>false,'verify_peer_name'=>false]]);
   $proto=$secure?'ssl':'tcp';
