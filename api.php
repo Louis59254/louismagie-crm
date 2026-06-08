@@ -41,15 +41,17 @@ function smtpSend($to,$subject,$bodyText,$attachName='',$attachB64='',$trackUrl=
   $proto=$secure?'ssl':'tcp';
   $fp=@stream_socket_client("$proto://$host:$port",$en,$es,15,STREAM_CLIENT_CONNECT,$ctx);
   if(!$fp) return [false,"connexion SMTP impossible ($host:$port): $es"];
-  stream_set_timeout($fp,15);
-  $read=function() use($fp){ $d=''; while($l=fgets($fp,515)){ $d.=$l; if(strlen($l)>=4 && $l[3]==' ') break; } return $d; };
-  $cmd=function($c) use($fp,$read){ fputs($fp,$c."\r\n"); return $read(); };
+  stream_set_timeout($fp,20); stream_set_blocking($fp,true);
+  $helo = (getenv('SMTP_FROM') && strpos(getenv('SMTP_FROM'),'@')) ? substr(strrchr(getenv('SMTP_FROM'),'@'),1) : 'louismagie.fr';
+  // lit une réponse SMTP complète : lignes entières (jusqu'au \n), s'arrête sur la dernière ligne « code<espace> »
+  $read=function() use($fp){ $d=''; while(($l=fgets($fp,8192))!==false){ $d.=$l; if(substr($l,-1)==="\n" && strlen($l)>=4 && $l[3]===' ') break; } return $d; };
+  $cmd=function($c) use($fp,$read){ fwrite($fp,$c."\r\n"); return $read(); };
   $read();
-  $cmd("EHLO louismagie");
+  $cmd("EHLO $helo");
   if(!$secure){
     $cmd("STARTTLS");
     if(!stream_socket_enable_crypto($fp,true,STREAM_CRYPTO_METHOD_TLS_CLIENT)) return [false,'TLS échec'];
-    $cmd("EHLO louismagie");
+    $cmd("EHLO $helo");
   }
   $cmd("AUTH LOGIN"); $cmd(base64_encode($user));
   $r=$cmd(base64_encode($pass));
