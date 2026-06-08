@@ -151,7 +151,14 @@ if ($action === 'runScheduled') {
 /* ===== Diagnostic SMTP (clé requise) ===== */
 if ($action === 'smtptest') {
   if (($_GET['key'] ?? '') === '' || ($_GET['key'] ?? '') !== getenv('CRON_KEY')) out(['ok'=>false,'error'=>'clé invalide (mets CRON_KEY dans Coolify)']);
-  out(smtpDiag($_GET['to'] ?? (getenv('SMTP_USER') ?: 'test@example.com')));
+  $to = $_GET['to'] ?? (getenv('SMTP_USER') ?: 'test@example.com');
+  if (isset($_GET['full'])) {  // teste le VRAI chemin : multipart + PDF joint + HTML/tracking
+    $tu = (isset($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off'?'https':'http').'://'.$_SERVER['HTTP_HOST'].$_SERVER['SCRIPT_NAME'].'?action=track&m=diagfull';
+    $att = base64_encode(str_repeat("Faux PDF de test pour diagnostic SMTP. ", 600)); // ~23 Ko
+    list($ok,$info)=smtpSend($to,'Test SMTP CRM (PDF+HTML)',"Bonjour,\n\nCeci est un test d'envoi complet avec pièce jointe et HTML.\n\nLouisMagie",'test.pdf',$att,$tu);
+    out(['ok'=>$ok,'info'=>$info,'mode'=>'complet (multipart + pièce jointe + HTML)']);
+  }
+  out(smtpDiag($to));
 }
 
 /* ===== Auth par mot de passe (1 seul secret = le mot de passe du CRM) ===== */
