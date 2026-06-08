@@ -34,15 +34,22 @@ function smtpSend($to,$subject,$bodyText,$attachName='',$attachB64='',$trackUrl=
   $from=getenv('SMTP_FROM') ?: (getenv('GMAIL_FROM') ?: $user);
   if(!$user||!$pass) return [false,'SMTP non configuré (SMTP_USER / SMTP_PASS)'];
   if(!$to) return [false,'destinataire vide'];
+  $secure = ($port=='465') || (getenv('SMTP_SECURE')==='ssl');   // SSL implicite (évite l'anti-pipelining STARTTLS)
   $ctx=stream_context_create(['ssl'=>['verify_peer'=>false,'verify_peer_name'=>false]]);
-  $fp=@stream_socket_client("tcp://$host:$port",$en,$es,15,STREAM_CLIENT_CONNECT,$ctx);
+  $proto=$secure?'ssl':'tcp';
+  $fp=@stream_socket_client("$proto://$host:$port",$en,$es,15,STREAM_CLIENT_CONNECT,$ctx);
   if(!$fp) return [false,"connexion SMTP impossible ($host:$port): $es"];
+  stream_set_timeout($fp,15);
   $read=function() use($fp){ $d=''; while($l=fgets($fp,515)){ $d.=$l; if(strlen($l)>=4 && $l[3]==' ') break; } return $d; };
   $cmd=function($c) use($fp,$read){ fputs($fp,$c."\r\n"); return $read(); };
   $read();
-  $cmd("EHLO louismagie"); $cmd("STARTTLS");
-  if(!stream_socket_enable_crypto($fp,true,STREAM_CRYPTO_METHOD_TLS_CLIENT)) return [false,'TLS échec'];
-  $cmd("EHLO louismagie"); $cmd("AUTH LOGIN"); $cmd(base64_encode($user));
+  $cmd("EHLO louismagie");
+  if(!$secure){
+    $cmd("STARTTLS");
+    if(!stream_socket_enable_crypto($fp,true,STREAM_CRYPTO_METHOD_TLS_CLIENT)) return [false,'TLS échec'];
+    $cmd("EHLO louismagie");
+  }
+  $cmd("AUTH LOGIN"); $cmd(base64_encode($user));
   $r=$cmd(base64_encode($pass));
   if(strpos($r,'235')===false){ fclose($fp); return [false,'auth refusée ('.$host.', user '.$user.') : '.trim($r)]; }
   $cmd("MAIL FROM:<$from>"); $cmd("RCPT TO:<$to>"); $cmd("DATA");
