@@ -79,6 +79,33 @@ function smtpSend($to,$subject,$bodyText,$attachName='',$attachB64='',$trackUrl=
   fputs($fp,$m."\r\n.\r\n"); $r=$read(); $cmd("QUIT"); fclose($fp);
   return [strpos($r,'250')!==false, strpos($r,'250')!==false?'envoyé':('refus: '.trim($r))];
 }
+/* Diagnostic SMTP : renvoie la transcription complète du dialogue (pour debug) */
+function smtpDiag($to){
+  $host=getenv('SMTP_HOST')?:'smtp.gmail.com'; $port=getenv('SMTP_PORT')?:'587';
+  $user=getenv('SMTP_USER')?:getenv('GMAIL_USER'); $pass=getenv('SMTP_PASS')?:getenv('GMAIL_APP_PASSWORD');
+  $from=getenv('SMTP_FROM')?:(getenv('GMAIL_FROM')?:$user);
+  if(strpos($host,'infomaniak')!==false){ $port='465'; }
+  $secure=($port=='465')||(getenv('SMTP_SECURE')==='ssl');
+  $T=[]; $T[]="CONFIG host=$host port=$port secure=".($secure?'oui':'non')." user=$user from=$from pass=".($pass?'(défini)':'(VIDE)');
+  if(!$user||!$pass) return ['ok'=>false,'steps'=>$T,'info'=>'creds manquants'];
+  $ctx=stream_context_create(['ssl'=>['verify_peer'=>false,'verify_peer_name'=>false]]);
+  $fp=@stream_socket_client(($secure?'ssl':'tcp')."://$host:$port",$en,$es,15,STREAM_CLIENT_CONNECT,$ctx);
+  if(!$fp){ $T[]="CONNECT ÉCHEC: $es"; return ['ok'=>false,'steps'=>$T,'info'=>'connexion']; }
+  stream_set_timeout($fp,20); stream_set_blocking($fp,true);
+  $helo=(strpos($from,'@'))?substr(strrchr($from,'@'),1):'louismagie.fr';
+  $read=function() use($fp){ $d=''; while(($l=fgets($fp,8192))!==false){ $d.=$l; if(substr($l,-1)==="\n"&&strlen($l)>=4&&$l[3]===' ') break; } return rtrim($d); };
+  $cmd=function($c,$show=null) use($fp,$read,&$T){ fwrite($fp,$c."\r\n"); $T[]='C: '.($show?:$c); $r=$read(); $T[]='S: '.$r; return $r; };
+  $T[]='S: '.$read();
+  $cmd("EHLO $helo");
+  if(!$secure){ $cmd("STARTTLS"); stream_socket_enable_crypto($fp,true,STREAM_CRYPTO_METHOD_TLS_CLIENT); $cmd("EHLO $helo"); }
+  $cmd("AUTH LOGIN"); $cmd(base64_encode($user),'<base64 user>');
+  $r=$cmd(base64_encode($pass),'<base64 pass>');
+  if(strpos($r,'235')===false){ fclose($fp); return ['ok'=>false,'steps'=>$T,'info'=>'auth refusée']; }
+  $cmd("MAIL FROM:<$from>"); $cmd("RCPT TO:<$to>"); $cmd("DATA");
+  fwrite($fp,"From: $from\r\nTo: $to\r\nSubject: Test SMTP CRM\r\n\r\nTest diagnostic.\r\n.\r\n"); $T[]='C: <corps>'; $T[]='S: '.$read();
+  $cmd("QUIT"); fclose($fp);
+  return ['ok'=>true,'steps'=>$T,'info'=>'ok'];
+}
 function readJson($path){ if(!is_file($path)) return null; $c=file_get_contents($path); $v=json_decode($c,true); return $v; }
 function writeJson($path,$val){ file_put_contents($path, json_encode($val, JSON_UNESCAPED_UNICODE)); }
 
@@ -119,6 +146,12 @@ if ($action === 'runScheduled') {
   }
   unset($p); writeJson($f,$arr);
   out(['ok'=>true,'sent'=>$sent,'fail'=>$fail,'total'=>count($arr)]);
+}
+
+/* ===== Diagnostic SMTP (clé requise) ===== */
+if ($action === 'smtptest') {
+  if (($_GET['key'] ?? '') === '' || ($_GET['key'] ?? '') !== getenv('CRON_KEY')) out(['ok'=>false,'error'=>'clé invalide (mets CRON_KEY dans Coolify)']);
+  out(smtpDiag($_GET['to'] ?? (getenv('SMTP_USER') ?: 'test@example.com')));
 }
 
 /* ===== Auth par mot de passe (1 seul secret = le mot de passe du CRM) ===== */
