@@ -1099,6 +1099,9 @@ function dossierEvenement(id){
       ${kpi('vert','Encaissé',fmtEur(encaisse))}
       ${kpi(reste>0?'rouge':'vert','Reste dû',fmtEur(reste))}
     </div>
+    <div class="panel" style="margin-top:14px"><div class="panel-title">⚡ Statut du dossier</div>
+      <select class="form-control" onchange="majStatutDossier('${id}',this.value)">${DEVIS_STATUTS.map(s=>`<option${s===d.statut?' selected':''}>${esc(s)}</option>`).join('')}</select>
+      <div class="td-dim" style="font-size:11px;margin-top:6px">Changer le statut met à jour le devis et l'agenda (créneau bloqué dès « Accepté »).</div></div>
     <div class="panel" style="margin-top:14px"><div class="panel-title">📁 Documents du dossier</div>${docs}</div>
     ${dossierSignatureHtml(d)}
     <div class="panel" style="margin-top:14px"><div class="panel-title">📜 Timeline</div>${timelineDevis(id)}</div>
@@ -1106,12 +1109,28 @@ function dossierEvenement(id){
   openModal('Dossier · '+esc(d.nomClient)+' — '+fmtDateShort(d.dateEvenement),body,
     `<button class="btn btn-or" onclick="closeModal();voirDevis('${id}')">Ouvrir le devis</button><button class="btn btn-ghost" onclick="closeModal()">Fermer</button>`);
 }
+let _dosSort='prochains';
+function sortDossiers(arr,mode){
+  const today=todayISO();
+  if(mode==='montant') return arr.sort((a,b)=>(+b.montantTTC||0)-(+a.montantTTC||0));
+  if(mode==='recent')  return arr.sort((a,b)=>(b.dateEvenement||b.dateCreation||'').localeCompare(a.dateEvenement||a.dateCreation||''));
+  return arr.sort((a,b)=>{ const da=a.dateEvenement||'', db=b.dateEvenement||'', fa=da>=today, fb=db>=today;
+    if(fa&&fb) return da.localeCompare(db);   // à venir : le plus proche d'abord
+    if(!fa&&!fb) return db.localeCompare(da);  // passés : le plus récent d'abord
+    return fa?-1:1; });                        // à venir avant passés
+}
 RENDERERS.dossiers=function(){
-  const devis=DB.all('devis').slice().sort((a,b)=>(b.dateEvenement||b.dateCreation||'').localeCompare(a.dateEvenement||a.dateCreation||''));
+  const today=todayISO();
+  const devis=sortDossiers(DB.all('devis').slice(),_dosSort);
+  let lastGroup=null;
   const rows=devis.map(d=>{
     const signe=d.signataire||d.signatureImg, nb=(d.notesSuivi||[]).length;
+    const past=(d.dateEvenement||'')<today && d.dateEvenement;
     const s=esc((d.nomClient+' '+(d.lieu||'')+' '+d.id+' '+(d.dateEvenement||'')).toLowerCase());
-    return `<div class="dossier-row" data-s="${s}" onclick="dossierEvenement('${d.id}')" style="display:flex;align-items:center;gap:12px;padding:12px 14px;border-bottom:1px solid var(--anthr);cursor:pointer">
+    let sep='';
+    if(_dosSort==='prochains'){ const grp=(d.dateEvenement&&d.dateEvenement>=today)?'avenir':'passe';
+      if(grp!==lastGroup){ lastGroup=grp; sep=`<div class="dos-sep" style="padding:8px 14px;background:var(--anthr);font-size:11px;font-weight:600;color:var(--gm);text-transform:uppercase;letter-spacing:.5px">${grp==='avenir'?'📅 À venir':'✓ Passés'}</div>`; } }
+    return sep+`<div class="dossier-row" data-s="${s}" onclick="dossierEvenement('${d.id}')" style="display:flex;align-items:center;gap:12px;padding:12px 14px;border-bottom:1px solid var(--anthr);cursor:pointer${past?';opacity:.62':''}">
       <div style="flex:1;min-width:0">
         <div class="td-strong" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d.nomClient)} ${signe?'<span class="badge accepte" style="font-size:10px">✍️ signé</span>':''}</div>
         <div class="td-dim" style="font-size:12px">${fmtDateFr(d.dateEvenement)} · ${esc(d.lieu||'—')}</div>
@@ -1124,12 +1143,26 @@ RENDERERS.dossiers=function(){
   }).join('');
   document.getElementById('view-dossiers').innerHTML=`
     <div class="table-wrap">
-      <div class="table-header"><div class="table-title">Dossiers événement (${devis.length})</div></div>
+      <div class="table-header"><div class="table-title">Dossiers événement (${devis.length})</div>
+        <select class="form-control" style="max-width:230px" onchange="_dosSort=this.value;RENDERERS.dossiers()">
+          <option value="prochains"${_dosSort==='prochains'?' selected':''}>📅 Prochains événements</option>
+          <option value="recent"${_dosSort==='recent'?' selected':''}>🕑 Plus récents</option>
+          <option value="montant"${_dosSort==='montant'?' selected':''}>💶 Montant décroissant</option></select></div>
       <div style="padding:12px 14px"><input class="form-control" id="dos-search" placeholder="🔍 Rechercher un dossier (client, lieu, date)…" oninput="dosSearchFilter(this.value)"></div>
       <div>${rows||'<div class="empty"><div class="empty-icon">📁</div><div class="empty-text">Aucun dossier</div><div class="empty-sub">Crée un devis pour générer un dossier événement.</div></div>'}</div>
     </div>`;
 };
-function dosSearchFilter(q){ q=(q||'').toLowerCase().trim(); document.querySelectorAll('#view-dossiers .dossier-row').forEach(r=>{ r.style.display=(!q||(r.dataset.s||'').includes(q))?'':'none'; }); }
+function dosSearchFilter(q){ q=(q||'').toLowerCase().trim();
+  document.querySelectorAll('#view-dossiers .dossier-row').forEach(r=>{ r.style.display=(!q||(r.dataset.s||'').includes(q))?'':'none'; });
+  document.querySelectorAll('#view-dossiers .dos-sep').forEach(s=>{ s.style.display=q?'none':''; });   // masque les séparateurs pendant la recherche
+}
+function majStatutDossier(id,statut){ const d=DB.get('devis',id); if(!d)return;
+  d.statut=statut;
+  if(statut==='Envoyé'&&!d.dateEnvoi) d.dateEnvoi=todayISO();
+  if(statut==='Accepté'&&!d.dateAcceptation) d.dateAcceptation=todayISO();
+  DB.save('devis',d); syncPrestationDevis(d); logActivite('Dossier '+id+' → '+statut);
+  updateBadges(); toast('Statut → '+statut,'ok'); dossierEvenement(id);
+}
 function dossierSignatureHtml(d){
   if(!(d.signataire||d.signatureImg)) return '';
   return `<div class="panel" style="margin-top:14px"><div class="panel-title">✍️ Signature électronique</div>
