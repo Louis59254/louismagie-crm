@@ -366,6 +366,7 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
       <div class="sb-item" onclick="nav('stats')" id="nav-stats"><span class="ic">📈</span>Statistiques</div>
       <div class="sb-item" onclick="nav('demandes')" id="nav-demandes"><span class="ic">📥</span>Demandes <span class="badge-count" id="badge-demandes" style="display:none">0</span></div>
       <div class="sb-item" onclick="nav('agenda')" id="nav-agenda"><span class="ic">📅</span>Agenda</div>
+      <div class="sb-item" onclick="nav('dossiers')" id="nav-dossiers"><span class="ic">📁</span>Dossiers</div>
       <div class="sb-section">Gestion</div>
       <div class="sb-item" onclick="nav('devis')" id="nav-devis"><span class="ic">📄</span>Devis <span class="badge-count" id="badge-devis" style="display:none">0</span></div>
       <div class="sb-item" onclick="nav('factures')" id="nav-factures"><span class="ic">🧾</span>Factures <span class="badge-count" id="badge-factures" style="display:none">0</span></div>
@@ -407,6 +408,7 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
       <div class="view" id="view-stats"></div>
       <div class="view" id="view-demandes"></div>
       <div class="view" id="view-agenda"></div>
+      <div class="view" id="view-dossiers"></div>
       <div class="view" id="view-devis"></div>
       <div class="view" id="view-factures"></div>
       <div class="view" id="view-clients"></div>
@@ -623,7 +625,7 @@ function showApp(){
 }
 
 /* ───── Navigation ───── */
-const VIEW_TITLES={dashboard:'Tableau de bord',stats:'Statistiques',demandes:'Demandes',agenda:'Agenda',devis:'Devis',factures:'Factures',clients:'Clients & partenaires',marketing:'Marketing',compta:'Comptabilité / URSSAF','devis-create':'Créer un devis',reglages:'Réglages & catalogue'};
+const VIEW_TITLES={dashboard:'Tableau de bord',stats:'Statistiques',demandes:'Demandes',agenda:'Agenda',dossiers:'Dossiers événement',devis:'Devis',factures:'Factures',clients:'Clients & partenaires',marketing:'Marketing',compta:'Comptabilité / URSSAF','devis-create':'Créer un devis',reglages:'Réglages & catalogue'};
 const RENDERERS={}; // remplis par les modules de vue (tours suivants)
 let currentParams={};
 let _currentView='dashboard';
@@ -1098,9 +1100,59 @@ function dossierEvenement(id){
       ${kpi(reste>0?'rouge':'vert','Reste dû',fmtEur(reste))}
     </div>
     <div class="panel" style="margin-top:14px"><div class="panel-title">📁 Documents du dossier</div>${docs}</div>
-    <div class="panel" style="margin-top:14px"><div class="panel-title">📜 Timeline</div>${timelineDevis(id)}</div>`;
+    ${dossierSignatureHtml(d)}
+    <div class="panel" style="margin-top:14px"><div class="panel-title">📜 Timeline</div>${timelineDevis(id)}</div>
+    ${dossierNotesHtml(d)}`;
   openModal('Dossier · '+esc(d.nomClient)+' — '+fmtDateShort(d.dateEvenement),body,
     `<button class="btn btn-or" onclick="closeModal();voirDevis('${id}')">Ouvrir le devis</button><button class="btn btn-ghost" onclick="closeModal()">Fermer</button>`);
+}
+RENDERERS.dossiers=function(){
+  const devis=DB.all('devis').slice().sort((a,b)=>(b.dateEvenement||b.dateCreation||'').localeCompare(a.dateEvenement||a.dateCreation||''));
+  const rows=devis.map(d=>{
+    const signe=d.signataire||d.signatureImg, nb=(d.notesSuivi||[]).length;
+    const s=esc((d.nomClient+' '+(d.lieu||'')+' '+d.id+' '+(d.dateEvenement||'')).toLowerCase());
+    return `<div class="dossier-row" data-s="${s}" onclick="dossierEvenement('${d.id}')" style="display:flex;align-items:center;gap:12px;padding:12px 14px;border-bottom:1px solid var(--anthr);cursor:pointer">
+      <div style="flex:1;min-width:0">
+        <div class="td-strong" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d.nomClient)} ${signe?'<span class="badge accepte" style="font-size:10px">✍️ signé</span>':''}</div>
+        <div class="td-dim" style="font-size:12px">${fmtDateFr(d.dateEvenement)} · ${esc(d.lieu||'—')}</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <div class="td-strong">${fmtEur(d.montantTTC)}</div>
+        <div style="margin-top:2px">${badge(d.statut)}${nb?` <span class="td-dim" style="font-size:11px">📝${nb}</span>`:''}</div>
+      </div>
+      <span style="color:var(--gm);font-size:18px;flex-shrink:0">›</span></div>`;
+  }).join('');
+  document.getElementById('view-dossiers').innerHTML=`
+    <div class="table-wrap">
+      <div class="table-header"><div class="table-title">Dossiers événement (${devis.length})</div></div>
+      <div style="padding:12px 14px"><input class="form-control" id="dos-search" placeholder="🔍 Rechercher un dossier (client, lieu, date)…" oninput="dosSearchFilter(this.value)"></div>
+      <div>${rows||'<div class="empty"><div class="empty-icon">📁</div><div class="empty-text">Aucun dossier</div><div class="empty-sub">Crée un devis pour générer un dossier événement.</div></div>'}</div>
+    </div>`;
+};
+function dosSearchFilter(q){ q=(q||'').toLowerCase().trim(); document.querySelectorAll('#view-dossiers .dossier-row').forEach(r=>{ r.style.display=(!q||(r.dataset.s||'').includes(q))?'':'none'; }); }
+function dossierSignatureHtml(d){
+  if(!(d.signataire||d.signatureImg)) return '';
+  return `<div class="panel" style="margin-top:14px"><div class="panel-title">✍️ Signature électronique</div>
+    <div class="td-dim" style="margin-bottom:8px">Signé par <strong>${esc(d.signataire||'—')}</strong>${d.signedAt?' le '+fmtDateFr(d.signedAt.slice(0,10)):''} · mention « Bon pour accord »</div>
+    ${d.signatureImg?`<img src="${d.signatureImg}" alt="signature" style="max-width:280px;width:100%;border:1px solid var(--bd);border-radius:8px;background:#fff;padding:6px">`:'<div class="td-dim">Acceptation par saisie du nom (sans tracé manuscrit).</div>'}</div>`;
+}
+function dossierNotesHtml(d){
+  const notes=(d.notesSuivi||[]).slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const list=notes.length?notes.map(n=>`<div style="display:flex;gap:8px;padding:8px 0;border-bottom:1px solid var(--bd)">
+      <div style="flex:1;min-width:0"><div style="font-size:13px;white-space:pre-wrap">${esc(n.txt)}</div><div class="td-dim" style="font-size:11px;margin-top:2px">${fmtDateShort(n.date)}</div></div>
+      <button class="qa" title="Supprimer la note" onclick="supprimerNoteDossier('${d.id}','${n.id}')">✕</button></div>`).join(''):'<div class="td-dim">Aucune note pour le moment.</div>';
+  return `<div class="panel" style="margin-top:14px"><div class="panel-title">📝 Notes de suivi</div>
+    ${list}
+    <textarea class="form-control" id="dossier-note" placeholder="Ajouter une note (briefing, matériel à prévoir, contact sur place, retour client…)" style="min-height:64px;margin-top:10px"></textarea>
+    <div style="text-align:right;margin-top:8px"><button class="btn btn-or btn-sm" onclick="ajouterNoteDossier('${d.id}')">+ Ajouter la note</button></div></div>`;
+}
+function ajouterNoteDossier(id){ const d=DB.get('devis',id); if(!d)return;
+  const ta=document.getElementById('dossier-note'); const txt=(ta&&ta.value||'').trim(); if(!txt){ toast('Note vide','err'); return; }
+  d.notesSuivi=d.notesSuivi||[]; d.notesSuivi.push({id:uid('NOTE'),date:new Date().toISOString(),txt}); DB.save('devis',d);
+  logActivite('Note ajoutée au dossier '+id); toast('📝 Note ajoutée','ok'); dossierEvenement(id);
+}
+function supprimerNoteDossier(id,nid){ const d=DB.get('devis',id); if(!d)return;
+  d.notesSuivi=(d.notesSuivi||[]).filter(n=>n.id!==nid); DB.save('devis',d); dossierEvenement(id);
 }
 function copySignLink(id){ const d=DB.get('devis',id); if(!d)return; const url=signUrl(d);
   if(!url){ toast('Backend non configuré','err'); return; }
