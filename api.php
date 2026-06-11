@@ -25,7 +25,7 @@ $ENTITIES = ['demandes','devis','prestations','factures','clients','relances',
 function out($o){ echo json_encode($o, JSON_UNESCAPED_UNICODE); exit; }
 
 /* Envoi email via SMTP Gmail (mot de passe d'application). 0 dépendance. */
-function smtpSend($to,$subject,$bodyText,$attachName='',$attachB64='',$trackUrl=''){
+function smtpSend($to,$subject,$bodyText,$attachName='',$attachB64='',$trackUrl='',$htmlIn=''){
   // SMTP générique : Infomaniak, Gmail, etc. (compat anciennes variables GMAIL_*)
   $host=getenv('SMTP_HOST') ?: 'smtp.gmail.com';
   $port=getenv('SMTP_PORT') ?: '587';
@@ -58,7 +58,9 @@ function smtpSend($to,$subject,$bodyText,$attachName='',$attachB64='',$trackUrl=
   if(strpos($r,'235')===false){ fclose($fp); return [false,'auth refusée ('.$host.', user '.$user.') : '.trim($r)]; }
   $cmd("MAIL FROM:<$from>"); $cmd("RCPT TO:<$to>"); $cmd("DATA");
   $h="From: $from\r\nReply-To: $from\r\nTo: $to\r\nSubject: =?UTF-8?B?".base64_encode($subject)."?=\r\nMIME-Version: 1.0\r\n";
-  $html = $trackUrl ? ('<div style="white-space:pre-wrap;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222">'.htmlspecialchars($bodyText)."</div><img src=\"$trackUrl\" width=\"1\" height=\"1\" alt=\"\" style=\"display:none\">") : '';
+  // HTML : template fourni par le CRM si présent, sinon repli simple ; pixel de suivi ajouté si tracking
+  $html = $htmlIn ?: ($trackUrl ? '<div style="white-space:pre-wrap;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222">'.htmlspecialchars($bodyText).'</div>' : '');
+  if ($html && $trackUrl) $html .= "<img src=\"$trackUrl\" width=\"1\" height=\"1\" alt=\"\" style=\"display:none\">";
   $bP=function() use($bodyText,$html){ // partie corps (texte seul, ou alternative texte+html si tracking)
     if(!$html) return "Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n".chunk_split(base64_encode($bodyText));
     $a='alt'.md5(uniqid());
@@ -127,6 +129,18 @@ if ($action === 'track') {
   if ($m !== '') { $f=$DATA_DIR.'/_opens.json'; $arr=readJson($f); if(!is_array($arr))$arr=[];
     if(!array_filter($arr, function($o) use($m){ return ($o['m']??'')===$m; })) $arr[]=['m'=>$m,'at'=>date('c')];
     writeJson($f,$arr); }
+  header('Content-Type: image/gif'); header('Cache-Control: no-store');
+  echo base64_decode('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'); exit;
+}
+
+/* ===== Logo public (sert le logo configuré pour l'en-tête des emails) ===== */
+if ($action === 'logo') {
+  $config = readJson("$DATA_DIR/config.json"); $l = is_array($config) ? ($config['logo'] ?? '') : '';
+  if ($l && strpos($l, 'base64,') !== false) {
+    $mime = preg_match('/^data:([^;]+);/', $l, $mm) ? $mm[1] : 'image/png';
+    header('Content-Type: '.$mime); header('Cache-Control: max-age=3600');
+    echo base64_decode(explode('base64,', $l, 2)[1]); exit;
+  }
   header('Content-Type: image/gif'); header('Cache-Control: no-store');
   echo base64_decode('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'); exit;
 }
@@ -257,7 +271,7 @@ if ($action === 'runScheduled') {
     if (($p['statut']??'')==='prévu' && ($p['date']??'9999') <= $today) {
       $tu='';
       if(!empty($p['trackId'])){ $base=(isset($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off'?'https':'http').'://'.$_SERVER['HTTP_HOST'].$_SERVER['SCRIPT_NAME']; $tu=$base.'?action=track&m='.rawurlencode($p['trackId']); }
-      list($ok,$info)=smtpSend($p['to']??'',$p['subject']??'',$p['body']??'','','',$tu);
+      list($ok,$info)=smtpSend($p['to']??'',$p['subject']??'',$p['body']??'','','',$tu,$p['html']??'');
       $p['statut']=$ok?'envoyé':'échec'; $p['sentAt']=date('c'); $p['info']=$info; $ok?$sent++:$fail++;
     }
   }
@@ -341,7 +355,7 @@ switch ($action) {
   case 'sendEmail': {
     $tu='';
     if(!empty($req['trackId'])){ $base=(isset($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off'?'https':'http').'://'.$_SERVER['HTTP_HOST'].$_SERVER['SCRIPT_NAME']; $tu=$base.'?action=track&m='.rawurlencode($req['trackId']); }
-    list($ok,$info)=smtpSend($req['to']??'', $req['subject']??'', $req['body']??'', $req['attachName']??'', $req['attachB64']??'', $tu);
+    list($ok,$info)=smtpSend($req['to']??'', $req['subject']??'', $req['body']??'', $req['attachName']??'', $req['attachB64']??'', $tu, $req['html']??'');
     out(['ok'=>$ok, 'info'=>$info]);
   }
 

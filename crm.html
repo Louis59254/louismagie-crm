@@ -473,6 +473,46 @@ function genToken(){ let s=''; const a='ABCDEFGHJKMNPQRSTUVWXYZ23456789'; for(le
 /* Signature électronique : assure un token public sur le devis + renvoie le lien à envoyer au client */
 function ensureDevisShare(d){ if(!d.shareToken){ d.shareToken=genToken(); DB.save('devis',d); } return d.shareToken; }
 function signUrl(d){ const base=cloudUrl(); if(!base) return ''; return base+'?action=sign&id='+encodeURIComponent(d.id)+'&k='+encodeURIComponent(ensureDevisShare(d)); }
+/* Logo : celui choisi par l'utilisateur (config.logo) ou le logo par défaut intégré */
+function logoSrc(){ try{ return DB.config().logo || LOGO_B64; }catch(_){ return LOGO_B64; } }
+function emailLogoUrl(){ const b=cloudUrl(); return b?b+'?action=logo':''; }
+/* Enveloppe HTML brandée LouisMagie pour tous les emails (logo + bandeau orange + pied de page) */
+function emailHtml(text){
+  const cfg=DB.config(), logo=(cfg.logo&&emailLogoUrl())?emailLogoUrl():'';
+  const e=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const body=e(text).replace(/(https?:\/\/[^\s<]+)/g,'<a href="$1" style="color:#FF7700;word-break:break-all">$1</a>').replace(/\n/g,'<br>');
+  const mail=cfg.emailLouis||'contact@louismagie.fr', tel=cfg.entrepriseTel||'';
+  return `<!doctype html><html><body style="margin:0;background:#f4f1ec"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f1ec;padding:24px 0"><tr><td align="center">`
+    +`<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#fff;border-radius:14px;overflow:hidden;font-family:Arial,Helvetica,sans-serif">`
+    +`<tr><td align="center" style="background:linear-gradient(135deg,#FF7700,#ff9d3d);padding:22px 28px">`
+    +(logo?`<img src="${logo}" alt="LouisMagie" height="46" style="max-height:46px;display:block;margin:0 auto 6px">`:'')
+    +`<div style="color:#fff;font-size:20px;font-weight:bold;letter-spacing:3px">LOUISMAGIE</div></td></tr>`
+    +`<tr><td style="padding:28px;color:#222;font-size:15px;line-height:1.6">${body}</td></tr>`
+    +`<tr><td align="center" style="padding:18px 28px;background:#15120e;color:#c9c2b8;font-size:12px">`
+    +`<strong style="color:#FF7700">LouisMagie</strong> — Louis Slosse · Magicien<br>${e(mail)}${tel?' · '+e(tel):''}<br>`
+    +`<span style="color:#7a7268">Dunkerque &amp; Hauts-de-France</span></td></tr></table></td></tr></table></body></html>`;
+}
+function uploadLogo(input){
+  const f=input.files&&input.files[0]; if(!f)return;
+  const r=new FileReader();
+  r.onload=ev=>{ const img=new Image();
+    img.onload=()=>{ const max=256; let w=img.width,h=img.height; if(w>h&&w>max){h=h*max/w;w=max;} else if(h>max){w=w*max/h;h=max;}
+      const c=document.createElement('canvas'); c.width=w; c.height=h; c.getContext('2d').drawImage(img,0,0,w,h);
+      const data=c.toDataURL('image/png');
+      const cfg=DB.config(); cfg.logo=data; DB.saveConfig(cfg);
+      if(cloudUrl()) cloudPost({action:'putConfig',config:DB.config()});   // pousse tout de suite (pour ?action=logo)
+      document.querySelectorAll('.brand-logo').forEach(i=>i.src=data); const pv=document.getElementById('logo-preview'); if(pv)pv.src=data;
+      logActivite('Logo mis à jour'); toast('🎨 Logo enregistré','ok'); if(_currentView==='reglages') RENDERERS.reglages();
+    };
+    img.onerror=()=>toast('Image illisible','err'); img.src=ev.target.result;
+  };
+  r.readAsDataURL(f);
+}
+function resetLogo(){ const cfg=DB.config(); delete cfg.logo; DB.saveConfig(cfg);
+  if(cloudUrl()) cloudPost({action:'putConfig',config:DB.config()});
+  document.querySelectorAll('.brand-logo').forEach(i=>i.src=LOGO_B64);
+  toast('Logo par défaut rétabli','ok'); if(_currentView==='reglages') RENDERERS.reglages();
+}
 
 function logActivite(txt){
   const arr=DB.all('activite');
@@ -1215,7 +1255,7 @@ function pdfHeader(doc,type,num,dates){
   const e=emetteur();
   doc.setFillColor(...P_OR); doc.rect(0,0,210,4,'F');
   // logo
-  let bxText=15; try{ if(typeof LOGO_B64!=='undefined'&&LOGO_B64){ doc.addImage(LOGO_B64,'PNG',15,8,18,18,undefined,'FAST'); bxText=37; } }catch(_){}
+  let bxText=15; try{ const lg=logoSrc(); if(lg){ doc.addImage(lg,'PNG',15,8,18,18,undefined,'FAST'); bxText=37; } }catch(_){}
   // marque
   doc.setFont('helvetica','bold'); doc.setFontSize(23);
   doc.setTextColor(...P_NOIR); doc.text('Louis',bxText,20);
@@ -2110,7 +2150,7 @@ async function mcSend(kind,ref){
     const btn=document.getElementById('mc-send'); if(btn){btn.disabled=true;btn.textContent='Envoi…';}
     let attachB64='',attachName='';
     if(window._mcPdf&&window._mcPdf.id){ attachB64=pdfBase64(window._mcPdf.type,window._mcPdf.id); attachName=window._mcPdf.id+'.pdf'; }
-    const j=await cloudPost({action:'sendEmail',to,subject,body:bodyTxt,attachB64,attachName,trackId:mailId});
+    const j=await cloudPost({action:'sendEmail',to,subject,body:bodyTxt,html:emailHtml(bodyTxt),attachB64,attachName,trackId:mailId});
     if(j&&j.ok){ logActivite('Email envoyé ('+kind+') → '+to); done(); toast('✅ Email envoyé à '+to,'ok'); }
     else { if(btn){btn.disabled=false;btn.textContent='📤 Envoyer maintenant';} const why=(j&&(j.info||j.error))||'serveur injoignable'; toast('Échec envoi : '+why,'err'); logActivite('Échec envoi → '+to+' : '+why); mailtoOpen(to,subject,bodyTxt); done(); }
     return;
@@ -2428,7 +2468,8 @@ async function envoyerCampagne(){
     if(!auto){ toast('Planification = nécessite l\'envoi auto Gmail (Réglages)','err'); return; }
     let n=0;
     ids.forEach(id=>{ const c=DB.get('clients',id); if(!c||!c.email)return;
-      DB.save('planifs',{id:uid('PLN'),date,to:c.email,subject:perso(subjectTpl,c),body:perso(bodyTpl,c),trackId:uid('MAIL'),client:(c.prenom+' '+c.nom).trim(),statut:'prévu',createdAt:new Date().toISOString()}); n++; });
+      const corps=perso(bodyTpl,c);
+      DB.save('planifs',{id:uid('PLN'),date,to:c.email,subject:perso(subjectTpl,c),body:corps,html:emailHtml(corps),trackId:uid('MAIL'),client:(c.prenom+' '+c.nom).trim(),statut:'prévu',createdAt:new Date().toISOString()}); n++; });
     logActivite('Campagne planifiée : '+n+' email(s) le '+fmtDateFr(date));
     toast('📅 '+n+' email(s) planifié(s) le '+fmtDateShort(date),'ok'); RENDERERS.marketing(); return;
   }
@@ -2439,7 +2480,8 @@ async function envoyerCampagne(){
     for(let i=0;i<ids.length;i++){ const c=DB.get('clients',ids[i]); if(!c||!c.email){fail++;continue;}
       const mailId=uid('MAIL');
       if(prog) prog.textContent='Envoi '+(i+1)+'/'+ids.length+' → '+c.email+'…';
-      const j=await cloudPost({action:'sendEmail',to:c.email,subject:perso(subjectTpl,c),body:perso(bodyTpl,c),trackId:mailId});
+      const corps=perso(bodyTpl,c);
+      const j=await cloudPost({action:'sendEmail',to:c.email,subject:perso(subjectTpl,c),body:corps,html:emailHtml(corps),trackId:mailId});
       if(j&&j.ok){ ok++; DB.save('mails',{id:mailId,date:new Date().toISOString(),kind:'campagne',ref:c.id,to:c.email,subject:perso(subjectTpl,c)}); } else fail++;
     }
     if(prog) prog.textContent='';
@@ -2469,6 +2511,21 @@ RENDERERS.reglages=function(){
     :'<tr><td colspan="6"><div class="td-dim" style="padding:10px">Catalogue vide.</div></td></tr>';
 
   document.getElementById('view-reglages').innerHTML=`
+    <div class="panel"><div class="panel-title">🎨 Logo & identité visuelle</div>
+      <div class="td-dim" style="margin-bottom:14px">Ton logo s'affiche sur la page de connexion, les PDF devis/facture et l'en-tête des emails.</div>
+      <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
+        <div style="width:96px;height:96px;border:1px solid var(--bd);border-radius:14px;display:flex;align-items:center;justify-content:center;background:#fff;overflow:hidden">
+          <img id="logo-preview" src="${logoSrc()}" alt="logo" style="max-width:82px;max-height:82px;object-fit:contain">
+        </div>
+        <div style="flex:1;min-width:200px">
+          <input type="file" id="logo-file" accept="image/png,image/jpeg,image/webp" onchange="uploadLogo(this)" style="display:none">
+          <button class="btn btn-or" onclick="document.getElementById('logo-file').click()">📤 Choisir un logo</button>
+          ${cfg.logo?`<button class="btn btn-ghost" onclick="resetLogo()">↺ Logo par défaut</button>`:''}
+          <div class="td-dim" style="font-size:12px;margin-top:8px">PNG (fond transparent conseillé) ou JPG. Redimensionné automatiquement (max 256 px).</div>
+        </div>
+      </div>
+    </div>
+
     <div class="table-wrap"><div class="table-header">
       <div class="table-title">Catalogue de prestations</div>
       <button class="btn btn-or btn-sm" onclick="addCat()">+ Ajouter une prestation</button></div>
@@ -2623,7 +2680,7 @@ async function cloudSyncNow(){ const res=await cloudPull(); if(typeof RENDERERS[
 /* ───── Boot ───── */
 (async function boot(){
   try{ applyTheme(localStorage.getItem('lm_theme')||'dark'); }catch(_){ applyTheme('dark'); }
-  try{ document.querySelectorAll('.brand-logo').forEach(i=>i.src=LOGO_B64); }catch(_){}
+  try{ document.querySelectorAll('.brand-logo').forEach(i=>i.src=logoSrc()); }catch(_){}
   await ensureSeed();
   setCloudStatus(cloudUrl()?'sync':'off');
   // pull se fait après login (showApp), car l'API exige le mot de passe
