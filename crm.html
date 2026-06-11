@@ -363,6 +363,7 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
     <nav class="sb-nav">
       <div class="sb-section">Pilotage</div>
       <div class="sb-item active" onclick="nav('dashboard')" id="nav-dashboard"><span class="ic">🎩</span>Tableau de bord</div>
+      <div class="sb-item" onclick="nav('stats')" id="nav-stats"><span class="ic">📈</span>Statistiques</div>
       <div class="sb-item" onclick="nav('demandes')" id="nav-demandes"><span class="ic">📥</span>Demandes <span class="badge-count" id="badge-demandes" style="display:none">0</span></div>
       <div class="sb-item" onclick="nav('agenda')" id="nav-agenda"><span class="ic">📅</span>Agenda</div>
       <div class="sb-section">Gestion</div>
@@ -403,6 +404,7 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
     </div>
     <div class="content">
       <div class="view active" id="view-dashboard"></div>
+      <div class="view" id="view-stats"></div>
       <div class="view" id="view-demandes"></div>
       <div class="view" id="view-agenda"></div>
       <div class="view" id="view-devis"></div>
@@ -467,6 +469,10 @@ function nextId(prefix, entity){
   return prefix+'-'+yr+'-'+String(max+1).padStart(3,'0');
 }
 function uid(p){ return p+'-'+Date.now().toString(36)+Math.floor(Math.random()*1000); }
+function genToken(){ let s=''; const a='ABCDEFGHJKMNPQRSTUVWXYZ23456789'; for(let i=0;i<24;i++)s+=a[Math.floor(Math.random()*a.length)]; return s; }
+/* Signature électronique : assure un token public sur le devis + renvoie le lien à envoyer au client */
+function ensureDevisShare(d){ if(!d.shareToken){ d.shareToken=genToken(); DB.save('devis',d); } return d.shareToken; }
+function signUrl(d){ const base=cloudUrl(); if(!base) return ''; return base+'?action=sign&id='+encodeURIComponent(d.id)+'&k='+encodeURIComponent(ensureDevisShare(d)); }
 
 function logActivite(txt){
   const arr=DB.all('activite');
@@ -548,7 +554,7 @@ function showApp(){
 }
 
 /* ───── Navigation ───── */
-const VIEW_TITLES={dashboard:'Tableau de bord',demandes:'Demandes',agenda:'Agenda',devis:'Devis',factures:'Factures',clients:'Clients & partenaires',marketing:'Marketing',compta:'Comptabilité / URSSAF','devis-create':'Créer un devis',reglages:'Réglages & catalogue'};
+const VIEW_TITLES={dashboard:'Tableau de bord',stats:'Statistiques',demandes:'Demandes',agenda:'Agenda',devis:'Devis',factures:'Factures',clients:'Clients & partenaires',marketing:'Marketing',compta:'Comptabilité / URSSAF','devis-create':'Créer un devis',reglages:'Réglages & catalogue'};
 const RENDERERS={}; // remplis par les modules de vue (tours suivants)
 let currentParams={};
 let _currentView='dashboard';
@@ -724,6 +730,58 @@ function buildChartType(){
   _charts.type=new Chart(document.getElementById('chartType'),{type:'doughnut',data:{labels,datasets:[{data,backgroundColor:palette,borderColor:borderC,borderWidth:2}]},options:{responsive:true,maintainAspectRatio:false,cutout:'62%',plugins:{legend:{position:'bottom',labels:{color:cc.legend,font:{size:11},boxWidth:12,padding:10}}}}});
 }
 
+/* ═══════════ VUE : STATISTIQUES ═══════════ */
+RENDERERS.stats=function(){
+  const devis=DB.all('devis'), demandes=DB.all('demandes'), factures=DB.all('factures'), recettes=DB.all('recettes'), prestations=DB.all('prestations');
+  const acceptes=devis.filter(d=>['Accepté','Acompte reçu'].includes(d.statut)||d.dateAcceptation);
+  const payees=factures.filter(f=>f.statut==='Payée');
+  const caAn=recettes.filter(r=>(r.date||'').slice(0,4)===String(new Date().getFullYear())).reduce((s,r)=>s+(+r.montant||0),0);
+  const tauxConv=devis.length?Math.round(acceptes.length/devis.length*100):0;
+  const panier=acceptes.length?Math.round(acceptes.reduce((s,d)=>s+(+d.montantTTC||0),0)/acceptes.length):0;
+  const presReal=prestations.filter(p=>p.statutRealisation==='Réalisée').length;
+  document.getElementById('view-stats').innerHTML=`
+    <div class="kpi-grid">
+      ${kpi('vert','Taux de conversion',tauxConv+' %','devis acceptés')}
+      ${kpi('or','Panier moyen',fmtEur(panier),'par devis accepté')}
+      ${kpi('info','CA année',fmtEur(caAn),'encaissé')}
+      ${kpi('or','Prestations réalisées',presReal)}
+    </div>
+    <div class="charts-grid">
+      <div class="chart-card"><div class="chart-title">Entonnoir de conversion</div><div class="chart-wrap"><canvas id="stFunnel"></canvas></div></div>
+      <div class="chart-card"><div class="chart-title">Chiffre d'affaires · 12 mois</div><div class="chart-wrap"><canvas id="stCA"></canvas></div></div>
+      <div class="chart-card"><div class="chart-title">CA par type de prestation</div><div class="chart-wrap"><canvas id="stPresta"></canvas></div></div>
+      <div class="chart-card"><div class="chart-title">Saisonnalité · prestations par mois</div><div class="chart-wrap"><canvas id="stSaison"></canvas></div></div>
+      <div class="chart-card" style="grid-column:1/-1"><div class="chart-title">Top clients · CA encaissé</div><div class="chart-wrap"><canvas id="stTop"></canvas></div></div>
+    </div>`;
+  const cc=chartColors(); const OR='#FF7700';
+  const mk=(id,cfg)=>{ if(_charts[id])_charts[id].destroy(); const el=document.getElementById(id); if(el)_charts[id]=new Chart(el,cfg); };
+  const eur=v=>v.toLocaleString('fr-FR')+' €';
+  // 1) Entonnoir
+  mk('stFunnel',{type:'bar',data:{labels:['Demandes','Devis','Acceptés','Payés'],datasets:[{data:[demandes.length,devis.length,acceptes.length,payees.length],backgroundColor:['#4A9DE8','#E8A13A','#3FB97A','#FF7700'],borderRadius:6}]},
+    options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:cc.grid},ticks:{color:cc.txt,precision:0}},y:{grid:{display:false},ticks:{color:cc.txt}}}}});
+  // 2) CA 12 mois
+  const labs=[],dca=[],now=new Date();
+  for(let i=11;i>=0;i--){ const dt=new Date(now.getFullYear(),now.getMonth()-i,1); const key=dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0');
+    labs.push(dt.toLocaleDateString('fr-FR',{month:'short'})); dca.push(recettes.filter(r=>(r.date||'').slice(0,7)===key).reduce((s,r)=>s+(+r.montant||0),0)); }
+  mk('stCA',{type:'bar',data:{labels:labs,datasets:[{data:dca,backgroundColor:'rgba(255,119,0,.75)',borderRadius:4}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:cc.grid},ticks:{color:cc.txt}},y:{grid:{color:cc.grid},ticks:{color:cc.txt,callback:eur}}}}});
+  // 3) CA par type de prestation (lignes des devis acceptés)
+  const byP={}; acceptes.forEach(d=>(d.prestations||[]).forEach(p=>{ const k=p.label||'Autre'; byP[k]=(byP[k]||0)+(+p.prix||0); }));
+  const pk=Object.keys(byP).sort((a,b)=>byP[b]-byP[a]).slice(0,7);
+  mk('stPresta',{type:'doughnut',data:{labels:pk,datasets:[{data:pk.map(k=>byP[k]),backgroundColor:['#FF7700','#E8A13A','#4A9DE8','#3FB97A','#E5564B','#9B7FE8','#C8C3BB'],borderColor:document.documentElement.getAttribute('data-theme')==='light'?'#fff':'#141410',borderWidth:2}]},
+    options:{responsive:true,maintainAspectRatio:false,cutout:'58%',plugins:{legend:{position:'bottom',labels:{color:cc.legend,font:{size:10},boxWidth:11,padding:8}}}}});
+  // 4) Saisonnalité (nb prestations par mois, toutes années)
+  const mois=['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Aoû','Sep','Oct','Nov','Déc']; const sai=new Array(12).fill(0);
+  prestations.forEach(p=>{ if(p.dateEvenement){ const m=new Date(p.dateEvenement).getMonth(); if(m>=0&&m<12)sai[m]++; } });
+  mk('stSaison',{type:'bar',data:{labels:mois,datasets:[{data:sai,backgroundColor:'rgba(74,157,232,.75)',borderRadius:4}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{display:false},ticks:{color:cc.txt}},y:{grid:{color:cc.grid},ticks:{color:cc.txt,precision:0}}}}});
+  // 5) Top clients (CA encaissé)
+  const byC={}; recettes.forEach(r=>{ const k=r.client||'—'; byC[k]=(byC[k]||0)+(+r.montant||0); });
+  const ck=Object.keys(byC).sort((a,b)=>byC[b]-byC[a]).slice(0,8);
+  mk('stTop',{type:'bar',data:{labels:ck,datasets:[{data:ck.map(k=>byC[k]),backgroundColor:'rgba(63,185,122,.8)',borderRadius:4}]},
+    options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:cc.grid},ticks:{color:cc.txt,callback:eur}},y:{grid:{display:false},ticks:{color:cc.txt}}}}});
+};
+
 /* ═══════════ VUE : DEMANDES ═══════════ */
 let _fDem={statut:'',source:''};
 RENDERERS.demandes=function(){
@@ -858,7 +916,10 @@ function voirDevis(id){
     : progressBar(['Brouillon','Envoyé','Accepté','Acompte','Facturé'].map((l,i)=>({label:l,sub:subs[i],state:i<cur?'done':(i===cur?'current':'todo')})));
 
   // actions contextuelles
-  const email=`<button class="btn btn-or" onclick="envoyerDevisMail('${id}')">✉ ${d.statut==='Brouillon'?'Envoyer le devis':'Renvoyer le devis'}</button>`;
+  const signe=d.signataire||d.signatureImg;
+  const signBanner=signe?alertHtml('success','✍️',`<strong>Signé en ligne</strong> par ${esc(d.signataire||'le client')}${d.signedAt?' le '+fmtDateShort(d.signedAt.slice(0,10)):''}. <a href="#" onclick="voirSignature('${id}');return false" style="color:var(--or)">Voir la signature</a>`):'';
+  const lienBtn=cloudUrl()?`<button class="btn btn-ghost" onclick="copySignLink('${id}')">🔗 Copier le lien de signature</button>`:'';
+  const email=`<button class="btn btn-or" onclick="envoyerDevisMail('${id}')">✉ ${d.statut==='Brouillon'?'Envoyer le devis':'Renvoyer le devis'}</button>${lienBtn}`;
   let manu='';
   if(d.statut==='Brouillon') manu=`<button class="btn btn-ghost" onclick="majDevis('${id}','Envoyé');voirDevis('${id}')">✓ Marquer envoyé</button>`;
   else if(d.statut==='Envoyé') manu=`<button class="btn btn-success" onclick="majDevis('${id}','Accepté');voirDevis('${id}')">✓ Accepté</button><button class="btn btn-warn" onclick="majDevis('${id}','Refusé');voirDevis('${id}')">✗ Refusé</button>`;
@@ -866,7 +927,7 @@ function voirDevis(id){
   else if(d.statut==='Acompte reçu') manu=`${facAcompte?'<span class="td-dim" style="align-self:center">✓ Facture d\'acompte '+esc(facAcompte.id)+'</span>':`<button class="btn btn-ghost" onclick="genererFactureAcompte('${id}')">🧾 Facture d'acompte</button>`}${facturee?'':`<button class="btn btn-or" onclick="transformerEnFacture('${id}')">🧾 Facturer le solde</button>`}<button class="btn btn-ghost" onclick="annulerAcompte('${id}')">↩ Annuler l'acompte</button>`;
   else manu='<div class="td-dim">—</div>';
 
-  const body=`${bar}
+  const body=`${bar}${signBanner}
   <div class="info-grid">
     ${infoItem('Client',esc(d.nomClient))}${infoItem('Statut',badge(d.statut)+(d.acompteRecu>0?' <span class="badge accepte">💰 acompte encaissé</span>':'')+(facturee?' '+badge('Facturé'):''))}
     ${infoItem('Événement',fmtDateFr(d.dateEvenement)+' · '+esc(d.creneau||'')+(d.horaire?' · '+esc(d.horaire):''))}${infoItem('Lieu',esc(d.lieu||'—'))}
@@ -882,12 +943,14 @@ function voirDevis(id){
     <div class="action-box"><div class="action-box-title">📧 Par email</div>${email}</div>
     <div class="action-box"><div class="action-box-title">⚡ Étape suivante</div>${manu}</div>
   </div>
+  <details style="margin-top:12px" open><summary style="cursor:pointer;color:var(--or);font-size:13px;font-weight:600">📜 Suivi — timeline</summary>${timelineDevis(id)}</details>
   <details style="margin-top:12px"><summary style="cursor:pointer;color:var(--gm);font-size:12px">Statut manuel avancé</summary>
     <div class="form-grid" style="margin-top:8px;grid-template-columns:1fr auto;align-items:end">
       <div class="form-group"><select class="form-control" id="dev-statut-manuel">${DEVIS_STATUTS.map(s=>`<option${s===d.statut?' selected':''}>${s}</option>`).join('')}</select></div>
       <button class="btn btn-ghost" onclick="changerStatutDevis('${id}');voirDevis('${id}')">Appliquer</button>
     </div></details>`;
   const footer=`<button class="btn btn-danger" onclick="supprimerDevis('${id}')">🗑 Supprimer</button>
+    <button class="btn btn-ghost" onclick="dossierEvenement('${id}')">📁 Dossier</button>
     ${d.statut!=='Brouillon'?`<button class="btn btn-ghost" onclick="devisBack('${id}')">↩ Étape précédente</button>`:''}
     <button class="btn btn-ghost" onclick="apercuPdf('Devis','${id}')">👁 Aperçu PDF</button>
     <button class="btn btn-ghost" onclick="closeModal();nav('devis-create',{id:'${id}'})">✎ Modifier</button>
@@ -900,6 +963,89 @@ function envoyerDevisMail(id){
   const tpl=EMAIL_TPL.devis(d);
   openMailComposer({titre:'Envoyer le devis '+id, ...tpl, pdfId:id, pdfType:'Devis', kind:'devis', ref:id,
     onSent:()=>{ if(d.statut==='Brouillon'){ d.statut='Envoyé'; d.dateEnvoi=todayISO(); DB.save('devis',d); updateBadges(); } RENDERERS.devis(); }});
+}
+/* Ré-applique les signatures du journal serveur sur les devis locaux (idempotent, survit à tout écrasement) */
+function applySignatures(sigs){
+  sigs.forEach(s=>{ const d=DB.get('devis',s.id); if(!d||d.signataire) return;   // déjà appliqué → on ne touche pas
+    d.signataire=s.signataire||''; d.signatureImg=s.signatureImg||''; d.signedAt=s.signedAt||'';
+    if(d.statut==='Brouillon'||d.statut==='Envoyé'){ d.statut='Accepté'; if(!d.dateAcceptation)d.dateAcceptation=(s.signedAt||'').slice(0,10); }
+    DB.save('devis',d); syncPrestationDevis(d); logActivite('Devis '+d.id+' signé en ligne par '+(s.signataire||'client'));
+  });
+}
+/* Timeline de suivi : reconstruit le cycle de vie complet d'un devis depuis toutes les données */
+function timelineDevis(id){
+  const d=DB.get('devis',id); if(!d) return '';
+  const ev=[]; const add=(date,icon,txt,color)=>{ if(date) ev.push({date:(''+date).slice(0,10),icon,txt,color}); };
+  add(d.dateCreation,'📝','Devis créé','#8a8a8a');
+  const mailsDevis=DB.all('mails').filter(m=>m.ref===id&&m.kind==='devis');
+  mailsDevis.forEach(m=>{ add(m.date,'✉️','Devis envoyé à '+(m.to||'—'),'#2980B9'); if(isOpened(m.id)) add(m.date,'👁️','Email ouvert par le client','#E67E22'); });
+  if(!mailsDevis.length&&d.dateEnvoi) add(d.dateEnvoi,'✉️','Devis envoyé','#2980B9');
+  if(d.signataire||d.signatureImg) add(d.signedAt||d.dateAcceptation,'✍️','Signé en ligne'+(d.signataire?' par '+d.signataire:''),'#27AE60');
+  else if(d.dateAcceptation) add(d.dateAcceptation,'✅','Devis accepté','#27AE60');
+  DB.all('recettes').filter(r=>r.ref===id).forEach(r=>add(r.date,'💰',(r.type||'Acompte')+' encaissé · '+fmtEur(r.montant),'#C4973A'));
+  const fa=factAcompteDe(id); if(fa) add(fa.dateEmission,'🧾','Facture d\'acompte '+fa.id,'#7B1C2E');
+  const fs=factSoldeDe(id); if(fs){ add(fs.dateEmission,'🧾','Facture '+fs.id+' émise','#7B1C2E');
+    DB.all('recettes').filter(r=>r.ref===fs.id).forEach(r=>add(r.date,'💰','Solde encaissé · '+fmtEur(r.montant),'#C4973A'));
+    add(fs.dateRelance1,'🔔','Relance 1 envoyée','#E67E22'); add(fs.dateRelance2,'🔔','Relance 2 envoyée','#E5564B');
+    if(fs.statut==='Payée') add(fs.datePaiement,'✅','Facture payée','#27AE60'); }
+  DB.all('mails').filter(m=>m.kind==='avis'&&m.ref===id).forEach(m=>add(m.date,'⭐','Demande d\'avis Google envoyée','#E8A13A'));
+  ev.sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
+  if(!ev.length) return '<div class="td-dim" style="padding:4px">Aucun événement enregistré.</div>';
+  return '<div style="position:relative;padding-left:4px;margin-top:8px">'
+    +'<div style="position:absolute;left:18px;top:14px;bottom:14px;width:2px;background:var(--bd)"></div>'
+    +ev.map(e=>`<div style="display:flex;gap:12px;align-items:flex-start;padding-bottom:14px;position:relative">
+        <span style="flex:0 0 30px;width:30px;height:30px;border-radius:50%;background:${e.color};display:flex;align-items:center;justify-content:center;font-size:14px;z-index:1">${e.icon}</span>
+        <div style="flex:1;padding-top:4px"><div style="font-size:11px;color:var(--gm)">${fmtDateShort(e.date)}</div><div style="font-size:13px">${esc(e.txt)}</div></div>
+      </div>`).join('')+'</div>';
+}
+/* Dossier événement : vue consolidée de TOUT ce qui touche un événement (1 devis = 1 dossier) */
+function dossierEvenement(id){
+  const d=DB.get('devis',id); if(!d)return;
+  const client=DB.get('clients',d.idClient)||DB.all('clients').find(c=>(c.nom+' '+(c.prenom||'')).trim()===(''+d.nomClient).trim())||{};
+  const dem=d.idDemandeOrigine?DB.get('demandes',d.idDemandeOrigine):null;
+  const fa=factAcompteDe(id), fs=factSoldeDe(id);
+  const presta=DB.all('prestations').find(p=>p.idDevis===id);
+  const recs=DB.all('recettes').filter(r=>r.ref===id||(fa&&r.ref===fa.id)||(fs&&r.ref===fs.id));
+  const encaisse=recs.reduce((s,r)=>s+(+r.montant||0),0);
+  const total=+d.montantTTC||0, reste=Math.max(0,total-encaisse);
+  const contact=`${esc(client.email||d.email||'—')}${(client.tel||d.tel)?' · '+esc(client.tel||d.tel):''}`;
+  const docRow=(ic,lbl,etat,act)=>`<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--bd)"><span style="font-size:17px">${ic}</span><div style="flex:1"><div style="font-size:13px">${lbl}</div><div class="td-dim" style="font-size:11px">${etat}</div></div>${act||''}</div>`;
+  let docs='';
+  docs+=docRow('📄','Devis '+esc(d.id),badge(d.statut),`<button class="btn btn-ghost btn-sm" onclick="closeModal();voirDevis('${id}')">Ouvrir</button>`);
+  if(dem) docs+=docRow('📥','Demande '+esc(dem.id),fmtDateShort(dem.date)+' · '+esc(dem.source||''),'');
+  if(fa) docs+=docRow('🧾',"Facture d'acompte "+esc(fa.id),badge(fa.statut)+' · '+fmtEur(factMontant?factMontant(fa):fa.montantTTC),`<button class="btn btn-ghost btn-sm" onclick="closeModal();voirFacture('${fa.id}')">Ouvrir</button>`);
+  if(fs) docs+=docRow('🧾','Facture '+esc(fs.id),badge(fs.statut)+' · '+fmtEur(fs.montantTTC),`<button class="btn btn-ghost btn-sm" onclick="closeModal();voirFacture('${fs.id}')">Ouvrir</button>`);
+  if(presta) docs+=docRow('🎩','Prestation',esc(presta.statutRealisation||'')+' · '+esc(presta.typePrestation||''),'');
+  const body=`
+    <div class="info-grid">
+      ${infoItem('Client',esc(d.nomClient)+'<br><span class="td-dim" style="font-size:12px">'+contact+'</span>')}
+      ${infoItem('Événement',fmtDateFr(d.dateEvenement)+' · '+esc(d.creneau||''))}
+      ${infoItem('Lieu',esc(d.lieu||'—'))}
+      ${infoItem('Invités',esc(d.nbInvites||'—'))}
+    </div>
+    <div class="kpi-grid" style="margin-top:12px">
+      ${kpi('or','Montant total',fmtEur(total))}
+      ${kpi('vert','Encaissé',fmtEur(encaisse))}
+      ${kpi(reste>0?'rouge':'vert','Reste dû',fmtEur(reste))}
+    </div>
+    <div class="panel" style="margin-top:14px"><div class="panel-title">📁 Documents du dossier</div>${docs}</div>
+    <div class="panel" style="margin-top:14px"><div class="panel-title">📜 Timeline</div>${timelineDevis(id)}</div>`;
+  openModal('Dossier · '+esc(d.nomClient)+' — '+fmtDateShort(d.dateEvenement),body,
+    `<button class="btn btn-or" onclick="closeModal();voirDevis('${id}')">Ouvrir le devis</button><button class="btn btn-ghost" onclick="closeModal()">Fermer</button>`);
+}
+function copySignLink(id){ const d=DB.get('devis',id); if(!d)return; const url=signUrl(d);
+  if(!url){ toast('Backend non configuré','err'); return; }
+  const fin=()=>toast('🔗 Lien de signature copié — colle-le au client','ok');
+  if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(url).then(fin,()=>prompt('Lien de signature :',url)); }
+  else prompt('Lien de signature :',url);
+}
+function voirSignature(id){ const d=DB.get('devis',id); if(!d)return;
+  const body=`<div style="text-align:center">
+    <div class="td-dim" style="margin-bottom:10px">Signé par <strong>${esc(d.signataire||'—')}</strong>${d.signedAt?' le '+fmtDateFr(d.signedAt.slice(0,10)):''}</div>
+    ${d.signatureImg?`<img src="${d.signatureImg}" alt="signature" style="max-width:100%;border:1px solid var(--bd);border-radius:10px;background:#fff;padding:8px">`:'<div class="td-dim">Acceptation par saisie du nom (sans tracé manuscrit).</div>'}
+    <div class="td-dim" style="margin-top:10px;font-size:12px">Mention « Bon pour accord » validée en ligne.</div>
+  </div>`;
+  openModal('Signature · '+esc(id),body,'<button class="btn btn-ghost" onclick="voirDevis(\''+id+'\')">← Retour au devis</button><button class="btn btn-ghost" onclick="closeModal()">Fermer</button>');
 }
 function transformerEnFacture(id){ facturerSolde(id); }
 function prestaFields(d){ return {dateEvenement:d.dateEvenement,creneau:d.creneau,horaire:d.horaire||'',lieu:d.lieu,distanceKm:d.distanceKm||0,typePrestation:(d.prestations||[]).map(p=>p.label).join(' + '),duree:(d.prestations||[]).map(p=>p.duree).filter(Boolean).join(' / '),contactSurPlace:d.nomClient+' '+(d.tel||'')}; }
@@ -1882,8 +2028,10 @@ function prenomDe(nom){ return (nom||'').trim().split(' ')[0]||''; }
 
 const EMAIL_TPL={
   devis(d){ const ac=Math.round((+d.montantTTC||0)*(d.acomptePct||0)/100);
+    const lien=signUrl(d);
+    const bloc=lien?`\n\n✍️ Pour accepter, signez votre devis en ligne en 1 clic (bon pour accord) :\n${lien}\n`:'';
     return { to:d.email, subject:'Votre devis LouisMagie — '+d.id,
-      body:`Bonjour ${prenomDe(d.nomClient)},\n\nSuite à votre demande, voici votre devis ${d.id} pour la prestation du ${fmtDateFr(d.dateEvenement)} (${d.creneau||''}) à ${d.lieu||''}.\n\nMontant total TTC : ${fmtEur(d.montantTTC)}\nAcompte de réservation (${d.acomptePct||0} %) : ${fmtEur(ac)}\n\nLa date est confirmée et bloquée dès réception de l'acompte. Le devis détaillé est joint en PDF.\n\nJe reste à votre disposition pour toute question.\n\n${sig()}` }; },
+      body:`Bonjour ${prenomDe(d.nomClient)},\n\nSuite à votre demande, voici votre devis ${d.id} pour la prestation du ${fmtDateFr(d.dateEvenement)} (${d.creneau||''}) à ${d.lieu||''}.\n\nMontant total TTC : ${fmtEur(d.montantTTC)}\nAcompte de réservation (${d.acomptePct||0} %) : ${fmtEur(ac)}\n\nLa date est confirmée et bloquée dès réception de l'acompte. Le devis détaillé est joint en PDF.${bloc}\nJe reste à votre disposition pour toute question.\n\n${sig()}` }; },
   facture(f,nom){ const lbl=f.type==='acompte'?'facture d\'acompte':(f.type==='solde'?'facture de solde':'facture');
     const corps=f.type==='acompte'
       ? `Montant de l'acompte : ${fmtEur(factMontant(f))}\n(acompte de réservation encaissé — le solde sera facturé après la prestation)`
@@ -2432,6 +2580,7 @@ async function cloudPull(){ const url=cloudUrl(); if(!url){ setCloudStatus('off'
     const total=ENTITIES.reduce((a,e)=>a+((j.data[e]||[]).length),0);
     if(total===0){ cloudPushAll(); return 'init'; }            // cloud vide → on l'initialise depuis le local
     ENTITIES.forEach(e=>{ if(Array.isArray(j.data[e])) DB._writeLocal(e,j.data[e]); });  // adopte le cloud (local-only, pas de re-push)
+    if(Array.isArray(j.signatures)) applySignatures(j.signatures);   // ré-applique le journal de signatures (anti-perte)
     if(j.config&&Object.keys(j.config).length){ const cur=DB.config(); localStorage.setItem(LS_PREFIX+'config', JSON.stringify(Object.assign({},j.config,{passwordHash:cur.passwordHash||j.config.passwordHash}))); }
     try{ if(Array.isArray(j.opens)) localStorage.setItem('lm_opens', JSON.stringify(j.opens.map(o=>o.m))); }catch(_){}
     setCloudStatus('ok'); return 'pulled';

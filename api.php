@@ -131,6 +131,123 @@ if ($action === 'track') {
   echo base64_decode('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'); exit;
 }
 
+/* ===== Signature électronique du devis (public, protégé par le token du devis) ===== */
+if ($action === 'sign' || $action === 'signSubmit') {
+  $id = $_GET['id'] ?? ($req['id'] ?? '');
+  $k  = $_GET['k']  ?? ($req['k']  ?? '');
+  $devis = readJson("$DATA_DIR/devis.json"); if(!is_array($devis)) $devis=[];
+  $idx=-1; foreach($devis as $i=>$d){ if(($d['id']??'')===$id){ $idx=$i; break; } }
+  $d = $idx>=0 ? $devis[$idx] : null;
+  $valid = $d && !empty($d['shareToken']) && hash_equals((string)$d['shareToken'], (string)$k);
+
+  if ($action === 'signSubmit') {
+    if(!$valid) out(['ok'=>false,'error'=>'lien invalide']);
+    if(!empty($d['signataire'])) out(['ok'=>true,'already'=>true]);
+    $signataire = trim($req['signataire'] ?? '');
+    $img = $req['signatureImg'] ?? '';
+    if($signataire===''&&$img==='') out(['ok'=>false,'error'=>'signature vide']);
+    $now = date('c');
+    $devis[$idx]['statut']='Accepté';
+    $devis[$idx]['dateAcceptation']=date('Y-m-d');
+    $devis[$idx]['signataire']=$signataire;
+    $devis[$idx]['signatureImg']=$img;
+    $devis[$idx]['signedAt']=$now;
+    $devis[$idx]['updatedAt']=$now;
+    writeJson("$DATA_DIR/devis.json",$devis);
+    // Journal séparé, jamais écrasé par une resynchro → la signature ne se perd jamais
+    $sf=$DATA_DIR.'/_signatures.json'; $sigs=readJson($sf); if(!is_array($sigs))$sigs=[];
+    $sigs=array_values(array_filter($sigs,function($s)use($id){return ($s['id']??'')!==$id;}));
+    $sigs[]=['id'=>$id,'signataire'=>$signataire,'signatureImg'=>$img,'signedAt'=>$now,
+             'ip'=>$_SERVER['REMOTE_ADDR']??'','montantTTC'=>$d['montantTTC']??0];
+    writeJson($sf,$sigs);
+    // Notifie LouisMagie (best effort, ignore les erreurs)
+    $notif=getenv('SMTP_FROM')?:getenv('SMTP_USER');
+    if($notif){ @smtpSend($notif,'✍️ Devis '.$id.' signé en ligne',
+      "Bonne nouvelle !\n\n".($signataire?:'Un client')." vient de signer le devis ".$id." (".number_format((float)($d['montantTTC']??0),2,',',' ')." € TTC).\nStatut passé à « Accepté ».\n\nLouisMagie CRM"); }
+    out(['ok'=>true]);
+  }
+
+  // action 'sign' : page HTML publique de signature
+  header('Content-Type: text/html; charset=utf-8');
+  $H=function($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); };
+  if(!$valid){ echo '<!doctype html><meta charset="utf-8"><div style="font-family:sans-serif;max-width:480px;margin:80px auto;text-align:center;color:#333"><h2>Lien invalide ou expiré</h2><p>Ce lien de signature n\'est plus valide. Contactez LouisMagie.</p></div>'; exit; }
+  $already = !empty($d['signataire']);
+  $ttc=number_format((float)($d['montantTTC']??0),2,',',' ');
+  $acPct=(float)($d['acomptePct']??0);
+  $ac=number_format((float)($d['montantTTC']??0)*$acPct/100,2,',',' ');
+  $rows='';
+  foreach(($d['prestations']??[]) as $p){
+    $rows.='<tr><td>'.$H($p['label']??'').($p['duree']?' <span class="dim">('.$H($p['duree']).')</span>':'').'</td><td class="r">'.number_format((float)($p['prix']??0),2,',',' ').' €</td></tr>';
+  }
+  if(!empty($d['fraisDeplacement'])) $rows.='<tr><td class="dim">Frais de déplacement</td><td class="r">'.number_format((float)$d['fraisDeplacement'],2,',',' ').' €</td></tr>';
+  $dEvt = $d['dateEvenement']??''; $creneau=$d['creneau']??''; $lieu=$d['lieu']??'';
+  $jid=$H($id); $jk=$H($k);
+  $okBlock = $already
+    ? '<div class="done">✅ Devis déjà signé par <b>'.$H($d['signataire']).'</b>'.(!empty($d['signedAt'])?' le '.$H(date('d/m/Y',strtotime($d['signedAt']))):'').'.<br>Merci !</div>'
+    : '';
+  echo '<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+    .'<title>Signature du devis '.$jid.' — LouisMagie</title><style>'
+    .'*{box-sizing:border-box}body{margin:0;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#15120e;color:#1c1814;padding:18px}'
+    .'.wrap{max-width:560px;margin:0 auto;background:#fff;border-radius:18px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.4)}'
+    .'.hd{background:linear-gradient(135deg,#FF7700,#ff9d3d);color:#fff;padding:24px 22px}'
+    .'.hd h1{margin:0;font-size:20px;letter-spacing:.5px}.hd p{margin:4px 0 0;opacity:.95;font-size:13px}'
+    .'.bd{padding:22px}.bd h2{font-size:14px;color:#FF7700;margin:0 0 8px;text-transform:uppercase;letter-spacing:.5px}'
+    .'table{width:100%;border-collapse:collapse;font-size:14px;margin-bottom:14px}td{padding:7px 0;border-bottom:1px solid #eee}'
+    .'.r{text-align:right;white-space:nowrap}.dim{color:#888;font-size:13px}.tot{font-weight:700;font-size:16px}.tot td{color:#FF7700;border-bottom:none;padding-top:12px}'
+    .'.meta{font-size:13px;color:#555;margin-bottom:16px;line-height:1.6}'
+    .'label{display:block;font-size:13px;font-weight:600;margin:14px 0 6px;color:#333}'
+    .'input[type=text]{width:100%;padding:12px;border:1px solid #ccc;border-radius:10px;font-size:16px}'
+    .'#pad{width:100%;height:160px;border:2px dashed #FF7700;border-radius:12px;background:#fffdfa;touch-action:none;display:block}'
+    .'.padhint{font-size:12px;color:#999;text-align:center;margin-top:4px}'
+    .'.clr{background:none;border:none;color:#FF7700;font-size:13px;cursor:pointer;float:right}'
+    .'.chk{display:flex;align-items:flex-start;gap:10px;margin:16px 0;font-size:13px;color:#444}.chk input{margin-top:3px;width:18px;height:18px}'
+    .'button.go{width:100%;padding:15px;background:#FF7700;color:#fff;border:none;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer}button.go:disabled{opacity:.45}'
+    .'.done{background:#e9f9ef;color:#1d7a45;padding:16px;border-radius:12px;text-align:center;font-size:15px;line-height:1.5}'
+    .'.foot{text-align:center;font-size:11px;color:#aaa;padding:14px}'
+    .'</style></head><body><div class="wrap">'
+    .'<div class="hd"><h1>LouisMagie</h1><p>Devis '.$jid.' · à valider</p></div><div class="bd">'
+    .'<div class="meta"><b>'.$H($d['nomClient']??'').'</b><br>'
+    .($dEvt?'Événement : '.$H(date('d/m/Y',strtotime($dEvt))).($creneau?' · '.$H($creneau):'').'<br>':'')
+    .($lieu?'Lieu : '.$H($lieu):'').'</div>'
+    .'<h2>Prestation</h2><table>'.$rows
+    .'<tr class="tot"><td>Total TTC</td><td class="r">'.$ttc.' €</td></tr>'
+    .($acPct>0?'<tr><td class="dim">Acompte de réservation ('.rtrim(rtrim(number_format($acPct,1,',',''),'0'),',').' %)</td><td class="r dim">'.$ac.' €</td></tr>':'')
+    .'</table>';
+  if($already){ echo $okBlock; }
+  else {
+    echo '<form id="f"><h2>Signature</h2>'
+      .'<label>Votre nom et prénom <button type="button" class="clr" onclick="clr()">effacer le tracé</button></label>'
+      .'<input type="text" id="name" placeholder="Nom Prénom" autocomplete="name">'
+      .'<canvas id="pad"></canvas><div class="padhint">Signez avec le doigt ou la souris (facultatif)</div>'
+      .'<label class="chk"><input type="checkbox" id="agree"><span>J\'accepte ce devis et porte la mention « <b>Bon pour accord</b> » pour un montant de '.$ttc.' € TTC.</span></label>'
+      .'<button type="submit" class="go" id="go" disabled>✍️ Signer et accepter</button>'
+      .'<div id="msg"></div></form>';
+    echo '<script>'
+      .'var c=document.getElementById("pad"),x=c.getContext("2d"),drawn=false,dr=false;'
+      .'function rz(){var r=c.getBoundingClientRect();c.width=r.width*2;c.height=r.height*2;x.scale(2,2);x.lineWidth=2.2;x.lineCap="round";x.strokeStyle="#1c1814";}rz();'
+      .'function pos(e){var r=c.getBoundingClientRect(),t=e.touches?e.touches[0]:e;return[t.clientX-r.left,t.clientY-r.top];}'
+      .'function st(e){dr=true;var p=pos(e);x.beginPath();x.moveTo(p[0],p[1]);e.preventDefault();}'
+      .'function mv(e){if(!dr)return;var p=pos(e);x.lineTo(p[0],p[1]);x.stroke();drawn=true;e.preventDefault();}'
+      .'function en(){dr=false;}'
+      .'c.addEventListener("mousedown",st);c.addEventListener("mousemove",mv);window.addEventListener("mouseup",en);'
+      .'c.addEventListener("touchstart",st,{passive:false});c.addEventListener("touchmove",mv,{passive:false});c.addEventListener("touchend",en);'
+      .'function clr(){x.clearRect(0,0,c.width,c.height);drawn=false;}'
+      .'var nm=document.getElementById("name"),ag=document.getElementById("agree"),go=document.getElementById("go");'
+      .'function upd(){go.disabled=!(ag.checked&&(nm.value.trim().length>1||drawn));}'
+      .'nm.addEventListener("input",upd);ag.addEventListener("change",upd);c.addEventListener("mouseup",upd);c.addEventListener("touchend",upd);'
+      .'document.getElementById("f").addEventListener("submit",function(e){e.preventDefault();go.disabled=true;go.textContent="Envoi…";'
+      .'var img=drawn?c.toDataURL("image/png"):"";'
+      .'fetch(location.pathname+"?action=signSubmit",{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify({id:"'.$jid.'",k:"'.$jk.'",signataire:nm.value.trim(),signatureImg:img})})'
+      .'.then(function(r){return r.json();}).then(function(j){'
+      .'if(j&&j.ok){document.getElementById("f").innerHTML=\'<div class="done">✅ Merci ! Votre devis est accepté.<br>Vous recevrez la confirmation par email.</div>\';}'
+      .'else{go.disabled=false;go.textContent="✍️ Signer et accepter";document.getElementById("msg").innerHTML=\'<p style="color:#c00;font-size:13px">Erreur : \'+((j&&j.error)||"réessayez")+\'</p>\';}'
+      .'}).catch(function(){go.disabled=false;go.textContent="✍️ Signer et accepter";});});'
+      .'</script>';
+  }
+  echo '</div><div class="foot">LouisMagie — Louis Slosse · contact@louismagie.fr</div></body></html>';
+  exit;
+}
+
 /* ===== Envoi planifié (déclenché par cron Coolify, protégé par CRON_KEY) ===== */
 if ($action === 'runScheduled') {
   if (($_GET['key'] ?? '') === '' || ($_GET['key'] ?? '') !== getenv('CRON_KEY')) out(['ok'=>false,'error'=>'cron key invalide']);
@@ -186,7 +303,8 @@ switch ($action) {
     $data = []; foreach ($ENTITIES as $e) { $v = readJson("$DATA_DIR/$e.json"); $data[$e] = is_array($v) ? $v : []; }
     $config = readJson("$DATA_DIR/config.json"); if(!is_array($config)) $config = [];
     $opens = readJson($DATA_DIR.'/_opens.json'); if(!is_array($opens)) $opens = [];
-    out(['ok'=>true, 'data'=>$data, 'config'=>$config, 'opens'=>$opens]);
+    $sigs  = readJson($DATA_DIR.'/_signatures.json'); if(!is_array($sigs)) $sigs = [];
+    out(['ok'=>true, 'data'=>$data, 'config'=>$config, 'opens'=>$opens, 'signatures'=>$sigs]);
   }
 
   case 'putEntity': {
