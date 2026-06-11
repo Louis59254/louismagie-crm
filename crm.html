@@ -494,20 +494,28 @@ function emailHtml(text){
   if(sign) body=body.replace(TOK,btn);
   return emailShell(body);
 }
-/* Coquille HTML brandée (header logo + tagline, pied de page) ; innerHtml = contenu déjà formaté */
+/* Éclaircit une couleur hex vers le blanc (pour le dégradé d'en-tête) */
+function shadeHex(hex,pct){ hex=String(hex||'#FF7700').replace('#',''); if(hex.length===3)hex=hex.split('').map(c=>c+c).join(''); const n=parseInt(hex,16)||0xFF7700;
+  let r=(n>>16)&255,g=(n>>8)&255,b=n&255; r=Math.round(r+(255-r)*pct); g=Math.round(g+(255-g)*pct); b=Math.round(b+(255-b)*pct);
+  return '#'+((1<<24)+(r<<16)+(g<<8)+b).toString(16).slice(1); }
+/* Coquille HTML brandée — header (logo + tagline + couleur) et footer paramétrables (Réglages) */
 function emailShell(innerHtml){
   const cfg=DB.config(), logo=(cfg.logo&&emailLogoUrl())?emailLogoUrl():'';
   const e=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   const mail=cfg.emailLouis||'contact@louismagie.fr', tel=cfg.entrepriseTel||'', logoH=logo?138:0;
+  const tagline=cfg.emailTagline!=null&&cfg.emailTagline!==''?cfg.emailTagline:'Magicien pour vos évènements';
+  const hColor=cfg.emailHeaderColor||'#FF7700';
+  const footerTpl=cfg.emailFooter!=null&&cfg.emailFooter!==''?cfg.emailFooter:'LouisMagie — Louis Slosse · Magicien\n{email} · {tel}\nDunkerque & Hauts-de-France';
+  const footerHtml=footerTpl.replace(/{email}/g,mail).replace(/{tel}/g,tel).split('\n')
+    .map((l,i)=> i===0 ? `<strong style="color:${hColor}">${e(l)}</strong>` : `<span style="color:#c9c2b8">${e(l)}</span>`).join('<br>');
   return `<!doctype html><html><body style="margin:0;background:#f4f1ec"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f1ec;padding:24px 0"><tr><td align="center">`
     +`<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#fff;border-radius:14px;overflow:hidden;font-family:Arial,Helvetica,sans-serif">`
-    +`<tr><td align="center" style="background:linear-gradient(135deg,#FF7700,#ff9d3d);padding:26px 28px">`
+    +`<tr><td align="center" style="background:linear-gradient(135deg,${hColor},${shadeHex(hColor,0.3)});padding:26px 28px">`
     +(logo?`<img src="${logo}" alt="LouisMagie" height="${logoH}" style="max-height:${logoH}px;display:block;margin:0 auto 10px">`:'')
-    +`<div style="color:#fff;font-size:17px;font-weight:bold;letter-spacing:1px">Magicien pour vos évènements</div></td></tr>`
+    +(tagline?`<div style="color:#fff;font-size:17px;font-weight:bold;letter-spacing:1px">${e(tagline)}</div>`:'')+`</td></tr>`
     +`<tr><td style="padding:28px;color:#222;font-size:15px;line-height:1.6">${innerHtml}</td></tr>`
-    +`<tr><td align="center" style="padding:18px 28px;background:#15120e;color:#c9c2b8;font-size:12px">`
-    +`<strong style="color:#FF7700">LouisMagie</strong> — Louis Slosse · Magicien<br>${e(mail)}${tel?' · '+e(tel):''}<br>`
-    +`<span style="color:#7a7268">Dunkerque &amp; Hauts-de-France</span></td></tr></table></td></tr></table></body></html>`;
+    +`<tr><td align="center" style="padding:18px 28px;background:#15120e;font-size:12px;line-height:1.7">${footerHtml}</td></tr>`
+    +`</table></td></tr></table></body></html>`;
 }
 /* Emails au format riche (WYSIWYG) : le HTML est déjà formaté, on l'injecte tel quel dans la coquille */
 function emailHtmlRich(html){ return emailShell(html||''); }
@@ -2628,6 +2636,17 @@ RENDERERS.reglages=function(){
       </div>
     </div>
 
+    <div class="panel"><div class="panel-title">✉️ En-tête & pied de page des emails</div>
+      <div class="td-dim" style="margin-bottom:12px">Personnalise le bandeau et le bas de tous tes emails (devis, factures, marketing). Aperçu en direct dans Marketing → 👁 Aperçu.</div>
+      <div class="form-grid">
+        <div class="form-group"><label class="form-label">Slogan d'en-tête</label><input class="form-control" id="cfg-emailTagline" value="${esc(cfg.emailTagline!=null?cfg.emailTagline:'Magicien pour vos évènements')}"></div>
+        <div class="form-group"><label class="form-label">Couleur d'en-tête</label><input class="form-control" type="color" id="cfg-emailHeaderColor" value="${esc(cfg.emailHeaderColor||'#FF7700')}" style="height:42px;padding:4px"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Pied de page <span class="td-dim">(1 ligne = 1 ligne · {email} et {tel} remplacés auto · 1ʳᵉ ligne en couleur)</span></label>
+        <textarea class="form-control" id="cfg-emailFooter" style="min-height:90px">${esc(cfg.emailFooter!=null?cfg.emailFooter:'LouisMagie — Louis Slosse · Magicien\n{email} · {tel}\nDunkerque & Hauts-de-France')}</textarea></div>
+      <div style="text-align:right;margin-top:10px"><button class="btn btn-or" onclick="saveParams()">Enregistrer</button></div>
+    </div>
+
     <div class="table-wrap"><div class="table-header">
       <div class="table-title">Catalogue de prestations</div>
       <button class="btn btn-or btn-sm" onclick="addCat()">+ Ajouter une prestation</button></div>
@@ -2711,7 +2730,7 @@ function delCat(id){ DB.remove('catalogue',id); RENDERERS.reglages(); toast('Sup
 function saveParams(){
   const cfg=DB.config();
   ['fraisKm','acompteDefautPct','delaiRelance1','delaiRelance2','tauxUrssaf','tauxImpotLib'].forEach(k=>{const e=document.getElementById('cfg-'+k); if(e)cfg[k]=+e.value||0;});
-  ['emailLouis','googleReviewUrl','signature','entrepriseContact','entrepriseStatut','entrepriseSiret','entrepriseAdresse','entrepriseTel','bic','iban','mentionTva','delaiPaiement','urssafUrl','appsScriptUrl','backendToken'].forEach(k=>{const e=document.getElementById('cfg-'+k); if(e)cfg[k]=(e.value||'').trim();});
+  ['emailLouis','googleReviewUrl','signature','entrepriseContact','entrepriseStatut','entrepriseSiret','entrepriseAdresse','entrepriseTel','bic','iban','mentionTva','delaiPaiement','urssafUrl','appsScriptUrl','backendToken','emailTagline','emailHeaderColor','emailFooter'].forEach(k=>{const e=document.getElementById('cfg-'+k); if(e)cfg[k]=(e.value||'').trim();});
   const vl=document.getElementById('cfg-versementLiberatoire'); if(vl)cfg.versementLiberatoire=(vl.value==='oui');
   const ge=document.getElementById('cfg-gmailEnvoi'); if(ge)cfg.gmailEnvoi=(ge.value==='oui');
   DB.saveConfig(cfg); logActivite('Paramètres mis à jour'); toast('Paramètres enregistrés','ok');
