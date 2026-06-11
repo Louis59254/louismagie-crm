@@ -481,21 +481,25 @@ function emailHtml(text){
   const cfg=DB.config(), logo=(cfg.logo&&emailLogoUrl())?emailLogoUrl():'';
   const e=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   let txt=String(text||'');
-  // Lien de signature → bouton CTA, retiré du corps texte (la version texte brut le garde pour les clients sans HTML)
+  // Lien de signature → bouton inline, placé à l'endroit même du lien (sous la proposition)
   const sign=txt.match(/https?:\/\/\S*action=sign\S*/);
-  if(sign){ txt=txt.replace(/\n*[^\n]*action=sign[^\n]*\n?/,'\n').replace(/\n*✍️[^\n]*\n?/,'\n'); }
-  const body=e(txt.trim()).replace(/(https?:\/\/[^\s<]+)/g,'<a href="$1" style="color:#FF7700;word-break:break-all">$1</a>').replace(/\n/g,'<br>');
-  const ctaRow=sign
-    ? `<tr><td align="center" style="padding:6px 28px 26px"><a href="${sign[0]}" style="display:inline-block;background:#FF7700;background:linear-gradient(135deg,#FF7700,#ff9d3d);color:#ffffff;text-decoration:none;font-weight:bold;font-size:16px;padding:15px 40px;border-radius:12px;box-shadow:0 6px 18px rgba(255,119,0,.40)">✍️&nbsp;&nbsp;Signer mon devis en ligne</a><div style="color:#9a948b;font-size:11px;margin-top:11px">Signature électronique sécurisée · valeur « Bon pour accord »</div></td></tr>`
-    : '';
+  const TOK='@@CTA_SIGN@@';
+  if(sign){
+    txt=txt.replace(/\n*✍️[^\n]*\n*https?:\/\/\S*action=sign\S*\n?/, '\n'+TOK+'\n');  // intro + URL → token
+    txt=txt.replace(/^.*action=sign.*$/m,'');                                          // sécurité : aucune URL résiduelle
+    if(txt.indexOf(TOK)<0) txt+='\n\n'+TOK;                                            // repli : bouton à la fin
+  }
+  const btn=sign?`<div style="text-align:center;margin:24px 0 8px"><a href="${sign[0]}" style="display:inline-block;background:#FF7700;background:linear-gradient(135deg,#FF7700,#ff9d3d);color:#ffffff;text-decoration:none;font-weight:bold;font-size:16px;padding:15px 40px;border-radius:12px;box-shadow:0 6px 18px rgba(255,119,0,.40)">✍️&nbsp;&nbsp;Signer mon devis en ligne</a><div style="color:#9a948b;font-size:11px;margin-top:11px">Signature électronique sécurisée · valeur « Bon pour accord »</div></div>`:'';
+  let body=e(txt.trim()).replace(/(https?:\/\/[^\s<]+)/g,'<a href="$1" style="color:#FF7700;word-break:break-all">$1</a>').replace(/\n/g,'<br>');
+  if(sign) body=body.replace(TOK,btn);
   const mail=cfg.emailLouis||'contact@louismagie.fr', tel=cfg.entrepriseTel||'';
+  const logoH=logo?138:0;   // ×3 (46 → 138)
   return `<!doctype html><html><body style="margin:0;background:#f4f1ec"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f1ec;padding:24px 0"><tr><td align="center">`
     +`<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#fff;border-radius:14px;overflow:hidden;font-family:Arial,Helvetica,sans-serif">`
-    +`<tr><td align="center" style="background:linear-gradient(135deg,#FF7700,#ff9d3d);padding:22px 28px">`
-    +(logo?`<img src="${logo}" alt="LouisMagie" height="46" style="max-height:46px;display:block;margin:0 auto 6px">`:'')
-    +`<div style="color:#fff;font-size:20px;font-weight:bold;letter-spacing:3px">LOUISMAGIE</div></td></tr>`
-    +`<tr><td style="padding:28px 28px ${sign?'14px':'28px'};color:#222;font-size:15px;line-height:1.6">${body}</td></tr>`
-    +ctaRow
+    +`<tr><td align="center" style="background:linear-gradient(135deg,#FF7700,#ff9d3d);padding:26px 28px">`
+    +(logo?`<img src="${logo}" alt="LouisMagie" height="${logoH}" style="max-height:${logoH}px;display:block;margin:0 auto 10px">`:'')
+    +`<div style="color:#fff;font-size:17px;font-weight:bold;letter-spacing:1px">Magicien pour vos évènements</div></td></tr>`
+    +`<tr><td style="padding:28px;color:#222;font-size:15px;line-height:1.6">${body}</td></tr>`
     +`<tr><td align="center" style="padding:18px 28px;background:#15120e;color:#c9c2b8;font-size:12px">`
     +`<strong style="color:#FF7700">LouisMagie</strong> — Louis Slosse · Magicien<br>${e(mail)}${tel?' · '+e(tel):''}<br>`
     +`<span style="color:#7a7268">Dunkerque &amp; Hauts-de-France</span></td></tr></table></td></tr></table></body></html>`;
