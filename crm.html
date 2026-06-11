@@ -436,7 +436,7 @@ const LOGO_B64="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAACgCAYAAACLz2
    ════════════════════════════════════════════════════ */
 
 /* ───── Couche données (abstraction) ───── */
-const ENTITIES = ['demandes','devis','prestations','factures','clients','relances','activite','mails','catalogue','recettes','declarations','planifs'];
+const ENTITIES = ['demandes','devis','prestations','factures','clients','relances','activite','mails','catalogue','recettes','declarations','planifs','templates'];
 const LS_PREFIX = 'lm_crm_';
 const DB = {
   all(e){ try{ return JSON.parse(localStorage.getItem(LS_PREFIX+e)) || []; }catch(_){ return []; } },
@@ -492,18 +492,27 @@ function emailHtml(text){
   const btn=sign?`<div style="text-align:center;margin:24px 0 8px"><a href="${sign[0]}" style="display:inline-block;background:#FF7700;background:linear-gradient(135deg,#FF7700,#ff9d3d);color:#ffffff;text-decoration:none;font-weight:bold;font-size:16px;padding:15px 40px;border-radius:12px;box-shadow:0 6px 18px rgba(255,119,0,.40)">✍️&nbsp;&nbsp;Signer mon devis en ligne</a><div style="color:#9a948b;font-size:11px;margin-top:11px">Signature électronique sécurisée · valeur « Bon pour accord »</div></div>`:'';
   let body=e(txt.trim()).replace(/(https?:\/\/[^\s<]+)/g,'<a href="$1" style="color:#FF7700;word-break:break-all">$1</a>').replace(/\n/g,'<br>');
   if(sign) body=body.replace(TOK,btn);
-  const mail=cfg.emailLouis||'contact@louismagie.fr', tel=cfg.entrepriseTel||'';
-  const logoH=logo?138:0;   // ×3 (46 → 138)
+  return emailShell(body);
+}
+/* Coquille HTML brandée (header logo + tagline, pied de page) ; innerHtml = contenu déjà formaté */
+function emailShell(innerHtml){
+  const cfg=DB.config(), logo=(cfg.logo&&emailLogoUrl())?emailLogoUrl():'';
+  const e=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const mail=cfg.emailLouis||'contact@louismagie.fr', tel=cfg.entrepriseTel||'', logoH=logo?138:0;
   return `<!doctype html><html><body style="margin:0;background:#f4f1ec"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f1ec;padding:24px 0"><tr><td align="center">`
     +`<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#fff;border-radius:14px;overflow:hidden;font-family:Arial,Helvetica,sans-serif">`
     +`<tr><td align="center" style="background:linear-gradient(135deg,#FF7700,#ff9d3d);padding:26px 28px">`
     +(logo?`<img src="${logo}" alt="LouisMagie" height="${logoH}" style="max-height:${logoH}px;display:block;margin:0 auto 10px">`:'')
     +`<div style="color:#fff;font-size:17px;font-weight:bold;letter-spacing:1px">Magicien pour vos évènements</div></td></tr>`
-    +`<tr><td style="padding:28px;color:#222;font-size:15px;line-height:1.6">${body}</td></tr>`
+    +`<tr><td style="padding:28px;color:#222;font-size:15px;line-height:1.6">${innerHtml}</td></tr>`
     +`<tr><td align="center" style="padding:18px 28px;background:#15120e;color:#c9c2b8;font-size:12px">`
     +`<strong style="color:#FF7700">LouisMagie</strong> — Louis Slosse · Magicien<br>${e(mail)}${tel?' · '+e(tel):''}<br>`
     +`<span style="color:#7a7268">Dunkerque &amp; Hauts-de-France</span></td></tr></table></td></tr></table></body></html>`;
 }
+/* Emails au format riche (WYSIWYG) : le HTML est déjà formaté, on l'injecte tel quel dans la coquille */
+function emailHtmlRich(html){ return emailShell(html||''); }
+/* Version texte brut (alternative pour les clients sans HTML) */
+function stripHtml(h){ const d=document.createElement('div'); d.innerHTML=String(h||'').replace(/<\/(p|div|h[1-6]|li)>/gi,'\n').replace(/<br\s*\/?>/gi,'\n'); return (d.textContent||d.innerText||'').replace(/\n{3,}/g,'\n\n').trim(); }
 function uploadLogo(input){
   const f=input.files&&input.files[0]; if(!f)return;
   const r=new FileReader();
@@ -2364,7 +2373,51 @@ const MKT_CAMPAIGNS=[
 ];
 function mktApply(str,c){ return str.replace(/{prenom}/g,prenomDe(c?(c.prenom||c.nom):'')).replace(/{sig}/g,sig()).replace(/{avisurl}/g,DB.config().googleReviewUrl||''); }
 
-let _mktFiltre='', _mktTpl='anniv', _mktSearch='';
+let _mktFiltre='', _mktTpl='anniv', _mktSearch='', _mktDraft=null;
+/* ── Studio mailing : contenu d'un modèle (sauvegardé ou intégré) → {subject, html} ── */
+function mktTemplateContent(key){
+  if(key&&key.indexOf('tpl:')===0){ const t=DB.get('templates',key.slice(4)); if(t) return {subject:t.subject||'',html:t.html||''}; }
+  if(key==='_new') return {subject:'',html:''};
+  const t=MKT_CAMPAIGNS.find(x=>x.key===key)||MKT_CAMPAIGNS[0];
+  const body=t.body.replace(/{sig}/g,sig()).replace(/{avisurl}/g,DB.config().googleReviewUrl||'');
+  return {subject:t.subject,html:esc(body).replace(/\n/g,'<br>')};
+}
+function mktVars(s,c){ return String(s||'').replace(/{prenom}/g,prenomDe(c.prenom||c.nom)).replace(/{nom}/g,((c.prenom?c.prenom+' ':'')+(c.nom||'')).trim()); }
+function mktCaptureDraft(){ const s=document.getElementById('mkt-subject'), ed=document.getElementById('mkt-editor');
+  if(s&&ed) _mktDraft={subject:s.value,html:ed.innerHTML}; }
+function mktLoadTpl(key){ if(key==='_new'){ _mktTpl='_new'; _mktDraft={subject:'',html:'<br>'}; } else { _mktTpl=key; _mktDraft=null; } RENDERERS.marketing(); }
+/* Toolbar WYSIWYG */
+function mktExec(cmd,val){ const ed=document.getElementById('mkt-editor'); if(ed)ed.focus(); document.execCommand(cmd,false,val||null); }
+function mktFont(sel){ if(sel.value)mktExec('fontSize',sel.value); sel.selectedIndex=0; }
+function mktColor(inp,cmd){ const ed=document.getElementById('mkt-editor'); if(ed)ed.focus(); try{document.execCommand('styleWithCSS',false,true);}catch(_){}
+  if(!document.execCommand(cmd,false,inp.value)&&cmd==='hiliteColor') document.execCommand('backColor',false,inp.value); }
+function mktToolbarHtml(){
+  const B='border:1px solid #d8d2c8;background:#fff;color:#333;border-radius:6px;height:30px;cursor:pointer;font-size:13px';
+  const b=(cmd,label,title)=>`<button type="button" title="${title}" onmousedown="return false" onclick="mktExec('${cmd}')" style="${B};min-width:30px">${label}</button>`;
+  return `<div style="display:flex;flex-wrap:wrap;gap:5px;padding:8px;background:#f0ece6;border-bottom:1px solid #d8d2c8">`
+    +b('bold','<b>B</b>','Gras')+b('italic','<i>I</i>','Italique')+b('underline','<u>U</u>','Souligné')+b('strikeThrough','<s>S</s>','Barré')
+    +`<select onchange="mktFont(this)" onmousedown="event.stopPropagation()" style="${B};padding:0 4px"><option value="">Taille</option><option value="2">Petit</option><option value="3">Normal</option><option value="5">Grand</option><option value="6">Très grand</option><option value="7">Géant</option></select>`
+    +`<label title="Couleur du texte" style="display:inline-flex;align-items:center;${B};padding:0 6px">A<input type="color" value="#222222" onchange="mktColor(this,'foreColor')" style="width:20px;height:20px;border:none;background:none;margin-left:3px;cursor:pointer"></label>`
+    +`<label title="Surlignage" style="display:inline-flex;align-items:center;${B};padding:0 6px">🖍<input type="color" value="#ffff00" onchange="mktColor(this,'hiliteColor')" style="width:20px;height:20px;border:none;background:none;margin-left:3px;cursor:pointer"></label>`
+    +b('justifyLeft','⬅','Aligner à gauche')+b('justifyCenter','⬍','Centrer')+b('justifyRight','➡','Aligner à droite')+b('justifyFull','☰','Justifier')
+    +b('insertUnorderedList','•','Liste à puces')+b('insertOrderedList','1.','Liste numérotée')
+    +`<button type="button" title="Lien" onmousedown="return false" onclick="mktLink()" style="${B};padding:0 8px">🔗</button>`
+    +`<button type="button" title="Effacer la mise en forme" onmousedown="return false" onclick="mktExec('removeFormat');mktExec('unlink')" style="${B};padding:0 8px">✕</button>`
+    +`</div>`;
+}
+function mktLink(){ const u=prompt('Adresse du lien (https://…) :','https://'); if(u)mktExec('createLink',u); }
+function mktInsertVar(tag){ const ed=document.getElementById('mkt-editor'); if(ed)ed.focus(); document.execCommand('insertText',false,tag); }
+function mktPreview(){ const box=document.getElementById('mkt-pv'), fr=document.getElementById('mkt-pv-frame'), ed=document.getElementById('mkt-editor');
+  if(!box||!fr||!ed)return; if(box.style.display==='block'){ box.style.display='none'; return; }
+  fr.srcdoc=emailHtmlRich(ed.innerHTML); box.style.display='block'; box.scrollIntoView({behavior:'smooth',block:'nearest'}); }
+function mktSaveTemplate(){ mktCaptureDraft(); if(!_mktDraft)return;
+  const def=(_mktTpl&&_mktTpl.indexOf('tpl:')===0)?(DB.get('templates',_mktTpl.slice(4))||{}).name:'';
+  const name=prompt('Nom du modèle :', def||_mktDraft.subject||'Mon modèle'); if(!name)return;
+  const id=(_mktTpl&&_mktTpl.indexOf('tpl:')===0)?_mktTpl.slice(4):uid('TPL');
+  DB.save('templates',{id,name:name.trim(),subject:_mktDraft.subject,html:_mktDraft.html,updatedAt:new Date().toISOString()});
+  _mktTpl='tpl:'+id; _mktDraft=null; logActivite('Modèle mailing enregistré · '+name.trim()); toast('💾 Modèle « '+name.trim()+' » enregistré','ok'); RENDERERS.marketing(); }
+function mktDeleteTemplate(){ if(!_mktTpl||_mktTpl.indexOf('tpl:')!==0)return; const t=DB.get('templates',_mktTpl.slice(4));
+  if(!confirm('Supprimer le modèle « '+(t?t.name:'')+' » ?'))return; DB.remove('templates',_mktTpl.slice(4)); _mktTpl='anniv'; _mktDraft=null; toast('Modèle supprimé','ok'); RENDERERS.marketing(); }
 function clientDernierEvt(id){ const ds=DB.all('devis').filter(d=>d.idClient===id).map(d=>d.dateEvenement||d.dateCreation).filter(Boolean).sort(); return ds[ds.length-1]||''; }
 function mktRappels(){ // {c, raison, info, key}
   const now=new Date(), mois=now.getMonth(), an=now.getFullYear(); const out=[]; const vus=new Set();
@@ -2396,8 +2449,11 @@ RENDERERS.marketing=function(){
       <span style="flex:1">${esc((c.prenom+' '+c.nom).trim())}<span class="td-dim"> · ${esc(c.email)}</span></span>
       <span class="badge ${c.type==='partenaire'?'accepte':c.type==='entreprise'?'nouveau':'brouillon'}">${esc(c.type)}</span></label>`).join('');
 
-  const tplOpts=MKT_CAMPAIGNS.map(t=>`<option value="${t.key}"${t.key===_mktTpl?' selected':''}>${t.label}</option>`).join('');
-  const tpl=MKT_CAMPAIGNS.find(t=>t.key===_mktTpl)||MKT_CAMPAIGNS[0];
+  const saved=DB.all('templates');
+  const builtinOpts=MKT_CAMPAIGNS.map(t=>`<option value="${t.key}"${t.key===_mktTpl?' selected':''}>${t.label}</option>`).join('');
+  const savedOpts=saved.map(t=>`<option value="tpl:${t.id}"${_mktTpl==='tpl:'+t.id?' selected':''}>⭐ ${esc(t.name)}</option>`).join('');
+  const cur=_mktDraft||mktTemplateContent(_mktTpl);
+  const isCustom=_mktTpl&&_mktTpl.indexOf('tpl:')===0;
 
   document.getElementById('view-marketing').innerHTML=`
     <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr)">
@@ -2412,18 +2468,39 @@ RENDERERS.marketing=function(){
       ${rappelHtml}
     </div>
 
-    <div class="panel"><div class="panel-title">📤 Campagne groupée</div>
+    <div class="panel"><div class="panel-title">🎨 Studio mailing</div>
       <div class="form-grid">
-        <div class="form-group"><label class="form-label">Modèle d'email</label>
-          <select class="form-control" id="mkt-tpl" onchange="_mktTpl=this.value;RENDERERS.marketing()">${tplOpts}</select></div>
+        <div class="form-group"><label class="form-label">Modèle</label>
+          <select class="form-control" id="mkt-tpl" onchange="mktLoadTpl(this.value)">
+            ${savedOpts?`<optgroup label="Mes modèles">${savedOpts}</optgroup>`:''}
+            <optgroup label="Modèles intégrés">${builtinOpts}</optgroup>
+            <option value="_new"${_mktTpl==='_new'?' selected':''}>🆕 Nouveau modèle vierge</option></select></div>
         <div class="form-group"><label class="form-label">Filtrer les destinataires</label>
-          <select class="form-control" onchange="_mktFiltre=this.value;RENDERERS.marketing()">
+          <select class="form-control" onchange="mktCaptureDraft();_mktFiltre=this.value;RENDERERS.marketing()">
             ${opt('','Tous les contacts')}${opt('particulier','Particuliers')}${opt('entreprise','Entreprises')}${opt('partenaire','Partenaires')}</select></div>
       </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+        <button class="btn btn-ghost btn-sm" onclick="mktSaveTemplate()">💾 Enregistrer le modèle</button>
+        ${isCustom?'<button class="btn btn-ghost btn-sm" onclick="mktDeleteTemplate()">🗑 Supprimer</button>':''}
+        <button class="btn btn-ghost btn-sm" onclick="mktLoadTpl('_new')">🆕 Vierge</button>
+        <button class="btn btn-ghost btn-sm" onclick="mktPreview()">👁 Aperçu</button>
+      </div>
       <div class="form-group"><label class="form-label">Objet <span class="td-dim">({prenom} = prénom auto)</span></label>
-        <input class="form-control" id="mkt-subject" value="${esc(tpl.subject)}"></div>
-      <div class="form-group"><label class="form-label">Message <span class="td-dim">({prenom} remplacé par le prénom de chacun)</span></label>
-        <textarea class="form-control" id="mkt-body" style="min-height:170px">${esc(tpl.body.replace(/{sig}/g,sig()).replace(/{avisurl}/g,DB.config().googleReviewUrl||''))}</textarea></div>
+        <input class="form-control" id="mkt-subject" value="${esc(cur.subject)}"></div>
+      <label class="form-label">Message <span class="td-dim">— mise en forme complète, {prenom} / {nom} personnalisés par contact</span></label>
+      <div style="border:1px solid var(--anthr);border-radius:var(--rsm);overflow:hidden;margin-bottom:8px">
+        ${mktToolbarHtml()}
+        <div id="mkt-editor" contenteditable="true" style="min-height:220px;max-height:440px;overflow:auto;padding:16px;background:#fff;color:#1a1a1a;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;outline:none"></div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
+        <span class="td-dim" style="font-size:12px">Insérer :</span>
+        <button class="btn btn-ghost btn-sm" onmousedown="return false" onclick="mktInsertVar('{prenom}')">+ Prénom</button>
+        <button class="btn btn-ghost btn-sm" onmousedown="return false" onclick="mktInsertVar('{nom}')">+ Nom complet</button>
+      </div>
+      <div id="mkt-pv" style="display:none;margin:12px 0">
+        <div class="form-label">Aperçu — ce que reçoit le client</div>
+        <iframe id="mkt-pv-frame" style="width:100%;height:460px;border:1px solid var(--anthr);border-radius:12px;background:#fff"></iframe>
+      </div>
 
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin:10px 0 4px;flex-wrap:wrap">
         <div class="td-strong">Destinataires (<span id="mkt-count">${liste.length}</span>)</div>
@@ -2445,6 +2522,7 @@ RENDERERS.marketing=function(){
 
     ${marketingStatsHtml()}
     ${planifsHtml()}`;
+  const _ed=document.getElementById('mkt-editor'); if(_ed)_ed.innerHTML=cur.html||'<br>';   // contenu injecté après rendu (pas d'injection template-literal)
 };
 function marketingStatsHtml(){
   const sent=DB.all('mails').filter(m=>m.to);
@@ -2482,19 +2560,18 @@ async function envoyerCampagne(){
   const ids=[...document.querySelectorAll('#view-marketing .mkt-cb:checked')].map(cb=>cb.value);
   if(!ids.length){ toast('Aucun destinataire coché','err'); return; }
   const subjectTpl=document.getElementById('mkt-subject').value;
-  const bodyTpl=document.getElementById('mkt-body').value;
+  const bodyHtmlTpl=(document.getElementById('mkt-editor')||{}).innerHTML||'';
   const date=(document.getElementById('mkt-date')||{}).value||'';
   const auto=DB.config().gmailEnvoi&&cloudUrl();
   const prog=document.getElementById('mkt-progress');
-  const perso=(s,c)=>s.replace(/{prenom}/g,prenomDe(c.prenom||c.nom));
 
   // PLANIFICATION
   if(date && date>todayISO()){
     if(!auto){ toast('Planification = nécessite l\'envoi auto Gmail (Réglages)','err'); return; }
     let n=0;
     ids.forEach(id=>{ const c=DB.get('clients',id); if(!c||!c.email)return;
-      const corps=perso(bodyTpl,c);
-      DB.save('planifs',{id:uid('PLN'),date,to:c.email,subject:perso(subjectTpl,c),body:corps,html:emailHtml(corps),trackId:uid('MAIL'),client:(c.prenom+' '+c.nom).trim(),statut:'prévu',createdAt:new Date().toISOString()}); n++; });
+      const htmlP=mktVars(bodyHtmlTpl,c);
+      DB.save('planifs',{id:uid('PLN'),date,to:c.email,subject:mktVars(subjectTpl,c),body:stripHtml(htmlP),html:emailHtmlRich(htmlP),trackId:uid('MAIL'),client:(c.prenom+' '+c.nom).trim(),statut:'prévu',createdAt:new Date().toISOString()}); n++; });
     logActivite('Campagne planifiée : '+n+' email(s) le '+fmtDateFr(date));
     toast('📅 '+n+' email(s) planifié(s) le '+fmtDateShort(date),'ok'); RENDERERS.marketing(); return;
   }
@@ -2505,16 +2582,16 @@ async function envoyerCampagne(){
     for(let i=0;i<ids.length;i++){ const c=DB.get('clients',ids[i]); if(!c||!c.email){fail++;continue;}
       const mailId=uid('MAIL');
       if(prog) prog.textContent='Envoi '+(i+1)+'/'+ids.length+' → '+c.email+'…';
-      const corps=perso(bodyTpl,c);
-      const j=await cloudPost({action:'sendEmail',to:c.email,subject:perso(subjectTpl,c),body:corps,html:emailHtml(corps),trackId:mailId});
-      if(j&&j.ok){ ok++; DB.save('mails',{id:mailId,date:new Date().toISOString(),kind:'campagne',ref:c.id,to:c.email,subject:perso(subjectTpl,c)}); } else fail++;
+      const htmlP=mktVars(bodyHtmlTpl,c);
+      const j=await cloudPost({action:'sendEmail',to:c.email,subject:mktVars(subjectTpl,c),body:stripHtml(htmlP),html:emailHtmlRich(htmlP),trackId:mailId});
+      if(j&&j.ok){ ok++; DB.save('mails',{id:mailId,date:new Date().toISOString(),kind:'campagne',ref:c.id,to:c.email,subject:mktVars(subjectTpl,c)}); } else fail++;
     }
     if(prog) prog.textContent='';
     logActivite('Campagne envoyée : '+ok+' email(s)'+(fail?', '+fail+' échec(s)':''));
     toast('✅ '+ok+' envoyé(s)'+(fail?' · '+fail+' échec(s)':''),'ok'); RENDERERS.marketing();
   } else {
     const emails=ids.map(id=>(DB.get('clients',id)||{}).email).filter(Boolean).join(',');
-    window.open('mailto:?bcc='+encodeURIComponent(emails)+'&subject='+encodeURIComponent(subjectTpl.replace(/{prenom}/g,''))+'&body='+encodeURIComponent(bodyTpl.replace(/{prenom}/g,'')),'_blank');
+    window.open('mailto:?bcc='+encodeURIComponent(emails)+'&subject='+encodeURIComponent(subjectTpl.replace(/{prenom}/g,'').replace(/{nom}/g,''))+'&body='+encodeURIComponent(stripHtml(bodyHtmlTpl)),'_blank');
     toast('Messagerie ouverte ('+ids.length+' contacts en Cci)','ok');
   }
 }
