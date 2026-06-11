@@ -1049,6 +1049,23 @@ function voirSignature(id){ const d=DB.get('devis',id); if(!d)return;
 }
 function transformerEnFacture(id){ facturerSolde(id); }
 function prestaFields(d){ return {dateEvenement:d.dateEvenement,creneau:d.creneau,horaire:d.horaire||'',lieu:d.lieu,distanceKm:d.distanceKm||0,typePrestation:(d.prestations||[]).map(p=>p.label).join(' + '),duree:(d.prestations||[]).map(p=>p.duree).filter(Boolean).join(' / '),contactSurPlace:d.nomClient+' '+(d.tel||'')}; }
+/* Résout le contact d'un devis depuis la fiche client (source de vérité), avec repli sur le snapshot du devis */
+function clientDeDevis(d){ if(!d) return {};
+  return DB.get('clients',d.idClient) || DB.all('clients').find(c=>((c.prenom||'')+' '+c.nom).trim().toLowerCase()===(''+(d.nomClient||'')).trim().toLowerCase()) || {}; }
+function contactDevis(d){ const c=clientDeDevis(d);
+  const nom=((c.prenom?c.prenom+' ':'')+(c.nom||'')).trim();
+  return { nom:nom||d.nomClient||'', email:c.email||d.email||'', tel:c.tel||d.tel||'', adresse:c.adresse||d.lieu||'', siren:c.siren||'' }; }
+/* Propage une modif de fiche client sur tous les devis/prestations liés (snapshot tenu à jour partout) */
+function propagateClient(c){
+  let n=0;
+  DB.all('devis').filter(d=>d.idClient===c.id).forEach(d=>{
+    d.nomClient=((c.prenom?c.prenom+' ':'')+(c.nom||'')).trim()||d.nomClient;
+    d.email=c.email||''; d.tel=c.tel||'';
+    DB.save('devis',d); syncPrestationDevis(d); n++;
+  });
+  if(n) logActivite('Coordonnées propagées sur '+n+' devis de '+c.nom);
+  return n;
+}
 function statutPrestaCible(statutDevis){
   if(statutDevis==='Refusé') return null;                       // pas dans l'agenda
   if(statutDevis==='Accepté'||statutDevis==='Acompte reçu') return 'Confirmée'; // créneau bloqué
@@ -1298,8 +1315,9 @@ function pdfDevis(id,returnDoc){
   const valid=new Date(d.dateCreation); valid.setDate(valid.getDate()+30);
   const doc=pdfNew();
   let y=pdfHeader(doc,'DEVIS',d.id,[['Date',fmtDateShort(d.dateCreation)],['Validité',fmtDateShort(valid.toISOString().slice(0,10))]]);
+  const ct=contactDevis(d);
   y=pdfBlocs(doc,y,
-    {nom:d.nomClient,lines:[d.email,d.tel,cli.adresse||d.lieu,cli.siren?('SIREN '+cli.siren):'']},
+    {nom:ct.nom,lines:[ct.email,ct.tel,ct.adresse||d.lieu,ct.siren?('SIREN '+ct.siren):'']},
     {titre:'PRESTATION',lines:['Date : '+fmtDateFr(d.dateEvenement),'Créneau : '+(d.creneau||'—'),d.horaire?('Horaire : '+d.horaire):'','Lieu : '+(d.lieu||'—'),d.nbInvites?('Invités : '+d.nbInvites):'']});
   const body=(d.prestations||[]).map(p=>[p.label||'Prestation',p.duree||'—',fmtEurPdf(p.prix)]);
   pdfTable(doc,y,['Prestation','Durée','Montant'],body);
@@ -1437,8 +1455,8 @@ function marquerRealisee(id){
 }
 function avisGoogleMail(id){
   const p=DB.get('prestations',id); if(!p)return;
-  const dev=DB.get('devis',p.idDevis)||{}; const nom=dev.nomClient||(p.contactSurPlace||'');
-  const tpl=EMAIL_TPL.avis(p,nom); if(!tpl.to) tpl.to=dev.email||'';
+  const dev=DB.get('devis',p.idDevis)||{}; const ct=contactDevis(dev); const nom=ct.nom||dev.nomClient||(p.contactSurPlace||'');
+  const tpl=EMAIL_TPL.avis(p,nom); if(!tpl.to) tpl.to=ct.email||'';
   openMailComposer({titre:'Demande d\'avis Google', ...tpl, kind:'avis', ref:id,
     onSent:()=>RENDERERS.agenda()});
 }
@@ -1839,7 +1857,9 @@ function saveClient(id){
   const c=(id&&DB.get('clients',id))||{id:(id||uid('CLI')),date1erDevis:'',nbDevis:0,nbPrestations:0,caTotal:0};
   ['nom','prenom','email','tel','adresse','type','sourceInitiale','siren','naf'].forEach(k=>{const e=el(k); if(e)c[k]=e.value.trim();});
   DB.save('clients',c); logActivite((id?'Client modifié':'Client créé')+' · '+c.nom);
-  closeModal(); RENDERERS.clients(); toast(id?'Client modifié ✓':'Client créé ✓','ok');
+  const prop=id?propagateClient(c):0;   // met à jour email/tel/nom sur tous les devis liés
+  closeModal(); RENDERERS.clients(); updateBadges();
+  toast((id?'Client modifié ✓':'Client créé ✓')+(prop?' · '+prop+' devis mis à jour':''),'ok');
 }
 function mailClient(id){
   const c=DB.get('clients',id); if(!c)return;
@@ -2028,10 +2048,10 @@ function prenomDe(nom){ return (nom||'').trim().split(' ')[0]||''; }
 
 const EMAIL_TPL={
   devis(d){ const ac=Math.round((+d.montantTTC||0)*(d.acomptePct||0)/100);
-    const lien=signUrl(d);
+    const lien=signUrl(d); const ct=contactDevis(d);
     const bloc=lien?`\n\n✍️ Pour accepter, signez votre devis en ligne en 1 clic (bon pour accord) :\n${lien}\n`:'';
-    return { to:d.email, subject:'Votre devis LouisMagie — '+d.id,
-      body:`Bonjour ${prenomDe(d.nomClient)},\n\nSuite à votre demande, voici votre devis ${d.id} pour la prestation du ${fmtDateFr(d.dateEvenement)} (${d.creneau||''}) à ${d.lieu||''}.\n\nMontant total TTC : ${fmtEur(d.montantTTC)}\nAcompte de réservation (${d.acomptePct||0} %) : ${fmtEur(ac)}\n\nLa date est confirmée et bloquée dès réception de l'acompte. Le devis détaillé est joint en PDF.${bloc}\nJe reste à votre disposition pour toute question.\n\n${sig()}` }; },
+    return { to:ct.email, subject:'Votre devis LouisMagie — '+d.id,
+      body:`Bonjour ${prenomDe(ct.nom||d.nomClient)},\n\nSuite à votre demande, voici votre devis ${d.id} pour la prestation du ${fmtDateFr(d.dateEvenement)} (${d.creneau||''}) à ${d.lieu||''}.\n\nMontant total TTC : ${fmtEur(d.montantTTC)}\nAcompte de réservation (${d.acomptePct||0} %) : ${fmtEur(ac)}\n\nLa date est confirmée et bloquée dès réception de l'acompte. Le devis détaillé est joint en PDF.${bloc}\nJe reste à votre disposition pour toute question.\n\n${sig()}` }; },
   facture(f,nom){ const lbl=f.type==='acompte'?'facture d\'acompte':(f.type==='solde'?'facture de solde':'facture');
     const corps=f.type==='acompte'
       ? `Montant de l'acompte : ${fmtEur(factMontant(f))}\n(acompte de réservation encaissé — le solde sera facturé après la prestation)`
