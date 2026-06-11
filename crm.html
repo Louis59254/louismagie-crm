@@ -2138,14 +2138,27 @@ function openMailComposer(opts){
       <div class="form-group"><label class="form-label">Destinataire</label><input class="form-control" id="mc-to" value="${esc(opts.to||'')}"></div>
       <div class="form-group"><label class="form-label">Objet</label><input class="form-control" id="mc-subject" value="${esc(opts.subject||'')}"></div>
       <div class="form-group"><label class="form-label">Message</label><textarea class="form-control" id="mc-body" style="min-height:220px">${esc(opts.body||'')}</textarea></div>
+    </div>
+    <div id="mc-preview" style="display:none;margin-top:14px">
+      <div class="form-label" style="display:flex;align-items:center;gap:8px">Aperçu du rendu — ce que reçoit le client${opts.pdfId?' <span class="badge accepte" style="font-size:11px">📎 '+esc(opts.pdfId)+'.pdf joint</span>':''}</div>
+      <iframe id="mc-pv-frame" style="width:100%;height:460px;border:1px solid var(--bd);border-radius:12px;background:#fff"></iframe>
     </div>`;
   let footer='';
   if(opts.pdfId) footer+=`<button class="btn btn-ghost" onclick="pdf${opts.pdfType}('${opts.pdfId}')">⬇ PDF</button>`;
-  footer+=`<button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
+  footer+=`<button class="btn btn-ghost" onclick="mcPreview()">👁 Aperçu</button>
+    <button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
     <button class="btn btn-or" id="mc-send" onclick="mcSend('${opts.kind||''}','${opts.ref||''}')">${auto?'📤 Envoyer maintenant':'✉ Ouvrir ma messagerie'}</button>`;
   openModal(opts.titre||'Composer un email',body,footer);
   window._mcOnSent=opts.onSent;
   window._mcPdf=opts.pdfId?{id:opts.pdfId,type:opts.pdfType}:null;
+}
+/* Aperçu du template HTML brandé avant envoi */
+function mcPreview(){
+  const box=document.getElementById('mc-preview'), fr=document.getElementById('mc-pv-frame'), ta=document.getElementById('mc-body');
+  if(!box||!fr||!ta)return;
+  if(box.style.display==='block'){ box.style.display='none'; return; }   // toggle
+  fr.srcdoc=emailHtml(ta.value);
+  box.style.display='block'; box.scrollIntoView({behavior:'smooth',block:'nearest'});
 }
 async function mcSend(kind,ref){
   const to=document.getElementById('mc-to').value.trim();
