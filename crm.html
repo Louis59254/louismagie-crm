@@ -471,7 +471,10 @@ function nextId(prefix, entity){
   return prefix+'-'+yr+'-'+String(max+1).padStart(3,'0');
 }
 function uid(p){ return p+'-'+Date.now().toString(36)+Math.floor(Math.random()*1000); }
-function genToken(){ let s=''; const a='ABCDEFGHJKMNPQRSTUVWXYZ23456789'; for(let i=0;i<24;i++)s+=a[Math.floor(Math.random()*a.length)]; return s; }
+function genToken(){ const a='ABCDEFGHJKMNPQRSTUVWXYZ23456789'; let s=''; const rnd=(window.crypto&&crypto.getRandomValues)?crypto.getRandomValues(new Uint32Array(24)):null;
+  for(let i=0;i<24;i++)s+=a[(rnd?rnd[i]:Math.floor(Math.random()*4294967296))%a.length]; return s; }
+/* N'affiche une image de signature que si c'est bien une image en base64 (anti-XSS stocké) */
+function safeDataImg(s){ return /^data:image\/(png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=\s]+$/.test(s||'')?String(s):''; }
 /* Signature électronique : assure un token public sur le devis + renvoie le lien à envoyer au client */
 function ensureDevisShare(d){ if(!d.shareToken){ d.shareToken=genToken(); DB.save('devis',d); } return d.shareToken; }
 function signUrl(d){ const base=cloudUrl(); if(!base) return ''; return base+'?action=sign&id='+encodeURIComponent(d.id)+'&k='+encodeURIComponent(ensureDevisShare(d)); }
@@ -1157,17 +1160,21 @@ function dosSearchFilter(q){ q=(q||'').toLowerCase().trim();
   document.querySelectorAll('#view-dossiers .dos-sep').forEach(s=>{ s.style.display=q?'none':''; });   // masque les séparateurs pendant la recherche
 }
 function majStatutDossier(id,statut){ const d=DB.get('devis',id); if(!d)return;
-  d.statut=statut;
+  const old=d.statut; d.statut=statut;
   if(statut==='Envoyé'&&!d.dateEnvoi) d.dateEnvoi=todayISO();
   if(statut==='Accepté'&&!d.dateAcceptation) d.dateAcceptation=todayISO();
-  DB.save('devis',d); syncPrestationDevis(d); logActivite('Dossier '+id+' → '+statut);
+  if(statut==='Acompte reçu'){ if(!d.acompteRecu) d.acompteRecu=Math.round((+d.montantTTC||0)*(d.acomptePct||0)/100); }
+  else if(old==='Acompte reçu'||d.acompteRecu>0){ d.acompteRecu=0; removeRecetteAcompte(id); }
+  DB.save('devis',d); syncPrestationDevis(d);
+  if(statut==='Acompte reçu'&&!DB.all('recettes').some(r=>r.ref===id&&r.type==='Acompte')) addRecetteAcompte(d);   // recette d'acompte cohérente
+  logActivite('Dossier '+id+' → '+statut);
   updateBadges(); toast('Statut → '+statut,'ok'); dossierEvenement(id);
 }
 function dossierSignatureHtml(d){
   if(!(d.signataire||d.signatureImg)) return '';
   return `<div class="panel" style="margin-top:14px"><div class="panel-title">✍️ Signature électronique</div>
     <div class="td-dim" style="margin-bottom:8px">Signé par <strong>${esc(d.signataire||'—')}</strong>${d.signedAt?' le '+fmtDateFr(d.signedAt.slice(0,10)):''} · mention « Bon pour accord »</div>
-    ${d.signatureImg?`<img src="${d.signatureImg}" alt="signature" style="max-width:280px;width:100%;border:1px solid var(--bd);border-radius:8px;background:#fff;padding:6px">`:'<div class="td-dim">Acceptation par saisie du nom (sans tracé manuscrit).</div>'}</div>`;
+    ${safeDataImg(d.signatureImg)?`<img src="${safeDataImg(d.signatureImg)}" alt="signature" style="max-width:280px;width:100%;border:1px solid var(--bd);border-radius:8px;background:#fff;padding:6px">`:'<div class="td-dim">Acceptation par saisie du nom (sans tracé manuscrit).</div>'}</div>`;
 }
 function dossierNotesHtml(d){
   const notes=(d.notesSuivi||[]).slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));
@@ -1196,7 +1203,7 @@ function copySignLink(id){ const d=DB.get('devis',id); if(!d)return; const url=s
 function voirSignature(id){ const d=DB.get('devis',id); if(!d)return;
   const body=`<div style="text-align:center">
     <div class="td-dim" style="margin-bottom:10px">Signé par <strong>${esc(d.signataire||'—')}</strong>${d.signedAt?' le '+fmtDateFr(d.signedAt.slice(0,10)):''}</div>
-    ${d.signatureImg?`<img src="${d.signatureImg}" alt="signature" style="max-width:100%;border:1px solid var(--bd);border-radius:10px;background:#fff;padding:8px">`:'<div class="td-dim">Acceptation par saisie du nom (sans tracé manuscrit).</div>'}
+    ${safeDataImg(d.signatureImg)?`<img src="${safeDataImg(d.signatureImg)}" alt="signature" style="max-width:100%;border:1px solid var(--bd);border-radius:10px;background:#fff;padding:8px">`:'<div class="td-dim">Acceptation par saisie du nom (sans tracé manuscrit).</div>'}
     <div class="td-dim" style="margin-top:10px;font-size:12px">Mention « Bon pour accord » validée en ligne.</div>
   </div>`;
   openModal('Signature · '+esc(id),body,'<button class="btn btn-ghost" onclick="voirDevis(\''+id+'\')">← Retour au devis</button><button class="btn btn-ghost" onclick="closeModal()">Fermer</button>');
@@ -1330,9 +1337,10 @@ function confirmSupprimerDevis(id){
   closeModal(); updateBadges(); RENDERERS.devis(); toast('Devis supprimé','ok');
 }
 function majDevis(id,statut){
-  const d=DB.get('devis',id); d.statut=statut;
+  const d=DB.get('devis',id); const old=d.statut; d.statut=statut;
   if(statut==='Envoyé'&&!d.dateEnvoi) d.dateEnvoi=todayISO();
   if(statut==='Accepté'&&!d.dateAcceptation) d.dateAcceptation=todayISO();
+  if(statut!=='Acompte reçu'&&(old==='Acompte reçu'||d.acompteRecu>0)){ d.acompteRecu=0; removeRecetteAcompte(id); }   // pas d'acompte orphelin
   DB.save('devis',d); syncPrestationDevis(d); logActivite('Devis '+id+' → '+statut);
   let extra=''; if(statut==='Accepté'){ const rq=risqueJour(d.dateEvenement,null); if(rq) extra=rq.niveau==='conflit'?' ⚠ conflit horaire ce jour !':' ⚠ créneau serré ce jour'; }
   closeModal(); updateBadges(); RENDERERS.devis(); toast('Devis → '+statut+(statut==='Accepté'?' · créneau bloqué':'')+extra, extra?'err':'ok');
@@ -1618,7 +1626,7 @@ function avisGoogleMail(id){
 /* ═══════════ VUE : FACTURES ═══════════ */
 RENDERERS.factures=function(){
   const all=DB.all('factures');
-  const encaisse=all.filter(f=>f.statut==='Payée').reduce((s,f)=>s+(+f.montantTTC||0),0);
+  const encaisse=all.filter(f=>f.statut==='Payée').reduce((s,f)=>s+factMontant(f),0);   // montant réellement encaissé par pièce (évite le double-comptage acompte)
   const attente=all.filter(f=>f.statut!=='Payée').reduce((s,f)=>s+(+f.soldeDu||0),0);
   const impayes=all.filter(f=>['Relance 1','Relance 2','En contentieux'].includes(f.statut)).length;
 
@@ -1875,7 +1883,7 @@ function recalcClient(c){
   const dv=DB.all('devis').filter(d=>d.idClient===c.id);
   c.nbDevis=dv.length;
   c.nbPrestations=DB.all('prestations').filter(p=>dv.some(d=>d.id===p.idDevis)).length;
-  c.caTotal=DB.all('factures').filter(f=>f.idClient===c.id&&f.statut==='Payée').reduce((s,f)=>s+(+f.montantTTC||0),0);
+  c.caTotal=DB.all('factures').filter(f=>f.idClient===c.id&&f.statut==='Payée').reduce((s,f)=>s+factMontant(f),0);
   return c;
 }
 RENDERERS.clients=function(){
@@ -2071,7 +2079,7 @@ RENDERERS['devis-create']=function(params){
     <div class="panel"><div class="panel-title">Événement</div>
       <div class="form-grid c3">
         <div class="form-group"><label class="form-label">Type</label>
-          <select class="form-control" id="dv-type">${['Mariage','Anniversaire','Soirée entreprise','Soirée privée','Autre'].map(t=>`<option>${t}</option>`).join('')}</select></div>
+          <select class="form-control" id="dv-type">${['Mariage','Anniversaire','Soirée entreprise','Soirée privée','Autre'].map(t=>`<option${t===(d.typeEvenement||'')?' selected':''}>${t}</option>`).join('')}</select></div>
         <div class="form-group"><label class="form-label">Date <span class="req">*</span></label><input class="form-control" id="dv-dateEvenement" type="date" value="${esc(d.dateEvenement)}"></div>
         <div class="form-group"><label class="form-label">Créneau</label>
           <select class="form-control" id="dv-creneau">${['Matin','Après-midi','Soirée','Journée'].map(c=>`<option${c===d.creneau?' selected':''}>${c}</option>`).join('')}</select></div>
@@ -2247,7 +2255,7 @@ function openMailComposer(opts){
     </div>
     <div id="mc-preview" style="display:none;margin-top:14px">
       <div class="form-label" style="display:flex;align-items:center;gap:8px">Aperçu du rendu — ce que reçoit le client${opts.pdfId?' <span class="badge accepte" style="font-size:11px">📎 '+esc(opts.pdfId)+'.pdf joint</span>':''}</div>
-      <iframe id="mc-pv-frame" style="width:100%;height:460px;border:1px solid var(--bd);border-radius:12px;background:#fff"></iframe>
+      <iframe id="mc-pv-frame" sandbox="" style="width:100%;height:460px;border:1px solid var(--bd);border-radius:12px;background:#fff"></iframe>
     </div>`;
   let footer='';
   if(opts.pdfId) footer+=`<button class="btn btn-ghost" onclick="pdf${opts.pdfType}('${opts.pdfId}')">⬇ PDF</button>`;
@@ -2592,7 +2600,7 @@ RENDERERS.marketing=function(){
       </div>
       <div id="mkt-pv" style="display:none;margin:12px 0">
         <div class="form-label">Aperçu — ce que reçoit le client</div>
-        <iframe id="mkt-pv-frame" style="width:100%;height:460px;border:1px solid var(--anthr);border-radius:12px;background:#fff"></iframe>
+        <iframe id="mkt-pv-frame" sandbox="" style="width:100%;height:460px;border:1px solid var(--anthr);border-radius:12px;background:#fff"></iframe>
       </div>
 
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin:10px 0 4px;flex-wrap:wrap">
@@ -2861,10 +2869,14 @@ async function cloudPull(){ const url=cloudUrl(); if(!url){ setCloudStatus('off'
   try{ const r=await fetch(url+'?action=getAll&auth='+encodeURIComponent(cloudAuth())+'&token='+encodeURIComponent(DB.config().backendToken||'')); const j=await r.json();
     if(!j||!j.ok||!j.data){ setCloudStatus('err'); return 'err'; }
     const total=ENTITIES.reduce((a,e)=>a+((j.data[e]||[]).length),0);
-    if(total===0){ cloudPushAll(); return 'init'; }            // cloud vide → on l'initialise depuis le local
+    if(total===0){
+      if(j.firstRun){ cloudPushAll(); return 'init'; }         // serveur RÉELLEMENT neuf → on l'initialise depuis le local
+      // serveur vide mais pas neuf (fichiers corrompus/absents après deploy) → ne rien écraser, alerter
+      setCloudStatus('err'); toast('⚠️ Serveur vide alors qu\'il ne devrait pas l\'être — synchro suspendue pour protéger tes données. Vérifie le stockage du serveur.','err'); return 'empty-guard';
+    }
     ENTITIES.forEach(e=>{ if(Array.isArray(j.data[e])) DB._writeLocal(e,j.data[e]); });  // adopte le cloud (local-only, pas de re-push)
     if(Array.isArray(j.signatures)) applySignatures(j.signatures);   // ré-applique le journal de signatures (anti-perte)
-    if(j.config&&Object.keys(j.config).length){ const cur=DB.config(); localStorage.setItem(LS_PREFIX+'config', JSON.stringify(Object.assign({},j.config,{passwordHash:cur.passwordHash||j.config.passwordHash}))); }
+    if(j.config&&Object.keys(j.config).length){ const cur=DB.config(); localStorage.setItem(LS_PREFIX+'config', JSON.stringify(Object.assign({},j.config,{passwordHash:j.config.passwordHash||cur.passwordHash}))); }  // priorité au hash serveur (mdp changé ailleurs)
     try{ if(Array.isArray(j.opens)) localStorage.setItem('lm_opens', JSON.stringify(j.opens.map(o=>o.m))); }catch(_){}
     setCloudStatus('ok'); return 'pulled';
   }catch(_){ setCloudStatus('err'); return 'err'; } }

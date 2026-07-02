@@ -13,7 +13,12 @@ $PDF_DIR  = __DIR__.'/pdf';                        // dossier PDF (créé tout s
 $PDF_URL  = 'pdf';
 
 /* ===== Rien à toucher en dessous ===== */
-header('Access-Control-Allow-Origin: *');
+// CORS restreint : autorise seulement les requêtes de même origine (front + API sur le même domaine)
+$__origin = $_SERVER['HTTP_ORIGIN'] ?? '';
+$__host   = $_SERVER['HTTP_HOST'] ?? '';
+if ($__origin === '' || parse_url($__origin, PHP_URL_HOST) === $__host) {
+  header('Access-Control-Allow-Origin: '.($__origin ?: '*'));
+}
 header('Access-Control-Allow-Headers: Content-Type');
 header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
 header('Content-Type: application/json; charset=utf-8');
@@ -34,6 +39,10 @@ function smtpSend($to,$subject,$bodyText,$attachName='',$attachB64='',$trackUrl=
   $from=getenv('SMTP_FROM') ?: (getenv('GMAIL_FROM') ?: $user);
   if(!$user||!$pass) return [false,'SMTP non configuré (SMTP_USER / SMTP_PASS)'];
   if(!$to) return [false,'destinataire vide'];
+  // Anti-injection d'en-têtes SMTP : rejette tout CRLF dans les adresses / nom de pièce jointe, valide le destinataire
+  $to=trim($to); $from=trim($from);
+  if(preg_match('/[\r\n]/', $to.$from.$attachName)) return [false,'adresse ou pièce jointe invalide'];
+  if(!filter_var($to, FILTER_VALIDATE_EMAIL)) return [false,'destinataire invalide'];
   // Infomaniak : force SSL implicite sur 465 (leur 587 STARTTLS rejette nos requêtes anti-pipelining)
   if(strpos($host,'infomaniak')!==false){ $port='465'; }
   $secure = ($port=='465') || (getenv('SMTP_SECURE')==='ssl');   // SSL implicite (évite l'anti-pipelining STARTTLS)
@@ -55,7 +64,7 @@ function smtpSend($to,$subject,$bodyText,$attachName='',$attachB64='',$trackUrl=
   }
   $cmd("AUTH LOGIN"); $cmd(base64_encode($user));
   $r=$cmd(base64_encode($pass));
-  if(strpos($r,'235')===false){ fclose($fp); return [false,'auth refusée ('.$host.', user '.$user.') : '.trim($r)]; }
+  if(strpos($r,'235')===false){ fclose($fp); return [false,'authentification SMTP refusée : '.trim($r)]; }
   $cmd("MAIL FROM:<$from>"); $cmd("RCPT TO:<$to>"); $cmd("DATA");
   $h="From: $from\r\nReply-To: $from\r\nTo: $to\r\nSubject: =?UTF-8?B?".base64_encode($subject)."?=\r\nMIME-Version: 1.0\r\n";
   // HTML : template fourni par le CRM si présent, sinon repli simple ; pixel de suivi ajouté si tracking
@@ -109,7 +118,10 @@ function smtpDiag($to){
   return ['ok'=>true,'steps'=>$T,'info'=>'ok'];
 }
 function readJson($path){ if(!is_file($path)) return null; $c=file_get_contents($path); $v=json_decode($c,true); return $v; }
-function writeJson($path,$val){ file_put_contents($path, json_encode($val, JSON_UNESCAPED_UNICODE)); }
+function writeJson($path,$val){ // écriture atomique (tmp + rename) → jamais de fichier JSON tronqué en cas d'écritures concurrentes
+  $tmp=$path.'.tmp'.getmypid();
+  if(file_put_contents($tmp, json_encode($val, JSON_UNESCAPED_UNICODE), LOCK_EX)!==false) @rename($tmp,$path);
+  else @file_put_contents($path, json_encode($val, JSON_UNESCAPED_UNICODE)); }
 
 $raw = file_get_contents('php://input');
 $req = $raw ? json_decode($raw, true) : [];
@@ -159,6 +171,8 @@ if ($action === 'sign' || $action === 'signSubmit') {
     if(!empty($d['signataire'])) out(['ok'=>true,'already'=>true]);
     $signataire = trim($req['signataire'] ?? '');
     $img = $req['signatureImg'] ?? '';
+    // Anti-XSS stocké : n'accepte que des vraies images PNG/JPEG en base64, taille bornée ; sinon on ignore le tracé
+    if ($img !== '' && (!preg_match('#^data:image/(png|jpeg);base64,[A-Za-z0-9+/=]+$#', $img) || strlen($img) > 500000)) $img = '';
     if($signataire===''&&$img==='') out(['ok'=>false,'error'=>'signature vide']);
     $now = date('c');
     $devis[$idx]['statut']='Accepté';
@@ -264,7 +278,7 @@ if ($action === 'sign' || $action === 'signSubmit') {
 
 /* ===== Envoi planifié (déclenché par cron Coolify, protégé par CRON_KEY) ===== */
 if ($action === 'runScheduled') {
-  if (($_GET['key'] ?? '') === '' || ($_GET['key'] ?? '') !== getenv('CRON_KEY')) out(['ok'=>false,'error'=>'cron key invalide']);
+  $__ck=getenv('CRON_KEY'); if (!$__ck || !hash_equals($__ck, (string)($_GET['key'] ?? ''))) out(['ok'=>false,'error'=>'cron key invalide']);
   $f=$DATA_DIR.'/planifs.json'; $arr=readJson($f); if(!is_array($arr))$arr=[];
   $today=date('Y-m-d'); $sent=0; $fail=0;
   foreach ($arr as &$p) {
@@ -281,7 +295,7 @@ if ($action === 'runScheduled') {
 
 /* ===== Diagnostic SMTP (clé requise) ===== */
 if ($action === 'smtptest') {
-  if (($_GET['key'] ?? '') === '' || ($_GET['key'] ?? '') !== getenv('CRON_KEY')) out(['ok'=>false,'error'=>'clé invalide (mets CRON_KEY dans Coolify)']);
+  $__ck=getenv('CRON_KEY'); if (!$__ck || !hash_equals($__ck, (string)($_GET['key'] ?? ''))) out(['ok'=>false,'error'=>'clé invalide (mets CRON_KEY dans Coolify)']);
   $to = $_GET['to'] ?? (getenv('SMTP_USER') ?: 'test@example.com');
   if (isset($_GET['full'])) {  // teste le VRAI chemin : multipart + PDF joint + HTML/tracking
     $tu = (isset($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off'?'https':'http').'://'.$_SERVER['HTTP_HOST'].$_SERVER['SCRIPT_NAME'].'?action=track&m=diagfull';
@@ -318,7 +332,10 @@ switch ($action) {
     $config = readJson("$DATA_DIR/config.json"); if(!is_array($config)) $config = [];
     $opens = readJson($DATA_DIR.'/_opens.json'); if(!is_array($opens)) $opens = [];
     $sigs  = readJson($DATA_DIR.'/_signatures.json'); if(!is_array($sigs)) $sigs = [];
-    out(['ok'=>true, 'data'=>$data, 'config'=>$config, 'opens'=>$opens, 'signatures'=>$sigs]);
+    // firstRun : serveur RÉELLEMENT neuf (aucun fichier de données ni config) → autorise l'initialisation depuis un appareil
+    $firstRun = !is_file("$DATA_DIR/config.json");
+    if ($firstRun) foreach ($ENTITIES as $e) { if (is_file("$DATA_DIR/$e.json")) { $firstRun = false; break; } }
+    out(['ok'=>true, 'data'=>$data, 'config'=>$config, 'opens'=>$opens, 'signatures'=>$sigs, 'firstRun'=>$firstRun]);
   }
 
   case 'putEntity': {
