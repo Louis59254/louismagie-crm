@@ -256,9 +256,10 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
 .activity-time{font-size:11px;color:var(--gm);flex-shrink:0}
 
 /* ── TOAST ── */
-#toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--noir3);border:1px solid var(--anthr);color:var(--creme);font-size:12px;padding:11px 20px;border-radius:30px;opacity:0;transition:all .35s;pointer-events:none;z-index:999;white-space:nowrap;box-shadow:var(--sh2)}
+#toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%) translateY(20px);background:#26261F;border:1px solid rgba(255,255,255,.14);color:#FFFFFF;font-size:13px;font-weight:500;padding:12px 22px;border-radius:30px;opacity:0;transition:all .35s;pointer-events:none;z-index:999;white-space:nowrap;box-shadow:0 10px 34px rgba(0,0,0,.4),0 2px 8px rgba(0,0,0,.25)}
 #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
-#toast.ok{border-color:var(--ok)}#toast.err{border-color:var(--er)}
+#toast.ok{background:#2E9E63;border-color:rgba(255,255,255,.28)}
+#toast.err{background:#D23B30;border-color:rgba(255,255,255,.28)}
 
 /* ── SIDEBAR BACKDROP (tablette/mobile) ── */
 #pdfviewer{display:none;position:fixed;inset:0;z-index:300;background:var(--noir);flex-direction:column}
