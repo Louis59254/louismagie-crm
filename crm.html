@@ -1713,9 +1713,9 @@ RENDERERS.factures=function(){
     <div class="table-scroll"><table><thead><tr><th>N°</th><th>Client</th><th>Montant TTC</th><th>Solde dû</th><th>Échéance</th><th>Statut</th><th></th></tr></thead><tbody>${body}</tbody></table></div></div>`;
 };
 function factMontant(f){ return f.montantFacture!=null?+f.montantFacture:(+f.montantTTC||0); }   // montant facturé par CETTE facture
-function factTypeLabel(f){ return f.type==='acompte'?'💰 Acompte':(f.type==='solde'?'Solde':'Facture'); }
-function factAcompteDe(idDevis){ return DB.all('factures').find(f=>f.idDevis===idDevis&&f.type==='acompte'); }
-function factSoldeDe(idDevis){ return DB.all('factures').find(f=>f.idDevis===idDevis&&f.type!=='acompte'); } // solde ou complète
+function factTypeLabel(f){ return f.type==='acompte'?'💰 Acompte':(f.type==='avoir'?'↩ Avoir':(f.type==='solde'?'Solde':'Facture')); }
+function factAcompteDe(idDevis){ return DB.all('factures').find(f=>f.idDevis===idDevis&&f.type==='acompte'&&f.statut!=='Annulée'); }
+function factSoldeDe(idDevis){ return DB.all('factures').find(f=>f.idDevis===idDevis&&f.type!=='acompte'&&f.type!=='avoir'&&f.statut!=='Annulée'); } // solde ou complète, hors avoir/annulée
 
 // Facture d'ACOMPTE (document pour l'acompte encaissé). Statut Payée (déjà encaissé).
 function genererFactureAcompte(idDevis,after){
@@ -1753,7 +1753,7 @@ function marquerPayee(id){
   addRecetteSolde(f,solde);
   logActivite('Facture '+id+' payée'); updateBadges(); RENDERERS.factures(); toast('✓ Facture payée — recette ajoutée au livre','ok');
 }
-function clientNomFacture(f){ const c=DB.get('clients',f.idClient); return c?(c.prenom+' '+c.nom).trim():((DB.get('devis',f.idDevis)||{}).nomClient||''); }
+function clientNomFacture(f){ if(f&&f.billingName) return f.billingName; const c=DB.get('clients',f.idClient); return c?(c.prenom+' '+c.nom).trim():((DB.get('devis',f.idDevis)||{}).nomClient||''); }
 function envoyerFactureMail(id){
   const f=DB.get('factures',id); if(!f)return;
   const tpl=EMAIL_TPL.facture(f,clientNomFacture(f));
@@ -1763,6 +1763,15 @@ function envoyerFactureMail(id){
 function mailDate(kind,ref){ const m=DB.all('mails').filter(x=>x.kind===kind&&x.ref===ref).sort((a,b)=>new Date(b.date)-new Date(a.date))[0]; return m?m.date:''; }
 function voirFacture(id){
   const f=DB.get('factures',id); if(!f)return;
+  // Avoir ou facture annulée : vue simplifiée
+  if(f.type==='avoir'||f.statut==='Annulée'){
+    const note=f.type==='avoir'
+      ? alertHtml('info','↩','<strong>Avoir</strong> — annule la facture '+esc(f.avoirDe||'')+'. Montant : '+fmtEur(factMontant(f))+'.')
+      : alertHtml('warning','⚠','<strong>Facture annulée</strong> par un avoir. Tu peux refacturer proprement depuis le dossier.');
+    const bd=`<div class="info-grid" style="margin-bottom:12px">${infoItem('Type',factTypeLabel(f))}${infoItem('Client / entité',esc(clientNomFacture(f)))}${infoItem('Montant',fmtEur(factMontant(f)))}${infoItem('Date',fmtDateShort(f.dateEmission))}</div>${note}`;
+    openModal('Facture · '+esc(id),bd,`<button class="btn btn-danger" onclick="supprimerFacture('${id}')">🗑 Supprimer</button><button class="btn btn-ghost" onclick="editFacture('${id}')">✎ Modifier le nom</button><button class="btn btn-ghost" onclick="apercuPdf('Facture','${id}')">👁 PDF</button><button class="btn btn-ghost" onclick="closeModal()">Fermer</button>`);
+    return;
+  }
   const cfg=DB.config(); const nom=clientNomFacture(f); const dev=DB.get('devis',f.idDevis)||{};
   const envoi=f.dateEnvoi||mailDate('facture',id);
   const r1=f.dateRelance1||mailDate('relanceR1',id);
@@ -1814,7 +1823,45 @@ function voirFacture(id){
       <div class="action-box"><div class="action-box-title">✋ Déjà fait hors CRM</div>${manuBtns}</div>
     </div>`;
   const peutReculer=f.type!=='acompte'&&((f.statut!=='Émise')||f.dateEnvoi||mailDate('facture',id));
-  openModal('Facture · '+esc(id),body,`<button class="btn btn-danger" onclick="supprimerFacture('${id}')">🗑 Supprimer</button>${peutReculer?`<button class="btn btn-ghost" onclick="factureBack('${id}')">↩ Étape précédente</button>`:''}<button class="btn btn-ghost" onclick="event.stopPropagation();apercuPdf('Facture','${id}')">👁 Aperçu PDF</button><button class="btn btn-ghost" onclick="closeModal()">Fermer</button>`);
+  openModal('Facture · '+esc(id),body,`<button class="btn btn-danger" onclick="supprimerFacture('${id}')">🗑 Supprimer</button><button class="btn btn-ghost" onclick="editFacture('${id}')">✎ Modifier le nom</button><button class="btn btn-ghost" onclick="creerAvoir('${id}')">↩ Avoir</button>${peutReculer?`<button class="btn btn-ghost" onclick="factureBack('${id}')">↩ Étape précédente</button>`:''}<button class="btn btn-ghost" onclick="event.stopPropagation();apercuPdf('Facture','${id}')">👁 Aperçu PDF</button><button class="btn btn-ghost" onclick="closeModal()">Fermer</button>`);
+}
+/* Édition simple du nom / entité facturé (override propre à cette facture, sans toucher la fiche client) */
+function editFacture(id){
+  const f=DB.get('factures',id); if(!f)return; const cli=DB.get('clients',f.idClient)||{};
+  const cur={nom:clientNomFacture(f),email:f.billingEmail||cli.email||'',tel:f.billingTel||cli.tel||'',addr:f.billingAddr||cli.adresse||'',siren:f.billingSiren||cli.siren||''};
+  const body=`<div class="alert info"><span class="alert-icon">✎</span><div>Corrige le <strong>nom / l'entité facturée</strong> de cette facture (affichage + PDF), sans toucher la fiche client. Si la facture a déjà été envoyée au client, préfère un <strong>avoir</strong>.</div></div>
+    <div class="form-grid full">
+      <div class="form-group"><label class="form-label">Nom / entité facturée</label><input class="form-control" id="ef-nom" value="${esc(cur.nom)}"></div>
+      <div class="form-group"><label class="form-label">Adresse</label><input class="form-control" id="ef-addr" value="${esc(cur.addr)}"></div>
+      <div class="form-grid" style="grid-template-columns:1fr 1fr">
+        <div class="form-group"><label class="form-label">Email</label><input class="form-control" id="ef-email" value="${esc(cur.email)}"></div>
+        <div class="form-group"><label class="form-label">Téléphone</label><input class="form-control" id="ef-tel" value="${esc(cur.tel)}"></div>
+      </div>
+      <div class="form-group"><label class="form-label">SIREN / SIRET (si entreprise)</label><input class="form-control" id="ef-siren" value="${esc(cur.siren)}"></div>
+    </div>`;
+  openModal('Modifier la facturation · '+esc(id),body,
+    `<button class="btn btn-ghost" onclick="voirFacture('${id}')">Annuler</button><button class="btn btn-or" onclick="saveFactureBilling('${id}')">💾 Enregistrer</button>`);
+}
+function saveFactureBilling(id){
+  const f=DB.get('factures',id); if(!f)return; const g=k=>((document.getElementById('ef-'+k)||{}).value||'').trim();
+  f.billingName=g('nom'); f.billingAddr=g('addr'); f.billingEmail=g('email'); f.billingTel=g('tel'); f.billingSiren=g('siren');
+  DB.save('factures',f); logActivite('Facture '+id+' — nom/entité mis à jour ('+f.billingName+')');
+  updateBadges(); toast('✓ Nom de la facture mis à jour','ok'); voirFacture(id);
+}
+/* Avoir : annule une facture émise et crée l'avoir correspondant (montant négatif), retire l'encaissement si elle était payée */
+function creerAvoir(id){
+  const f=DB.get('factures',id); if(!f||f.type==='avoir'||f.statut==='Annulée')return;
+  if(DB.all('factures').some(x=>x.avoirDe===id)){ toast('Un avoir existe déjà pour cette facture','err'); return; }
+  const wasPaid=f.statut==='Payée';
+  if(!confirm('Créer un avoir qui ANNULE la facture '+id+' ?\n\n• La facture passe « Annulée »\n• Un avoir (montant négatif) est émis'+(wasPaid?'\n• L\'encaissement est retiré du livre de recettes':'')+'\n\nTu pourras ensuite refacturer proprement depuis le dossier.')) return;
+  const m=factMontant(f);
+  DB.save('factures',{id:nextId('FAC','factures'),type:'avoir',dateEmission:todayISO(),idDevis:f.idDevis,idClient:f.idClient,
+    montantTTC:-(+f.montantTTC||0),montantFacture:-m,acompteVerse:0,soldeDu:0,dateEcheance:todayISO(),statut:'Émise',datePaiement:'',avoirDe:id,
+    billingName:f.billingName||'',billingAddr:f.billingAddr||'',billingEmail:f.billingEmail||'',billingTel:f.billingTel||'',billingSiren:f.billingSiren||''});
+  f.statut='Annulée'; f.soldeDu=0; DB.save('factures',f);
+  if(wasPaid) DB.all('recettes').filter(r=>r.ref===id).forEach(r=>DB.remove('recettes',r.id));   // annule la recette au livre
+  logActivite('Avoir émis sur facture '+id+(wasPaid?' — recette retirée':''));
+  updateBadges(); toast('↩ Avoir créé — facture '+id+' annulée','ok'); nav('factures');
 }
 function marquerFactureEnvoyee(id){ const f=DB.get('factures',id); f.dateEnvoi=todayISO(); DB.save('factures',f); logActivite('Facture '+id+' marquée envoyée (manuel)'); updateBadges(); RENDERERS.factures(); if(document.getElementById('modal-bg').classList.contains('open')) voirFacture(id); toast('Facture marquée envoyée','ok'); }
 function qbtn(cls,onclick,label){ return `<button class="btn ${cls} btn-sm" onclick="event.stopPropagation();${onclick}">${label}</button>`; }
@@ -1827,6 +1874,7 @@ function devisQuick(d){
   return b+qbtn('btn-ghost',`apercuPdf('Devis','${d.id}')`,'👁 PDF');
 }
 function factureQuick(f){
+  if(f.type==='avoir'||f.statut==='Annulée') return qbtn('btn-ghost',`apercuPdf('Facture','${f.id}')`,'👁 PDF');
   const paye=f.statut==='Payée', envoi=f.dateEnvoi||mailDate('facture',f.id);
   let b=qbtn('btn-or',`envoyerFactureMail('${f.id}')`,(envoi?'✉ Renvoyer':'✉ Envoyer par email'));
   if(!envoi&&!paye) b+=qbtn('btn-ghost',`marquerFactureEnvoyee('${f.id}')`,'✓ Déjà envoyée');
@@ -1886,14 +1934,19 @@ function pdfFacture(id,returnDoc){
   const f=DB.get('factures',id); if(!f)return;
   const dev=DB.get('devis',f.idDevis)||{}; const cli=DB.get('clients',f.idClient)||{}; const nom=clientNomFacture(f);
   const doc=pdfNew();
-  const titre=f.type==='acompte'?'FACTURE D\'ACOMPTE':(f.type==='solde'?'FACTURE DE SOLDE':'FACTURE');
+  const titre=f.type==='acompte'?'FACTURE D\'ACOMPTE':(f.type==='avoir'?'AVOIR':(f.type==='solde'?'FACTURE DE SOLDE':'FACTURE'));
   let y=pdfHeader(doc,titre,f.id,[['Émise le',fmtDateShort(f.dateEmission)],['Échéance',fmtDateShort(f.dateEcheance)]]);
   y=pdfBlocs(doc,y,
-    {titre:'FACTURÉ À',nom,lines:[cli.email,cli.tel,cli.adresse,cli.siren?('SIREN '+cli.siren):'',f.idDevis?('Réf. devis '+f.idDevis):'']},
+    {titre:'FACTURÉ À',nom,lines:[f.billingEmail||cli.email,f.billingTel||cli.tel,f.billingAddr||cli.adresse,(f.billingSiren||cli.siren)?('SIREN '+(f.billingSiren||cli.siren)):'',f.idDevis?('Réf. devis '+f.idDevis):'']},
     dev.dateEvenement?{titre:'PRESTATION',lines:['Date : '+fmtDateFr(dev.dateEvenement),dev.creneau?('Créneau : '+dev.creneau):'',dev.horaire?('Horaire : '+dev.horaire):'','Lieu : '+(dev.lieu||'—')]}:null);
   const dateP=dev.dateEvenement?(' — '+fmtDateFr(dev.dateEvenement)):'';
   let body, totaux, totalLabel, totalVal, cond;
-  if(f.type==='acompte'){
+  if(f.type==='avoir'){
+    body=[['Avoir — annulation de la facture '+(f.avoirDe||'')+dateP,fmtEurPdf(f.montantFacture)]];
+    totaux=[['Montant annulé',fmtEurPdf(f.montantFacture)]];
+    totalLabel='AVOIR'; totalVal=fmtEurPdf(f.montantFacture);
+    cond=['Avoir émis le '+fmtDateFr(f.dateEmission)+' annulant la facture '+(f.avoirDe||'')+'.','Ce document annule et remplace la facture concernée.'];
+  } else if(f.type==='acompte'){
     body=[['Acompte de réservation sur prestation de magie'+dateP,fmtEurPdf(f.montantFacture)]];
     totaux=[['Montant total de la prestation',fmtEurPdf(f.montantTTC)]];
     totalLabel='ACOMPTE ENCAISSÉ'; totalVal=fmtEurPdf(f.montantFacture);
