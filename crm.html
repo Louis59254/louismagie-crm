@@ -1964,9 +1964,20 @@ function pdfFacture(id,returnDoc){
     cond = f.statut==='Payée'?['Facture acquittée le '+fmtDateFr(f.datePaiement)+'. Merci de votre confiance.']
       :['Merci de régler '+fmtEurPdf(f.soldeDu)+' avant le '+fmtDateFr(f.dateEcheance)+'.','En cas de retard : pénalités au taux légal, indemnité forfaitaire de 40 € (art. L441-10 C. com.).'];
   }
+  if(f.statut==='Annulée'&&f.type!=='avoir'){ const av=DB.all('factures').find(x=>x.avoirDe===f.id);
+    cond=['Facture ANNULÉE'+(av?(' par l\'avoir '+av.id):'')+' — ce document n\'est plus valable.']; totalLabel='ANNULÉE'; }
   pdfTable(doc,y,['Désignation','Montant'],body);
   pdfTotaux(doc,doc.lastAutoTable.finalY+9,totaux,[totalLabel,totalVal]);
-  pdfReglement(doc,doc.lastAutoTable.finalY+9,'CONDITIONS DE PAIEMENT',cond);
+  pdfReglement(doc,doc.lastAutoTable.finalY+9,f.type==='avoir'?'AVOIR':'CONDITIONS DE PAIEMENT',cond);
+  // Filigrane bien visible pour avoir / facture annulée
+  if((f.type==='avoir'||f.statut==='Annulée')&&doc.setGState){
+    const wm=f.type==='avoir'?'AVOIR':'ANNULÉE';
+    doc.saveGraphicsState(); doc.setGState(new doc.GState({opacity:0.13}));
+    doc.setFont('helvetica','bold'); doc.setFontSize(70);
+    doc.setTextColor(f.type==='avoir'?255:210, f.type==='avoir'?119:50, f.type==='avoir'?0:45);
+    doc.text(wm,105,165,{align:'center',angle:32});
+    doc.restoreGraphicsState(); doc.setTextColor(0,0,0);
+  }
   pdfFooter(doc);
   if(returnDoc) return doc;
   doc.output('dataurlnewwindow'); logActivite('PDF généré · facture '+id);
