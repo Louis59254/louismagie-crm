@@ -374,6 +374,7 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
       <div class="sb-item" onclick="nav('clients')" id="nav-clients"><span class="ic">👥</span>Clients & partenaires</div>
       <div class="sb-item" onclick="nav('marketing')" id="nav-marketing"><span class="ic">📣</span>Marketing <span class="badge-count" id="badge-marketing" style="display:none">0</span></div>
       <div class="sb-item" onclick="nav('compta')" id="nav-compta"><span class="ic">📊</span>Compta / URSSAF <span class="badge-count" id="badge-compta" style="display:none">0</span></div>
+      <div class="sb-item" onclick="nav('projets')" id="nav-projets"><span class="ic">🎭</span>Imagine <span class="badge-count" id="badge-projets" style="display:none">0</span></div>
       <div class="sb-section">Configuration</div>
       <div class="sb-item" onclick="nav('reglages')" id="nav-reglages"><span class="ic">⚙️</span>Réglages & catalogue</div>
     </nav>
@@ -416,6 +417,8 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
       <div class="view" id="view-devis-create"></div>
       <div class="view" id="view-marketing"></div>
       <div class="view" id="view-compta"></div>
+      <div class="view" id="view-projets"></div>
+      <div class="view" id="view-projet"></div>
       <div class="view" id="view-reglages"></div>
     </div>
   </div>
@@ -439,7 +442,7 @@ const LOGO_B64="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAACgCAYAAACLz2
    ════════════════════════════════════════════════════ */
 
 /* ───── Couche données (abstraction) ───── */
-const ENTITIES = ['demandes','devis','prestations','factures','clients','relances','activite','mails','catalogue','recettes','declarations','planifs','templates'];
+const ENTITIES = ['demandes','devis','prestations','factures','clients','relances','activite','mails','catalogue','recettes','declarations','planifs','templates','projets','magiciens','effets'];
 const LS_PREFIX = 'lm_crm_';
 const DB = {
   all(e){ try{ return JSON.parse(localStorage.getItem(LS_PREFIX+e)) || []; }catch(_){ return []; } },
@@ -629,7 +632,7 @@ function showApp(){
 }
 
 /* ───── Navigation ───── */
-const VIEW_TITLES={dashboard:'Tableau de bord',stats:'Statistiques',demandes:'Demandes',agenda:'Agenda',dossiers:'Dossiers événement',devis:'Devis',factures:'Factures',clients:'Clients & partenaires',marketing:'Marketing',compta:'Comptabilité / URSSAF','devis-create':'Créer un devis',reglages:'Réglages & catalogue'};
+const VIEW_TITLES={dashboard:'Tableau de bord',stats:'Statistiques',demandes:'Demandes',agenda:'Agenda',dossiers:'Dossiers événement',devis:'Devis',factures:'Factures',clients:'Clients & partenaires',marketing:'Marketing',compta:'Comptabilité / URSSAF',projets:'Imagine the Impossible',projet:'Projet','devis-create':'Créer un devis',reglages:'Réglages & catalogue'};
 const RENDERERS={}; // remplis par les modules de vue (tours suivants)
 let currentParams={};
 let _currentView='dashboard';
@@ -639,7 +642,7 @@ function nav(view,params){
   document.querySelectorAll('.sb-item').forEach(i=>i.classList.remove('active'));
   const vEl=document.getElementById('view-'+view);
   if(vEl) vEl.classList.add('active');
-  const navKey = view==='devis-create' ? 'devis-create' : view;
+  const navKey = view==='devis-create' ? 'devis-create' : (view==='projet' ? 'projets' : view);
   const navItem=document.getElementById('nav-'+navKey) || document.getElementById('nav-devis');
   if(navItem) navItem.classList.add('active');
   document.getElementById('topbar-title').childNodes[0].nodeType; // noop guard
@@ -3021,6 +3024,234 @@ async function cloudSyncNow(){ const res=await cloudPull(); if(typeof RENDERERS[
   toast(res==='pulled'?'Données récupérées depuis Google':(res==='init'?'Cloud initialisé depuis ce CRM':(res==='off'?'Configure d\'abord l\'URL':'Échec — vérifie l\'URL')), res==='err'?'err':'ok'); }
 
 /* ───── Boot ───── */
+/* ═══════════════════════════════════════════════════════════
+   MODULE : IMAGINE THE IMPOSSIBLE (projets magie immersive multi-magiciens)
+   ═══════════════════════════════════════════════════════════ */
+const PROJET_STATUTS=['Prospect','En préparation','Confirmé','Réalisé','Facturé','Annulé'];
+const IMPOSSIBLE_ROLES=['Serveur','Hôte d\'accueil','Invité','Barman','Vestiaire','Autre'];
+const DISPO_STATUTS=['En discussion','Confirmé','Indisponible'];
+const PAY_STATUTS=['En discussion','Confirmé','Payé'];
+const AGENCE_PAY=['En attente','Acompte reçu','Payé'];
+function getP(id){ return DB.get('projets',id); }
+function saveP(p){ p.updatedAt=new Date().toISOString(); return DB.save('projets',p); }
+function magNom(id){ const m=DB.get('magiciens',id); return m?((m.prenom?m.prenom+' ':'')+m.nom).trim():'—'; }
+function projStatutColor(s){ return {'Prospect':'#8a8a8a','En préparation':'#E8A13A','Confirmé':'#3FB97A','Réalisé':'#4A9DE8','Facturé':'#27AE60','Annulé':'#E5564B'}[s]||'#8a8a8a'; }
+function projBadge(s){ return `<span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:600;color:#fff;background:${projStatutColor(s)}">${esc(s)}</span>`; }
+function projCoutEquipe(p){ return (p.equipe||[]).reduce((s,m)=>s+(+m.tarif||0),0); }
+function projTotalAgence(p){ return projCoutEquipe(p)+(+p.maGestionMontant||0); }
+
+/* ---------- LISTE DES PROJETS ---------- */
+RENDERERS.projets=function(){
+  const projets=DB.all('projets').slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const today=todayISO();
+  const cards=projets.map(p=>{
+    const nbMag=(p.equipe||[]).length, conf=(p.equipe||[]).filter(m=>m.dispo==='Confirmé').length;
+    const past=(p.date||'')<today && p.date;
+    return `<div onclick="nav('projet',{id:'${p.id}'})" style="border:1px solid var(--anthr);border-radius:var(--rsm);padding:14px;margin-bottom:10px;cursor:pointer;background:var(--noir2)${past?';opacity:.7':''}">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:start">
+        <div style="min-width:0"><div class="td-strong" style="font-size:15px">${esc(p.nom||'Projet sans nom')}</div>
+          <div class="td-dim" style="font-size:12px;margin-top:2px">${p.date?fmtDateFr(p.date):'date ?'} · ${esc(p.lieu||'—')}${p.agence?' · '+esc(p.agence):''}</div></div>
+        ${projBadge(p.statut||'Prospect')}
+      </div>
+      <div style="display:flex;gap:16px;margin-top:10px;flex-wrap:wrap;font-size:12px" class="td-dim">
+        <span>🎩 ${conf}/${nbMag} magiciens</span>
+        <span>💶 ${fmtEur(projTotalAgence(p))} à facturer</span>
+        ${p.nbInvites?`<span>👥 ${esc(p.nbInvites)} invités</span>`:''}
+      </div></div>`;
+  }).join('')||'<div class="empty"><div class="empty-icon">🎭</div><div class="empty-text">Aucun projet</div><div class="empty-sub">Crée ton premier événement Imagine the Impossible.</div></div>';
+  document.getElementById('view-projets').innerHTML=`
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
+      <button class="btn btn-or" onclick="nouveauProjet()">✦ Nouveau projet</button>
+      <button class="btn btn-ghost" onclick="gererMagiciens()">🎩 Banque de magiciens (${DB.all('magiciens').length})</button>
+      <button class="btn btn-ghost" onclick="gererEffets()">✨ Banque d'effets (${DB.all('effets').length})</button>
+    </div>
+    <div class="panel"><div class="panel-title">Projets (${projets.length})</div>${cards}</div>`;
+};
+function nouveauProjet(){
+  const p={id:uid('PRJ'),nom:'',date:'',lieu:'',agence:'',budgetTotal:0,theme:'',typeEvenement:'',nbInvites:'',ambiance:'',
+    statut:'Prospect',briefUrl:'',notesBrief:'',feedback:'',notes:'',maGestionMontant:0,statutAgence:'En attente',
+    equipe:[],consommables:[],equipement:[],logistique:{transport:'',hebergement:'',repas:''},checklist:[],createdAt:new Date().toISOString()};
+  saveP(p); logActivite('Projet Imagine créé'); nav('projet',{id:p.id});
+}
+
+/* ---------- PAGE DÉTAIL D'UN PROJET ---------- */
+function projField(pid,field,val){ const p=getP(pid); if(!p)return; p[field]=val; saveP(p); }
+function projFieldRe(pid,field,val){ projField(pid,field,val); RENDERERS.projet({id:pid}); }
+RENDERERS.projet=function(params){
+  const id=(params||currentParams||{}).id; const p=getP(id);
+  const el=document.getElementById('view-projet'); if(!p){ el.innerHTML='<div class="empty"><div class="empty-text">Projet introuvable</div></div>'; return; }
+  const coutEquipe=projCoutEquipe(p), total=projTotalAgence(p), budget=+p.budgetTotal||0;
+  const marge=budget-total;
+  document.getElementById('topbar-actions').innerHTML=`<button class="btn btn-ghost btn-sm" onclick="nav('projets')">← Projets</button>`;
+  el.innerHTML=`
+    <div class="panel"><div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+      <div class="panel-title" style="margin:0">🎭 ${esc(p.nom||'Projet')}</div>
+      <select class="form-control" style="max-width:180px" onchange="projFieldRe('${id}','statut',this.value)">${PROJET_STATUTS.map(s=>`<option${s===p.statut?' selected':''}>${s}</option>`).join('')}</select>
+    </div>
+      <div class="form-grid c3">
+        <div class="form-group"><label class="form-label">Nom du projet</label><input class="form-control" value="${esc(p.nom||'')}" onchange="projField('${id}','nom',this.value)"></div>
+        <div class="form-group"><label class="form-label">Date</label><input class="form-control" type="date" value="${esc(p.date||'')}" onchange="projField('${id}','date',this.value)"></div>
+        <div class="form-group"><label class="form-label">Agence cliente</label><input class="form-control" value="${esc(p.agence||'')}" onchange="projField('${id}','agence',this.value)"></div>
+        <div class="form-group"><label class="form-label">Lieu</label><input class="form-control" value="${esc(p.lieu||'')}" onchange="projField('${id}','lieu',this.value)"></div>
+        <div class="form-group"><label class="form-label">Type d'événement</label><input class="form-control" value="${esc(p.typeEvenement||'')}" onchange="projField('${id}','typeEvenement',this.value)" placeholder="soirée de gala, lancement…"></div>
+        <div class="form-group"><label class="form-label">Nombre d'invités</label><input class="form-control" value="${esc(p.nbInvites||'')}" onchange="projField('${id}','nbInvites',this.value)"></div>
+        <div class="form-group"><label class="form-label">Thème</label><input class="form-control" value="${esc(p.theme||'')}" onchange="projField('${id}','theme',this.value)"></div>
+        <div class="form-group" style="grid-column:span 2"><label class="form-label">Ambiance / contexte</label><input class="form-control" value="${esc(p.ambiance||'')}" onchange="projField('${id}','ambiance',this.value)" placeholder="luxe feutré, cocktail debout, dress code…"></div>
+      </div>
+    </div>
+
+    <div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><div class="panel-title" style="margin:0">🎩 Équipe (${(p.equipe||[]).length})</div>
+      <button class="btn btn-or btn-sm" onclick="projAddMembre('${id}')">+ Ajouter un magicien</button></div>
+      ${projEquipeHtml(p)}
+    </div>
+
+    <div class="panel"><div class="panel-title">🍾 Consommables & matériel</div>
+      ${projListHtml(id,'consommables','Consommable (toasts, macarons, champagne, roses…)')}
+      <div class="panel-title" style="margin-top:16px;font-size:13px">🔔 Équipement (cloches, bouteilles, verres…)</div>
+      ${projListHtml(id,'equipement','Équipement')}
+      <div class="form-grid c3" style="margin-top:14px">
+        <div class="form-group"><label class="form-label">🚗 Transport (qui paie ?)</label><input class="form-control" value="${esc((p.logistique||{}).transport||'')}" onchange="projLogi('${id}','transport',this.value)"></div>
+        <div class="form-group"><label class="form-label">🏨 Hébergement</label><input class="form-control" value="${esc((p.logistique||{}).hebergement||'')}" onchange="projLogi('${id}','hebergement',this.value)"></div>
+        <div class="form-group"><label class="form-label">🍽️ Repas</label><input class="form-control" value="${esc((p.logistique||{}).repas||'')}" onchange="projLogi('${id}','repas',this.value)"></div>
+      </div>
+      <div class="panel-title" style="margin-top:16px;font-size:13px">✅ Checklist avant prestation</div>
+      ${projListHtml(id,'checklist','Point à vérifier')}
+    </div>
+
+    <div class="panel"><div class="panel-title">💶 Budget & facturation</div>
+      <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr)">
+        ${kpi('info','Coût équipe',fmtEur(coutEquipe),'magiciens')}
+        ${kpi('or','Ma gestion',fmtEur(+p.maGestionMontant||0))}
+        ${kpi('vert','À facturer agence',fmtEur(total))}
+        ${kpi(marge>=0?'vert':'rouge','Marge / budget',fmtEur(marge))}
+      </div>
+      <div class="form-grid c3" style="margin-top:12px">
+        <div class="form-group"><label class="form-label">Ma gestion de projet (€)</label><input class="form-control" type="number" value="${+p.maGestionMontant||0}" onchange="projFieldRe('${id}','maGestionMontant',+this.value||0)"></div>
+        <div class="form-group"><label class="form-label">Budget annoncé agence (€)</label><input class="form-control" type="number" value="${budget}" onchange="projFieldRe('${id}','budgetTotal',+this.value||0)"></div>
+        <div class="form-group"><label class="form-label">Paiement agence</label><select class="form-control" onchange="projField('${id}','statutAgence',this.value)">${AGENCE_PAY.map(s=>`<option${s===p.statutAgence?' selected':''}>${s}</option>`).join('')}</select></div>
+      </div>
+    </div>
+
+    <div class="panel"><div class="panel-title">📋 Suivi & brief</div>
+      <div class="form-group"><label class="form-label">Lien vers le brief complet</label><input class="form-control" value="${esc(p.briefUrl||'')}" onchange="projField('${id}','briefUrl',this.value)" placeholder="https://… (Notion, Drive, Google Doc)"></div>
+      <div class="form-group"><label class="form-label">Notes de brief / formation à distance</label><textarea class="form-control" style="min-height:80px" onchange="projField('${id}','notesBrief',this.value)">${esc(p.notesBrief||'')}</textarea></div>
+      <div class="form-group"><label class="form-label">Respect du brief (règles : pas de cartes, pas de sponge balls…)</label><textarea class="form-control" style="min-height:70px" onchange="projField('${id}','notes',this.value)">${esc(p.notes||'')}</textarea></div>
+      <div class="form-group"><label class="form-label">Feedback post-prestation</label><textarea class="form-control" style="min-height:80px" onchange="projField('${id}','feedback',this.value)">${esc(p.feedback||'')}</textarea></div>
+    </div>
+
+    <div style="margin:10px 0 30px"><button class="btn btn-danger" onclick="supprimerProjet('${id}')">🗑 Supprimer le projet</button></div>`;
+};
+function supprimerProjet(id){ if(!confirm('Supprimer définitivement ce projet ?'))return; DB.remove('projets',id); toast('Projet supprimé','ok'); nav('projets'); }
+function projLogi(pid,k,v){ const p=getP(pid); if(!p)return; p.logistique=p.logistique||{}; p.logistique[k]=v; saveP(p); }
+
+/* ----- Équipe ----- */
+function projEquipeHtml(p){
+  if(!(p.equipe||[]).length) return '<div class="td-dim" style="padding:8px 0">Aucun magicien. Ajoute-les depuis la banque.</div>';
+  return p.equipe.map(m=>{
+    const eff=(m.effets||[]).map(eid=>{ const e=DB.get('effets',eid); return e?esc(e.nom):null; }).filter(Boolean);
+    return `<div style="border:1px solid var(--anthr);border-radius:var(--rsm);padding:12px;margin-top:10px">
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap">
+        <div class="td-strong">${esc(magNom(m.magicienId))} <span class="td-dim" style="font-weight:400;font-size:12px">${esc((DB.get('magiciens',m.magicienId)||{}).ville||'')}</span></div>
+        <button class="qa" title="Retirer" onclick="projDelMembre('${p.id}','${m.id}')">✕</button>
+      </div>
+      <div class="form-grid c3" style="margin-top:8px">
+        <div class="form-group"><label class="form-label" style="font-size:11px">Rôle</label><select class="form-control" onchange="projSetMembre('${p.id}','${m.id}','role',this.value)">${IMPOSSIBLE_ROLES.map(r=>`<option${r===m.role?' selected':''}>${r}</option>`).join('')}</select></div>
+        <div class="form-group"><label class="form-label" style="font-size:11px">Tarif convenu (€)</label><input class="form-control" type="number" value="${+m.tarif||0}" onchange="projSetMembre('${p.id}','${m.id}','tarif',+this.value||0)"></div>
+        <div class="form-group"><label class="form-label" style="font-size:11px">Disponibilité</label><select class="form-control" onchange="projSetMembre('${p.id}','${m.id}','dispo',this.value)">${DISPO_STATUTS.map(s=>`<option${s===m.dispo?' selected':''}>${s}</option>`).join('')}</select></div>
+        <div class="form-group"><label class="form-label" style="font-size:11px">Paiement</label><select class="form-control" onchange="projSetMembre('${p.id}','${m.id}','statutPaiement',this.value)">${PAY_STATUTS.map(s=>`<option${s===m.statutPaiement?' selected':''}>${s}</option>`).join('')}</select></div>
+        <div class="form-group" style="grid-column:span 2"><label class="form-label" style="font-size:11px">Accessoires / matériel perso apporté</label><input class="form-control" value="${esc(m.materielPerso||'')}" onchange="projSetMembre('${p.id}','${m.id}','materielPerso',this.value)"></div>
+      </div>
+      <div style="margin-top:8px"><div style="display:flex;justify-content:space-between;align-items:center"><label class="form-label" style="font-size:11px;margin:0">✨ Effets attribués</label><button class="btn btn-ghost btn-sm" onclick="membreEffets('${p.id}','${m.id}')">Choisir les effets</button></div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${eff.length?eff.map(n=>`<span class="badge accepte" style="font-size:11px">${n}</span>`).join(''):'<span class="td-dim" style="font-size:12px">Aucun effet choisi</span>'}</div></div>
+      <div class="form-group" style="margin-top:8px"><label class="form-label" style="font-size:11px">Notes (préférences, points d'attention)</label><input class="form-control" value="${esc(m.notes||'')}" onchange="projSetMembre('${p.id}','${m.id}','notes',this.value)"></div>
+    </div>`;
+  }).join('');
+}
+function projSetMembre(pid,mid,field,val){ const p=getP(pid); const m=(p.equipe||[]).find(x=>x.id===mid); if(!m)return; m[field]=val; saveP(p);
+  if(field==='tarif') RENDERERS.projet({id:pid}); }   // maj des totaux budget
+function projDelMembre(pid,mid){ const p=getP(pid); p.equipe=(p.equipe||[]).filter(x=>x.id!==mid); saveP(p); RENDERERS.projet({id:pid}); }
+function projAddMembre(pid){
+  const mags=DB.all('magiciens');
+  if(!mags.length){ if(confirm('Aucun magicien dans ta banque. En ajouter maintenant ?')) gererMagiciens(); return; }
+  const opts=mags.map(m=>`<label style="display:flex;align-items:center;gap:8px;padding:8px;border-bottom:1px solid var(--anthr);cursor:pointer"><input type="checkbox" class="pm-cb" value="${m.id}"><span>${esc(((m.prenom?m.prenom+' ':'')+m.nom).trim())} <span class="td-dim">· ${esc(m.ville||'')}</span></span></label>`).join('');
+  openModal('Ajouter des magiciens',`<div style="max-height:340px;overflow:auto;border:1px solid var(--anthr);border-radius:var(--rsm)">${opts}</div>`,
+    `<button class="btn btn-ghost" onclick="gererMagiciens()">+ Nouveau magicien</button><button class="btn btn-ghost" onclick="closeModal()">Annuler</button><button class="btn btn-or" onclick="projAddMembreOk('${pid}')">Ajouter</button>`);
+}
+function projAddMembreOk(pid){
+  const ids=[...document.querySelectorAll('.pm-cb:checked')].map(c=>c.value); const p=getP(pid); p.equipe=p.equipe||[];
+  ids.forEach(mid=>{ if(!p.equipe.some(m=>m.magicienId===mid)) p.equipe.push({id:uid('MBR'),magicienId:mid,role:'Serveur',tarif:0,dispo:'En discussion',statutPaiement:'En discussion',effets:[],materielPerso:'',notes:''}); });
+  saveP(p); closeModal(); RENDERERS.projet({id:pid}); toast(ids.length+' magicien(s) ajouté(s)','ok');
+}
+function membreEffets(pid,mid){
+  const p=getP(pid); const m=(p.equipe||[]).find(x=>x.id===mid); if(!m)return;
+  const effs=DB.all('effets');
+  if(!effs.length){ if(confirm('Banque d\'effets vide. En ajouter maintenant ?')) gererEffets(); return; }
+  const cats={}; effs.forEach(e=>{ (cats[e.categorie||'Autres']=cats[e.categorie||'Autres']||[]).push(e); });
+  const list=Object.keys(cats).sort().map(cat=>`<div style="padding:6px 10px;background:var(--anthr);font-size:11px;font-weight:600;color:var(--gm)">${esc(cat)}</div>`+
+    cats[cat].map(e=>`<label style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border-bottom:1px solid var(--anthr);cursor:pointer"><input type="checkbox" class="me-cb" value="${e.id}" ${(m.effets||[]).includes(e.id)?'checked':''} style="margin-top:3px"><span><span class="td-strong" style="font-size:13px">${esc(e.nom)}</span>${e.description?`<div class="td-dim" style="font-size:11px">${esc(e.description)}</div>`:''}</span></label>`).join('')).join('');
+  openModal('Effets de '+esc(magNom(m.magicienId)),`<div style="max-height:400px;overflow:auto;border:1px solid var(--anthr);border-radius:var(--rsm)">${list}</div>`,
+    `<button class="btn btn-ghost" onclick="closeModal()">Annuler</button><button class="btn btn-or" onclick="membreEffetsOk('${pid}','${mid}')">💾 Enregistrer</button>`);
+}
+function membreEffetsOk(pid,mid){ const ids=[...document.querySelectorAll('.me-cb:checked')].map(c=>c.value);
+  const p=getP(pid); const m=(p.equipe||[]).find(x=>x.id===mid); if(m){ m.effets=ids; saveP(p); } closeModal(); RENDERERS.projet({id:pid}); toast('Effets enregistrés','ok'); }
+
+/* ----- Listes cochables (consommables / équipement / checklist) ----- */
+function projListHtml(pid,key,ph){
+  const p=getP(pid); const arr=p[key]||[];
+  const rows=arr.map(it=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--anthr)">
+    <input type="checkbox" ${it.fait?'checked':''} onchange="projItemToggle('${pid}','${key}','${it.id}')" style="width:18px;height:18px">
+    <input class="form-control" style="flex:1;border:none;background:none;padding:4px 0${it.fait?';text-decoration:line-through;opacity:.6':''}" value="${esc(it.label||'')}" onchange="projItemLabel('${pid}','${key}','${it.id}',this.value)">
+    ${key==='consommables'?`<input class="form-control" style="max-width:70px" placeholder="qté" value="${esc(it.qte||'')}" onchange="projItemQte('${pid}','${it.id}',this.value)">`:''}
+    <button class="qa" onclick="projItemDel('${pid}','${key}','${it.id}')">✕</button></div>`).join('');
+  return `<div>${rows}</div><button class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="projItemAdd('${pid}','${key}')">+ Ajouter</button>`;
+}
+function projItemAdd(pid,key){ const p=getP(pid); p[key]=p[key]||[]; p[key].push({id:uid('IT'),label:'',qte:'',fait:false}); saveP(p); RENDERERS.projet({id:pid}); }
+function projItemToggle(pid,key,iid){ const p=getP(pid); const it=(p[key]||[]).find(x=>x.id===iid); if(it){ it.fait=!it.fait; saveP(p); RENDERERS.projet({id:pid}); } }
+function projItemLabel(pid,key,iid,v){ const p=getP(pid); const it=(p[key]||[]).find(x=>x.id===iid); if(it){ it.label=v; saveP(p); } }
+function projItemQte(pid,iid,v){ const p=getP(pid); const it=(p.consommables||[]).find(x=>x.id===iid); if(it){ it.qte=v; saveP(p); } }
+function projItemDel(pid,key,iid){ const p=getP(pid); p[key]=(p[key]||[]).filter(x=>x.id!==iid); saveP(p); RENDERERS.projet({id:pid}); }
+
+/* ---------- BANQUE DE MAGICIENS ---------- */
+function gererMagiciens(){
+  const mags=DB.all('magiciens');
+  const rows=mags.map(m=>`<div style="border:1px solid var(--anthr);border-radius:var(--rsm);padding:10px;margin-bottom:8px">
+    <div class="form-grid c3">
+      <div class="form-group"><label class="form-label" style="font-size:11px">Prénom</label><input class="form-control" value="${esc(m.prenom||'')}" onchange="saveMag('${m.id}','prenom',this.value)"></div>
+      <div class="form-group"><label class="form-label" style="font-size:11px">Nom</label><input class="form-control" value="${esc(m.nom||'')}" onchange="saveMag('${m.id}','nom',this.value)"></div>
+      <div class="form-group"><label class="form-label" style="font-size:11px">Ville</label><input class="form-control" value="${esc(m.ville||'')}" onchange="saveMag('${m.id}','ville',this.value)"></div>
+      <div class="form-group"><label class="form-label" style="font-size:11px">Téléphone</label><input class="form-control" value="${esc(m.tel||'')}" onchange="saveMag('${m.id}','tel',this.value)"></div>
+      <div class="form-group"><label class="form-label" style="font-size:11px">Email</label><input class="form-control" value="${esc(m.email||'')}" onchange="saveMag('${m.id}','email',this.value)"></div>
+      <div class="form-group" style="display:flex;align-items:end"><button class="btn btn-danger btn-sm" onclick="delMag('${m.id}')">🗑 Supprimer</button></div>
+    </div>
+    <div class="form-group" style="margin-top:6px"><input class="form-control" placeholder="Notes (style, spécialités…)" value="${esc(m.notes||'')}" onchange="saveMag('${m.id}','notes',this.value)"></div>
+  </div>`).join('')||'<div class="td-dim" style="padding:8px">Banque vide.</div>';
+  openModal('🎩 Banque de magiciens ('+mags.length+')',`<div style="max-height:440px;overflow:auto">${rows}</div>`,
+    `<button class="btn btn-or" onclick="addMag()">+ Nouveau magicien</button><button class="btn btn-ghost" onclick="closeModal();if(_currentView==='projet')RENDERERS.projet(currentParams);else RENDERERS.projets()">Fermer</button>`);
+}
+function addMag(){ DB.save('magiciens',{id:uid('MAG'),prenom:'',nom:'Nouveau magicien',ville:'',tel:'',email:'',notes:''}); gererMagiciens(); }
+function saveMag(id,f,v){ const m=DB.get('magiciens',id); if(m){ m[f]=v; DB.save('magiciens',m); } }
+function delMag(id){ if(!confirm('Supprimer ce magicien de la banque ?'))return; DB.remove('magiciens',id); gererMagiciens(); }
+
+/* ---------- BANQUE D'EFFETS ---------- */
+function gererEffets(){
+  const effs=DB.all('effets');
+  const rows=effs.map(e=>`<div style="border:1px solid var(--anthr);border-radius:var(--rsm);padding:10px;margin-bottom:8px">
+    <div class="form-grid" style="grid-template-columns:2fr 1fr">
+      <div class="form-group"><label class="form-label" style="font-size:11px">Nom de l'effet</label><input class="form-control" value="${esc(e.nom||'')}" onchange="saveEff('${e.id}','nom',this.value)"></div>
+      <div class="form-group"><label class="form-label" style="font-size:11px">Catégorie</label><input class="form-control" value="${esc(e.categorie||'')}" onchange="saveEff('${e.id}','categorie',this.value)" placeholder="flash, apparition, close-up…"></div>
+    </div>
+    <div class="form-group"><label class="form-label" style="font-size:11px">Description</label><input class="form-control" value="${esc(e.description||'')}" onchange="saveEff('${e.id}','description',this.value)"></div>
+    <div class="form-grid" style="grid-template-columns:2fr auto;align-items:end">
+      <div class="form-group"><label class="form-label" style="font-size:11px">Matériel requis</label><input class="form-control" value="${esc(e.materiel||'')}" onchange="saveEff('${e.id}','materiel',this.value)"></div>
+      <button class="btn btn-danger btn-sm" onclick="delEff('${e.id}')">🗑</button>
+    </div></div>`).join('')||'<div class="td-dim" style="padding:8px">Banque d\'effets vide.</div>';
+  openModal('✨ Banque d\'effets ('+effs.length+')',`<div style="max-height:440px;overflow:auto">${rows}</div>`,
+    `<button class="btn btn-or" onclick="addEff()">+ Nouvel effet</button><button class="btn btn-ghost" onclick="closeModal();if(_currentView==='projet')RENDERERS.projet(currentParams);else RENDERERS.projets()">Fermer</button>`);
+}
+function addEff(){ DB.save('effets',{id:uid('EFF'),nom:'Nouvel effet',categorie:'',description:'',materiel:''}); gererEffets(); }
+function saveEff(id,f,v){ const e=DB.get('effets',id); if(e){ e[f]=v; DB.save('effets',e); } }
+function delEff(id){ if(!confirm('Supprimer cet effet de la banque ?'))return; DB.remove('effets',id); gererEffets(); }
+
 (async function boot(){
   try{ applyTheme(localStorage.getItem('lm_theme')||'dark'); }catch(_){ applyTheme('dark'); }
   try{ document.querySelectorAll('.brand-logo').forEach(i=>i.src=logoSrc()); }catch(_){}

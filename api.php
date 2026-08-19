@@ -25,7 +25,8 @@ header('Content-Type: application/json; charset=utf-8');
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') { exit; }
 
 $ENTITIES = ['demandes','devis','prestations','factures','clients','relances',
-             'activite','mails','catalogue','recettes','declarations','planifs','templates'];
+             'activite','mails','catalogue','recettes','declarations','planifs','templates',
+             'projets','magiciens','effets'];
 
 function out($o){ echo json_encode($o, JSON_UNESCAPED_UNICODE); exit; }
 
