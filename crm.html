@@ -565,7 +565,7 @@ function uploadLogo(input){
   };
   r.readAsDataURL(f);
 }
-function majLogoAvecNom(v){ const c=DB.config(); c.logoAvecNom=!!v; DB.saveConfig(c); toast(v?'Le nom ne sera plus répété à côté du logo':'Le nom sera écrit à côté du logo','ok'); }
+function majLogoAvecNom(v){ const c=DB.config(); c.pdfAfficherNom=!!v; DB.saveConfig(c); toast(v?'Le nom sera écrit à côté du logo':'Le logo parle seul — nom retiré des PDF','ok'); }
 function resetLogo(){ const cfg=DB.config(); delete cfg.logo; DB.saveConfig(cfg);
   if(cloudUrl()) cloudPost({action:'putConfig',config:DB.config()});
   document.querySelectorAll('.brand-logo').forEach(i=>i.src=LOGO_B64); prepareLogo();
@@ -1595,23 +1595,36 @@ function pdfHeader(doc,type,num,dates){
   // halo orange discret (rappel du site)
   doc.setFillColor(30,18,8); doc.circle(196,4,26,'F');
 
-  // ── Identité (gauche) — le nom n'est pas répété si le logo le contient déjà
-  const nomDansLogo=DB.config().logoAvecNom===true;
-  let tx=15;
-  const lw=pdfLogo(doc,15,10,nomDansLogo?21:17,true,nomDansLogo?60:26);
-  if(lw) tx=15+lw+7;
-  if(!nomDansLogo){
+  // ── Identité (gauche) : le logo est la marque ; le nom écrit n'apparaît qu'à la demande (ou sans logo)
+  const cfgH=DB.config();
+  const ratio=(_logoMeta&&_logoMeta.ratio>0)?_logoMeta.ratio:1;
+  const aLogo=!!logoSrc();
+  const ecrireNom=aLogo ? (cfgH.pdfAfficherNom===true) : true;
+  const large=ratio>=1.6;                                  // logo horizontal → il prend toute la colonne
+  let tx=15, ty=27.5, ly=34.5, ly2=38.6;
+
+  if(aLogo && !ecrireNom){
+    if(large){                                             // logo horizontal : grand, infos dessous
+      pdfLogo(doc,15,6,22,true,88);
+      tx=15; ty=34; ly=39; ly2=43;
+    } else {                                               // logo carré/vertical : grand, infos à droite
+      const lw=pdfLogo(doc,15,7,32,true,46);
+      tx=15+(lw||32)+10; ty=20.5; ly=28; ly2=32.5;
+    }
+  } else {
+    const lw=pdfLogo(doc,15,10,17,true,26);
+    if(lw) tx=15+lw+7;
     doc.setFont('helvetica','bold'); doc.setFontSize(20);
     doc.setTextColor(...P_BLANC); doc.text('Louis',tx,22);
     const w=doc.getTextWidth('Louis');
     doc.setTextColor(...P_OR); doc.text('Magie',tx+w,22);
   }
   doc.setFont('helvetica','normal'); doc.setFontSize(6.4); doc.setTextColor(150,145,138);
-  doc.text('M A G I C I E N   ·   C L O S E - U P   ·   M E N T A L I S M E',tx,nomDansLogo?21:27.5);
+  doc.text('M A G I C I E N   ·   C L O S E - U P   ·   M E N T A L I S M E',tx,ty);
   // coordonnées émetteur, discrètes dans le bandeau
   doc.setFontSize(7.4); doc.setTextColor(125,120,113);
-  doc.text([e.contact,e.adresse].filter(Boolean).join('  ·  '),tx,34.5);
-  doc.text([e.tel,e.email].filter(Boolean).join('  ·  '),tx,38.6);
+  doc.text([e.contact,e.adresse].filter(Boolean).join('  ·  '),tx,ly);
+  doc.text([e.tel,e.email].filter(Boolean).join('  ·  '),tx,ly2);
 
   // ── Cartouche document (droite)
   const bx=138,bw=57;
@@ -3118,7 +3131,7 @@ RENDERERS.reglages=function(){
           <button class="btn btn-or" onclick="document.getElementById('logo-file').click()">📤 Choisir un logo</button>
           ${cfg.logo?`<button class="btn btn-ghost" onclick="resetLogo()">↺ Logo par défaut</button>`:''}
           <div class="td-dim" style="font-size:12px;margin-top:8px">PNG (fond transparent conseillé) ou JPG. Redimensionné automatiquement (max 256 px). Le fond uni est détouré et le logo s'éclaircit tout seul sur les fonds sombres.</div>
-          <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;cursor:pointer"><input type="checkbox" ${cfg.logoAvecNom?'checked':''} onchange="majLogoAvecNom(this.checked)" style="width:18px;height:18px">Mon logo contient déjà « LouisMagie » <span class="td-dim">(n'écrit pas le nom à côté sur les PDF)</span></label>
+          <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;cursor:pointer"><input type="checkbox" ${cfg.pdfAfficherNom?'checked':''} onchange="majLogoAvecNom(this.checked)" style="width:18px;height:18px">Écrire aussi « LouisMagie » à côté du logo sur les PDF <span class="td-dim">(inutile si ton logo contient déjà le nom)</span></label>
         </div>
       </div>
     </div>
