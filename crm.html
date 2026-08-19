@@ -661,6 +661,7 @@ function updateBadges(){
   setBadge('badge-demandes',nd); setBadge('badge-devis',ndv); setBadge('badge-factures',nf);
   setBadge('badge-compta',trimsADeclarer().length);
   try{ setBadge('badge-marketing',mktRappels().length); }catch(_){}
+  try{ const today=todayISO(); setBadge('badge-projets',DB.all('projets').filter(x=>x.date&&x.date>=today&&!['Annulé','Facturé'].includes(x.statut)).length); }catch(_){}
 }
 function setBadge(id,n){ const el=document.getElementById(id); if(!el)return;
   if(n>0){ el.textContent=n; el.style.display='inline-block'; } else el.style.display='none'; }
@@ -1581,18 +1582,26 @@ RENDERERS.agenda=function(){
     const evts=prestations.filter(p=>p.dateEvenement===ds);
     const cls=p=>p.statutRealisation==='Réalisée'?'realisee':(p.statutRealisation==='Option'?'option':'');
     const evtHtml=evts.map(p=>`<div class="cal-evt ${cls(p)}" onclick="event.stopPropagation();voirPrestation('${p.id}')">${esc(p.horaire||p.creneau||'')} · ${esc(p.typePrestation).slice(0,16)}</div>`).join('');
+    const projs=DB.all('projets').filter(x=>x.date===ds&&x.statut!=='Annulé');
+    const projHtml=projs.map(x=>`<div class="cal-evt" style="background:linear-gradient(135deg,#7B1FA2,#9C27B0);color:#fff;border:none" onclick="event.stopPropagation();nav('projet',{id:'${x.id}'})">🎭 ${esc(x.nom||'Projet').slice(0,15)}</div>`).join('');
     const rq=risqueJour(ds,null);
     const rqHtml=rq?`<div class="cal-risk ${rq.niveau==='risque'?'soft':''}" onclick="event.stopPropagation();analyseJour('${ds}')">⚠ ${rq.niveau==='conflit'?'conflit':'serré'}</div>`:'';
-    cells+=`<div class="cal-cell ${ds===todayStr?'today':''}"><div class="cal-day">${day}</div>${evtHtml}${rqHtml}</div>`;
+    cells+=`<div class="cal-cell ${ds===todayStr?'today':''}"><div class="cal-day">${day}</div>${evtHtml}${projHtml}${rqHtml}</div>`;
   }
   const moisLabel=first.toLocaleDateString('fr-FR',{month:'long',year:'numeric'});
 
-  const listAvenir=aVenir.length?aVenir.map(p=>{ const j=daysFromNow(p.dateEvenement);
+  const projAvenir=DB.all('projets').filter(x=>x.date&&x.date>=todayStr&&x.statut!=='Annulé').sort((a,b)=>a.date.localeCompare(b.date));
+  const projCards=projAvenir.map(x=>{ const j=daysFromNow(x.date);
+    return `<div class="kb-card" onclick="nav('projet',{id:'${x.id}'})" style="margin-bottom:8px;border-left:3px solid #9C27B0">
+      <div class="kb-card-title">🎭 ${esc(x.nom||'Projet')}</div>
+      <div class="kb-card-sub">${fmtDateFr(x.date)} · ${esc(x.lieu||'')}${x.agence?' · '+esc(x.agence):''}</div>
+      <div class="kb-card-sub" style="color:${j<=7?'var(--or)':'var(--gm)'}">${j===0?"aujourd'hui":'J-'+j} · ${(x.equipe||[]).length} magiciens</div></div>`;}).join('');
+  const listAvenir=(aVenir.length?aVenir.map(p=>{ const j=daysFromNow(p.dateEvenement);
     return `<div class="kb-card" onclick="voirPrestation('${p.id}')" style="margin-bottom:8px">
       <div class="kb-card-title">${esc(p.typePrestation)}</div>
       <div class="kb-card-sub">${fmtDateFr(p.dateEvenement)} · ${esc(p.creneau||'')} · ${esc(p.lieu||'')}</div>
-      <div class="kb-card-sub" style="color:${j<=7?'var(--or)':'var(--gm)'}">${j===0?"aujourd'hui":'J-'+j}</div></div>`;}).join('')
-    :'<div class="td-dim">Aucune prestation à venir.</div>';
+      <div class="kb-card-sub" style="color:${j<=7?'var(--or)':'var(--gm)'}">${j===0?"aujourd'hui":'J-'+j}</div></div>`;}).join(''):'<div class="td-dim">Aucune prestation à venir.</div>')
+    +(projCards?'<div class="td-dim" style="margin:12px 0 6px;font-weight:600;color:#9C27B0">🎭 Projets Imagine</div>'+projCards:'');
 
   document.getElementById('view-agenda').innerHTML=`
     <div class="charts-grid" style="grid-template-columns:2fr 1fr;align-items:start">
@@ -1694,7 +1703,7 @@ RENDERERS.factures=function(){
 
   const rows=all.slice().sort((a,b)=>new Date(b.dateEmission)-new Date(a.dateEmission));
   const body=rows.length?rows.map(f=>{
-    const cli=DB.get('clients',f.idClient); const nom=cli?cli.nom:(DB.get('devis',f.idDevis)||{}).nomClient||'—';
+    const nom=clientNomFacture(f)||'—';
     const echue=f.statut!=='Payée'&&daysSince(f.dateEcheance)>0;
     return `<tr style="cursor:pointer" onclick="voirFacture('${f.id}')">
       <td class="td-strong" data-label="N°">${esc(f.id)}<div class="td-dim">${factTypeLabel(f)}</div></td>
@@ -1818,7 +1827,7 @@ function voirFacture(id){
     <div class="info-grid" style="margin-bottom:12px">
       ${infoItem('Type',factTypeLabel(f)+(f.type==='solde'?' (acompte déduit)':''))}${infoItem('Client',esc(nom))}
       ${infoItem(f.type==='acompte'?'Montant acompte':'Montant facturé',fmtEur(factMontant(f)))}${infoItem('Total prestation',fmtEur(f.montantTTC))}
-      ${f.type==='solde'?infoItem('Acompte déjà versé',fmtEur(f.acompteVerse)):infoItem('Devis lié',esc(f.idDevis||'—'))}${infoItem('Reste dû',fmtEur(f.soldeDu))}
+      ${f.type==='solde'?infoItem('Acompte déjà versé',fmtEur(f.acompteVerse)):(f.idProjet?infoItem('Projet',`<a href="#" onclick="nav('projet',{id:'${f.idProjet}'});return false" style="color:var(--or)">🎭 ${esc((DB.get('projets',f.idProjet)||{}).nom||'projet')}</a>`):infoItem('Devis lié',esc(f.idDevis||'—')))}${infoItem('Reste dû',fmtEur(f.soldeDu))}
     </div>
     ${action}
     <div class="action-grid">
@@ -1961,8 +1970,8 @@ function pdfFacture(id,returnDoc){
     cond = f.statut==='Payée'?['Solde acquitté le '+fmtDateFr(f.datePaiement)+'. Merci de votre confiance.']
       :['Merci de régler le solde de '+fmtEurPdf(f.soldeDu)+' avant le '+fmtDateFr(f.dateEcheance)+'.','En cas de retard : pénalités au taux légal, indemnité forfaitaire de 40 € (art. L441-10 C. com.).'];
   } else {
-    body=[['Prestation de magie'+dateP,fmtEurPdf(f.montantFacture)]];
-    totaux=[['Montant prestation',fmtEurPdf(f.montantFacture)]];
+    body=[[f.designation||('Prestation de magie'+dateP),fmtEurPdf(f.montantFacture)]];
+    totaux=[['Montant',fmtEurPdf(f.montantFacture)]];
     totalLabel='TOTAL À RÉGLER'; totalVal=fmtEurPdf(f.soldeDu);
     cond = f.statut==='Payée'?['Facture acquittée le '+fmtDateFr(f.datePaiement)+'. Merci de votre confiance.']
       :['Merci de régler '+fmtEurPdf(f.soldeDu)+' avant le '+fmtDateFr(f.dateEcheance)+'.','En cas de retard : pénalités au taux légal, indemnité forfaitaire de 40 € (art. L441-10 C. com.).'];
@@ -3044,6 +3053,24 @@ function projCoutEquipe(p){ return (p.equipe||[]).reduce((s,m)=>s+(+m.tarif||0),
 function projCoutGlobal(p){ return (p.equipe||[]).filter(m=>m.factMode!=='Directe agence').reduce((s,m)=>s+(+m.tarif||0),0); }  // magiciens facturés via moi
 function projCoutDirect(p){ return (p.equipe||[]).filter(m=>m.factMode==='Directe agence').reduce((s,m)=>s+(+m.tarif||0),0); }  // magiciens qui facturent l'agence en direct
 function projTotalAgence(p){ return projCoutGlobal(p)+(+p.maGestionMontant||0); }                                              // ce que MOI je facture à l'agence
+function factureProjetDe(pid){ return DB.all('factures').find(f=>f.idProjet===pid&&f.type!=='avoir'&&f.statut!=='Annulée'); }
+/* Crée une VRAIE facture LouisMagie (outil de facturation existant) reliée au projet, pour ma part à facturer à l'agence */
+function facturerProjet(pid){
+  const p=getP(pid); if(!p)return;
+  if(factureProjetDe(pid)){ toast('Une facture existe déjà pour ce projet','err'); return; }
+  const montant=projTotalAgence(p);
+  if(montant<=0){ toast('Montant à facturer nul — renseigne les tarifs (via moi) et/ou ta gestion','err'); return; }
+  if(!confirm('Créer une facture de '+fmtEur(montant)+' à « '+(p.agence||'l\'agence')+' » ?\n\n(magiciens facturés via moi + ma gestion de projet)\nElle apparaîtra dans tes Factures LouisMagie.')) return;
+  const cfg=DB.config(); const ech=new Date(); ech.setDate(ech.getDate()+(cfg.delaiRelance1||30));
+  const fid=nextId('FAC','factures');
+  DB.save('factures',{id:fid,type:'complete',dateEmission:todayISO(),idDevis:'',idProjet:pid,idClient:'',
+    montantTTC:montant,montantFacture:montant,acompteVerse:0,soldeDu:montant,dateEcheance:ech.toISOString().slice(0,10),
+    statut:'Émise',datePaiement:'',dateEnvoi:'',dateRelance1:'',dateRelance2:'',
+    billingName:p.agence||'',designation:'Imagine the Impossible — '+(p.nom||'projet')+(p.date?(' ('+fmtDateFr(p.date)+')'):'')});
+  p.factureId=fid; if(p.statut!=='Annulé'&&p.statut!=='Facturé') p.statut='Facturé'; saveP(p);
+  logActivite('Facture projet Imagine émise ('+fmtEur(montant)+') → '+(p.agence||'')); updateBadges();
+  toast('🧾 Facture '+fid+' créée ('+fmtEur(montant)+')','ok'); RENDERERS.projet({id:pid});
+}
 
 /* ---------- LISTE DES PROJETS ---------- */
 RENDERERS.projets=function(){
@@ -3125,7 +3152,7 @@ RENDERERS.projet=function(params){
     </div>
 
     <div class="panel"><div class="panel-title">💶 Budget & facturation</div>
-      <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr)">
+      <div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">
         ${kpi('info','Coût équipe',fmtEur(coutEquipe),'tous magiciens')}
         ${kpi('or','À facturer agence',fmtEur(total),'via moi + gestion')}
         ${kpi('info','Facturé en direct',fmtEur(direct),'magiciens → agence')}
@@ -3137,6 +3164,9 @@ RENDERERS.projet=function(params){
         <div class="form-group"><label class="form-label">Budget annoncé agence (€)</label><input class="form-control" type="number" value="${budget}" onchange="projFieldRe('${id}','budgetTotal',+this.value||0)"></div>
         <div class="form-group"><label class="form-label">Paiement agence</label><select class="form-control" onchange="projField('${id}','statutAgence',this.value)">${AGENCE_PAY.map(s=>`<option${s===p.statutAgence?' selected':''}>${s}</option>`).join('')}</select></div>
       </div>
+      ${(()=>{ const fp=factureProjetDe(id); return fp
+        ? `<div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px;background:var(--okl);border-radius:var(--rsm)"><span>🧾 Facture <strong>${esc(fp.id)}</strong> · ${fmtEur(factMontant(fp))} · ${badge(fp.statut)}</span><button class="btn btn-ghost btn-sm" onclick="voirFacture('${fp.id}')">Ouvrir la facture</button></div>`
+        : `<div style="margin-top:12px"><button class="btn btn-or" onclick="facturerProjet('${id}')">🧾 Facturer l'agence (${fmtEur(total)})</button><div class="td-dim" style="font-size:11px;margin-top:5px">Crée une facture LouisMagie reliée à ce projet, dans ton outil de facturation habituel.</div></div>`; })()}
     </div>
 
     <div class="panel"><div class="panel-title">📋 Suivi & brief</div>
