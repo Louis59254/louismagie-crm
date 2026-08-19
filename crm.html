@@ -1808,7 +1808,7 @@ function genererFactureAcompte(idDevis,after){
   const m=+d.acompteRecu||0;
   if(m<=0){ toast('Aucun acompte encaissé sur ce devis','err'); return; }
   if(factAcompteDe(idDevis)){ toast('Facture d\'acompte déjà émise','err'); return; }
-  DB.save('factures',{id:nextId('FAC','factures'),type:'acompte',dateEmission:todayISO(),idDevis:d.id,idClient:d.idClient,
+  DB.save('factures',{id:nextId('FAC','factures'),type:'acompte',dateEmission:todayISO(),idDevis:d.id,idProjet:d.idProjet||'',idClient:d.idClient,
     montantTTC:+d.montantTTC,montantFacture:m,acompteVerse:0,soldeDu:0,
     dateEcheance:todayISO(),statut:'Payée',datePaiement:d.dateAcceptation||todayISO(),dateEnvoi:'',dateRelance1:'',dateRelance2:''});
   logActivite('Facture d\'acompte émise · '+idDevis+' ('+fmtEur(m)+')');
@@ -1825,7 +1825,9 @@ function facturerSolde(idDevis,after){
   const montantFacture=total-acompte;
   const type=acompte>0?'solde':'complete';
   const cfg=DB.config(); const ech=new Date(); ech.setDate(ech.getDate()+(cfg.delaiRelance1||30));
-  DB.save('factures',{id:nextId('FAC','factures'),type,dateEmission:todayISO(),idDevis:d.id,idClient:d.idClient,
+  const prj=d.idProjet?DB.get('projets',d.idProjet):null;
+  DB.save('factures',{id:nextId('FAC','factures'),type,dateEmission:todayISO(),idDevis:d.id,idProjet:d.idProjet||'',idClient:d.idClient,
+    designation:prj?('Imagine the Impossible — '+(prj.nom||'projet')+(prj.date?(' ('+fmtDateFr(prj.date)+')'):'')):'',
     montantTTC:total,montantFacture,acompteVerse:acompte,acompteRef:facAc?facAc.id:'',soldeDu:montantFacture,
     dateEcheance:ech.toISOString().slice(0,10),statut:'Émise',datePaiement:'',dateEnvoi:'',dateRelance1:'',dateRelance2:''});
   logActivite('Facture '+type+' émise · '+idDevis+(acompte?' (acompte '+fmtEur(acompte)+' déduit)':''));
@@ -3147,7 +3149,52 @@ const AGENCE_PAY=['En attente','Acompte reçu','Payé'];
 const FACT_MODE=['Globale (via moi)','Directe agence'];   // le magicien facture via moi ou directement l'agence
 const FOURNI_PAR=['Agence','Magiciens','Moi'];
 const COSTUME_PAR=['Fourni par l\'agence','Apporté par les magiciens','Fourni par moi','À définir'];
+const TARIF_MODE=['TTC','HT'];
 function getP(id){ return DB.get('projets',id); }
+/* ----- WhatsApp : lien wa.me avec message pré-rempli (normalise les numéros FR) ----- */
+function waNum(tel){ let n=String(tel||'').replace(/[^0-9+]/g,'');
+  if(n.startsWith('+')) return n.slice(1);
+  if(n.startsWith('00')) return n.slice(2);
+  if(n.startsWith('0')) return '33'+n.slice(1);   // numéro français
+  return n; }
+function waOpen(tel,msg){ const n=waNum(tel);
+  if(!n){ toast('Pas de numéro de téléphone pour ce magicien','err'); return; }
+  window.open('https://wa.me/'+n+'?text='+encodeURIComponent(msg),'_blank'); }
+/* Message d'invitation complet envoyé au magicien */
+function waMsgMission(p,m){
+  const mag=DB.get('magiciens',m.magicienId)||{};
+  const eff=(m.effets||[]).map(eid=>(DB.get('effets',eid)||{}).nom).filter(Boolean);
+  const dev=p.tarifMode==='HT'?' HT':'';
+  return `Salut ${mag.prenom||mag.nom||''} ! 🎩\n\n`
+    +`Je monte l'équipe pour *Imagine the Impossible* :\n\n`
+    +`📅 ${p.date?fmtDateFr(p.date):'date à confirmer'}\n`
+    +`📍 ${p.lieu||'lieu à confirmer'}\n`
+    +(p.agence?`🏢 Agence : ${p.agence}\n`:'')
+    +(p.typeEvenement?`🎉 ${p.typeEvenement}${p.nbInvites?' · '+p.nbInvites+' invités':''}\n`:'')
+    +`\n🎭 Ton rôle : *${m.role||'à définir'}*\n`
+    +(+m.tarif?`💶 Tarif : *${fmtEur(m.tarif)}${dev}*\n`:'')
+    +(p.costume?`👔 Costume : ${p.costume}\n`:'')
+    +(eff.length?`\n✨ Tes effets : ${eff.join(', ')}\n`:'')
+    +(m.materielPerso?`🎒 À apporter : ${m.materielPerso}\n`:'')
+    +(p.ambiance?`\n💡 Ambiance : ${p.ambiance}\n`:'')
+    +`\nTu es dispo ? Dis-moi vite, je bloque ta place 🙌\nLouis`;
+}
+function waMembre(pid,mid){ const p=getP(pid); const m=(p.equipe||[]).find(x=>x.id===mid); if(!m)return;
+  const mag=DB.get('magiciens',m.magicienId)||{}; waOpen(mag.tel,waMsgMission(p,m)); }
+/* Diffuse le lien du groupe WhatsApp à toute l'équipe (un onglet par magicien) */
+function waDiffuserGroupe(pid){
+  const p=getP(pid); if(!p)return;
+  const lien=(p.whatsappGroupe||'').trim();
+  if(!lien){ toast('Colle d\'abord le lien d\'invitation du groupe','err'); return; }
+  const eq=(p.equipe||[]).filter(m=>(DB.get('magiciens',m.magicienId)||{}).tel);
+  if(!eq.length){ toast('Aucun magicien avec un numéro de téléphone','err'); return; }
+  if(!confirm('Envoyer l\'invitation du groupe à '+eq.length+' magicien(s) ?\n\nUn onglet WhatsApp s\'ouvre par magicien (autorise les pop-ups).')) return;
+  const msg=`🎩 *${p.nom||'Imagine the Impossible'}* — ${p.date?fmtDateFr(p.date):''}\n\nRejoins le groupe WhatsApp du projet, on y met toutes les infos :\n${lien}\n\nÀ très vite !\nLouis`;
+  eq.forEach((m,i)=>{ const tel=(DB.get('magiciens',m.magicienId)||{}).tel; setTimeout(()=>waOpen(tel,msg), i*600); });
+  logActivite('Invitation groupe WhatsApp diffusée à '+eq.length+' magicien(s)');
+}
+/* ----- Devis LouisMagie généré depuis un projet Imagine ----- */
+function devisProjetDe(pid){ return DB.all('devis').find(d=>d.idProjet===pid); }
 function saveP(p){ p.updatedAt=new Date().toISOString(); return DB.save('projets',p); }
 function magNom(id){ const m=DB.get('magiciens',id); return m?((m.prenom?m.prenom+' ':'')+m.nom).trim():'—'; }
 function projStatutColor(s){ return {'Prospect':'#8a8a8a','En préparation':'#E8A13A','Confirmé':'#3FB97A','Réalisé':'#4A9DE8','Facturé':'#27AE60','Annulé':'#E5564B'}[s]||'#8a8a8a'; }
@@ -3157,6 +3204,43 @@ function projCoutGlobal(p){ return (p.equipe||[]).filter(m=>m.factMode!=='Direct
 function projCoutDirect(p){ return (p.equipe||[]).filter(m=>m.factMode==='Directe agence').reduce((s,m)=>s+(+m.tarif||0),0); }  // magiciens qui facturent l'agence en direct
 function projTotalAgence(p){ return projCoutGlobal(p)+(+p.maGestionMontant||0); }                                              // ce que MOI je facture à l'agence
 function factureProjetDe(pid){ return DB.all('factures').find(f=>f.idProjet===pid&&f.type!=='avoir'&&f.statut!=='Annulée'); }
+/* Retrouve (ou crée) la fiche client de l'agence — relie le projet au CRM clients */
+function clientAgence(p){
+  const nom=(p.agence||'').trim(); if(!nom) return null;
+  let c=DB.all('clients').find(x=>((x.prenom||'')+' '+(x.nom||'')).trim().toLowerCase()===nom.toLowerCase());
+  if(!c){ c={id:uid('CLI'),nom,prenom:'',email:p.agenceEmail||'',tel:p.agenceTel||'',adresse:p.lieu||'',type:'entreprise',
+    sourceInitiale:'Imagine the Impossible',siren:'',naf:'',date1erDevis:todayISO(),nbDevis:0,nbPrestations:0,caTotal:0};
+    DB.save('clients',c); logActivite('Client agence créé · '+nom); }
+  else if(p.agenceEmail&&!c.email){ c.email=p.agenceEmail; DB.save('clients',c); }
+  return c;
+}
+/* Génère un DEVIS LouisMagie depuis le projet → tout le flux CRM s'enchaîne (agenda, acompte, facture, dossier) */
+function devisDepuisProjet(pid){
+  const p=getP(pid); if(!p)return;
+  const exist=devisProjetDe(pid);
+  if(exist){ toast('Un devis existe déjà pour ce projet','err'); nav('devis-create',{id:exist.id}); return; }
+  if(!(p.agence||'').trim()){ toast('Renseigne d\'abord l\'agence cliente','err'); return; }
+  if(!p.date){ toast('Renseigne d\'abord la date de l\'événement','err'); return; }
+  const nbMag=(p.equipe||[]).length||(+p.nbMagiciensCible||0);
+  const montantMagiciens=projCoutGlobal(p), gestion=+p.maGestionMontant||0;
+  const total=montantMagiciens+gestion;
+  if(total<=0){ toast('Renseigne les tarifs (via moi) et/ou ta gestion de projet','err'); return; }
+  if(!confirm('Créer un devis de '+fmtEur(total)+' pour « '+p.agence+' » ?\n\nIl apparaîtra dans tes Devis et suivra le flux habituel (envoi, signature, acompte, facture).')) return;
+  const c=clientAgence(p); const cfg=DB.config();
+  const lignes=[];
+  if(montantMagiciens>0) lignes.push({label:'Magie immersive — équipe de '+(nbMag||1)+' magicien'+(nbMag>1?'s':'')+' (flash effects, personnages infiltrés)',prix:montantMagiciens,duree:p.dureePresta||''});
+  if(gestion>0) lignes.push({label:'Direction artistique & coordination de projet (recrutement, brief, formation, logistique)',prix:gestion,duree:''});
+  const d={id:nextId('DEV','devis'),dateCreation:todayISO(),idProjet:pid,idClient:c?c.id:'',nomClient:p.agence,
+    email:(c&&c.email)||p.agenceEmail||'',tel:(c&&c.tel)||p.agenceTel||'',typeEvenement:p.typeEvenement||'',
+    dateEvenement:p.date,creneau:p.creneau||'Soirée',horaire:p.horaire||'',lieu:p.lieu||'',distanceKm:0,nbInvites:p.nbInvites||'',
+    prestations:lignes,montantHT:total,fraisDeplacement:0,tva:0,montantTTC:total,remise:0,
+    acomptePct:cfg.acompteDefautPct||30,statut:'Brouillon',dateEnvoi:'',dateAcceptation:'',
+    notes:'Projet Imagine the Impossible'+(p.theme?(' — '+p.theme):''),idDemandeOrigine:''};
+  DB.save('devis',d); syncPrestationDevis(d);
+  p.idDevis=d.id; if(p.statut==='Prospect') p.statut='En préparation'; saveP(p);
+  logActivite('Devis '+d.id+' généré depuis le projet '+(p.nom||pid));
+  updateBadges(); toast('📄 Devis '+d.id+' créé — vérifie et envoie-le','ok'); nav('devis-create',{id:d.id});
+}
 /* Crée une VRAIE facture LouisMagie (outil de facturation existant) reliée au projet, pour ma part à facturer à l'agence */
 function facturerProjet(pid){
   const p=getP(pid); if(!p)return;
@@ -3190,8 +3274,9 @@ RENDERERS.projets=function(){
         ${projBadge(p.statut||'Prospect')}
       </div>
       <div style="display:flex;gap:16px;margin-top:10px;flex-wrap:wrap;font-size:12px" class="td-dim">
-        <span>🎩 ${conf}/${nbMag} magiciens</span>
+        <span${(+p.nbMagiciensCible&&conf<+p.nbMagiciensCible)?' style="color:var(--warn);font-weight:600"':''}>🎩 ${conf} confirmé${conf>1?'s':''}${+p.nbMagiciensCible?(' / '+p.nbMagiciensCible+' requis'):(' / '+nbMag)}</span>
         <span>💶 ${fmtEur(projTotalAgence(p))} à facturer</span>
+        ${devisProjetDe(p.id)?'<span>📄 devis '+esc(devisProjetDe(p.id).statut)+'</span>':''}
         ${p.nbInvites?`<span>👥 ${esc(p.nbInvites)} invités</span>`:''}
       </div></div>`;
   }).join('')||'<div class="empty"><div class="empty-icon">🎭</div><div class="empty-text">Aucun projet</div><div class="empty-sub">Crée ton premier événement Imagine the Impossible.</div></div>';
@@ -3204,7 +3289,8 @@ RENDERERS.projets=function(){
     <div class="panel"><div class="panel-title">Projets (${projets.length})</div>${cards}</div>`;
 };
 function nouveauProjet(){
-  const p={id:uid('PRJ'),nom:'',date:'',lieu:'',agence:'',budgetTotal:0,theme:'',typeEvenement:'',nbInvites:'',ambiance:'',
+  const p={id:uid('PRJ'),nom:'',date:'',lieu:'',agence:'',agenceEmail:'',agenceTel:'',budgetTotal:0,theme:'',typeEvenement:'',nbInvites:'',ambiance:'',
+    nbMagiciensCible:0,tarifMode:'TTC',whatsappGroupe:'',idDevis:'',horaire:'',creneau:'Soirée',dureePresta:'',
     statut:'Prospect',briefUrl:'',notesBrief:'',feedback:'',notes:'',maGestionMontant:0,statutAgence:'En attente',
     equipe:[],consommables:[],equipement:[],logistique:{transport:'',hebergement:'',repas:''},checklist:[],createdAt:new Date().toISOString()};
   saveP(p); logActivite('Projet Imagine créé'); nav('projet',{id:p.id});
@@ -3228,17 +3314,36 @@ RENDERERS.projet=function(params){
         <div class="form-group"><label class="form-label">Nom du projet</label><input class="form-control" value="${esc(p.nom||'')}" onchange="projField('${id}','nom',this.value)"></div>
         <div class="form-group"><label class="form-label">Date</label><input class="form-control" type="date" value="${esc(p.date||'')}" onchange="projField('${id}','date',this.value)"></div>
         <div class="form-group"><label class="form-label">Agence cliente</label><input class="form-control" value="${esc(p.agence||'')}" onchange="projField('${id}','agence',this.value)"></div>
+        <div class="form-group"><label class="form-label">Email agence</label><input class="form-control" value="${esc(p.agenceEmail||'')}" onchange="projField('${id}','agenceEmail',this.value)" placeholder="pour le devis / la facture"></div>
         <div class="form-group"><label class="form-label">Lieu</label><input class="form-control" value="${esc(p.lieu||'')}" onchange="projField('${id}','lieu',this.value)"></div>
         <div class="form-group"><label class="form-label">Type d'événement</label><input class="form-control" value="${esc(p.typeEvenement||'')}" onchange="projField('${id}','typeEvenement',this.value)" placeholder="soirée de gala, lancement…"></div>
         <div class="form-group"><label class="form-label">Nombre d'invités</label><input class="form-control" value="${esc(p.nbInvites||'')}" onchange="projField('${id}','nbInvites',this.value)"></div>
+        <div class="form-group"><label class="form-label">Horaire / durée</label><input class="form-control" value="${esc(p.dureePresta||'')}" onchange="projField('${id}','dureePresta',this.value)" placeholder="19h-23h · 4h"></div>
         <div class="form-group"><label class="form-label">Thème</label><input class="form-control" value="${esc(p.theme||'')}" onchange="projField('${id}','theme',this.value)"></div>
         <div class="form-group"><label class="form-label">Ambiance / contexte</label><input class="form-control" value="${esc(p.ambiance||'')}" onchange="projField('${id}','ambiance',this.value)" placeholder="luxe feutré, cocktail debout…"></div>
         <div class="form-group"><label class="form-label">👔 Costume</label><select class="form-control" onchange="projField('${id}','costume',this.value)">${['',...COSTUME_PAR].map(s=>`<option${s===(p.costume||'')?' selected':''}>${s||'—'}</option>`).join('')}</select></div>
       </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px;padding-top:12px;border-top:1px solid var(--anthr)">
+        <span style="font-size:16px">💬</span>
+        <input class="form-control" style="flex:1;min-width:200px" value="${esc(p.whatsappGroupe||'')}" onchange="projField('${id}','whatsappGroupe',this.value)" placeholder="Lien d'invitation du groupe WhatsApp (chat.whatsapp.com/…)">
+        <button class="btn btn-ghost btn-sm" onclick="waDiffuserGroupe('${id}')">📣 Inviter l'équipe</button>
+        ${p.whatsappGroupe?`<a class="btn btn-ghost btn-sm" href="${esc(p.whatsappGroupe)}" target="_blank" rel="noopener">Ouvrir le groupe</a>`:''}
+      </div>
+      <div class="td-dim" style="font-size:11px;margin-top:6px">Crée le groupe dans WhatsApp (Nouveau groupe → Inviter via lien), colle le lien ici, puis « Inviter l'équipe » envoie l'invitation à chaque magicien.</div>
     </div>
 
-    <div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><div class="panel-title" style="margin:0">🎩 Équipe (${(p.equipe||[]).length})</div>
-      <div style="display:flex;gap:8px"><button class="btn btn-ghost btn-sm" onclick="ficheProjetOpen('${id}')">📄 Fiche projet</button><button class="btn btn-or btn-sm" onclick="projAddMembre('${id}')">+ Ajouter un magicien</button></div></div>
+    <div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><div class="panel-title" style="margin:0">🎩 Équipe</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-ghost btn-sm" onclick="ficheRecapOpen('${id}')">📑 Fiche récap</button><button class="btn btn-ghost btn-sm" onclick="ficheProjetOpen('${id}')">📄 Feuille de route</button><button class="btn btn-or btn-sm" onclick="projAddMembre('${id}')">+ Ajouter un magicien</button></div></div>
+      ${(()=>{ const eq=p.equipe||[], cible=+p.nbMagiciensCible||0, conf=eq.filter(m=>m.dispo==='Confirmé').length;
+        const manque=cible?Math.max(0,cible-conf):0; const pct=cible?Math.min(100,Math.round(conf/cible*100)):(eq.length?100:0);
+        const col=manque>0?'var(--warn)':'var(--ok)';
+        return `<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:4px 0 12px">
+          <div class="form-group" style="margin:0"><label class="form-label" style="font-size:11px">Magiciens nécessaires</label><input class="form-control" type="number" min="0" style="max-width:110px" value="${cible}" onchange="projFieldRe('${id}','nbMagiciensCible',+this.value||0)"></div>
+          <div style="flex:1;min-width:180px">
+            <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px"><span class="td-strong">${conf} confirmé${conf>1?'s':''}${cible?' / '+cible:''}${eq.length!==conf?' · '+eq.length+' contactés':''}</span>
+              <span style="color:${col};font-weight:600">${cible?(manque>0?('encore '+manque+' à trouver'):'équipe complète ✓'):(eq.length+' magicien'+(eq.length>1?'s':''))}</span></div>
+            <div style="height:8px;background:var(--anthr);border-radius:20px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${col};transition:width .3s"></div></div>
+          </div></div>`; })()}
       ${projEquipeHtml(p)}
     </div>
 
@@ -3262,15 +3367,22 @@ RENDERERS.projet=function(params){
         ${kpi('info','Facturé en direct',fmtEur(direct),'magiciens → agence')}
         ${kpi(marge>=0?'vert':'rouge','Marge vs budget',fmtEur(marge))}
       </div>
-      <div class="td-dim" style="font-size:12px;margin:8px 0">« À facturer agence » = magiciens qui passent <strong>par moi</strong> + ma gestion. Les magiciens en <strong>facturation directe</strong> facturent l'agence eux-mêmes (non inclus).</div>
+      <div class="td-dim" style="font-size:12px;margin:8px 0">Montants en <strong>${esc(p.tarifMode||'TTC')}</strong>. « À facturer agence » = magiciens qui passent <strong>par moi</strong> + ma gestion. Les magiciens en <strong>facturation directe</strong> facturent l'agence eux-mêmes (non inclus).</div>
       <div class="form-grid c3" style="margin-top:6px">
         <div class="form-group"><label class="form-label">Ma gestion de projet (€)</label><input class="form-control" type="number" value="${+p.maGestionMontant||0}" onchange="projFieldRe('${id}','maGestionMontant',+this.value||0)"></div>
         <div class="form-group"><label class="form-label">Budget annoncé agence (€)</label><input class="form-control" type="number" value="${budget}" onchange="projFieldRe('${id}','budgetTotal',+this.value||0)"></div>
+        <div class="form-group"><label class="form-label">Tarifs exprimés en</label><select class="form-control" onchange="projFieldRe('${id}','tarifMode',this.value)">${TARIF_MODE.map(s=>`<option${s===(p.tarifMode||'TTC')?' selected':''}>${s}</option>`).join('')}</select></div>
         <div class="form-group"><label class="form-label">Paiement agence</label><select class="form-control" onchange="projField('${id}','statutAgence',this.value)">${AGENCE_PAY.map(s=>`<option${s===p.statutAgence?' selected':''}>${s}</option>`).join('')}</select></div>
       </div>
-      ${(()=>{ const fp=factureProjetDe(id); return fp
-        ? `<div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px;background:var(--okl);border-radius:var(--rsm)"><span>🧾 Facture <strong>${esc(fp.id)}</strong> · ${fmtEur(factMontant(fp))} · ${badge(fp.statut)}</span><button class="btn btn-ghost btn-sm" onclick="voirFacture('${fp.id}')">Ouvrir la facture</button></div>`
-        : `<div style="margin-top:12px"><button class="btn btn-or" onclick="facturerProjet('${id}')">🧾 Facturer l'agence (${fmtEur(total)})</button><div class="td-dim" style="font-size:11px;margin-top:5px">Crée une facture LouisMagie reliée à ce projet, dans ton outil de facturation habituel.</div></div>`; })()}
+      ${(()=>{ const dv=devisProjetDe(id), fp=factureProjetDe(id);
+        let out='<div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">';
+        if(dv) out+=`<span style="padding:8px 12px;background:var(--okl);border-radius:var(--rsm)">📄 Devis <strong>${esc(dv.id)}</strong> · ${fmtEur(dv.montantTTC)} · ${badge(dv.statut)}</span><button class="btn btn-ghost btn-sm" onclick="voirDevis('${dv.id}')">Ouvrir le devis</button><button class="btn btn-ghost btn-sm" onclick="dossierEvenement('${dv.id}')">📁 Dossier</button>`;
+        else out+=`<button class="btn btn-or" onclick="devisDepuisProjet('${id}')">📄 Générer un devis (${fmtEur(total)})</button>`;
+        if(fp) out+=`<span style="padding:8px 12px;background:var(--okl);border-radius:var(--rsm)">🧾 Facture <strong>${esc(fp.id)}</strong> · ${fmtEur(factMontant(fp))} · ${badge(fp.statut)}</span><button class="btn btn-ghost btn-sm" onclick="voirFacture('${fp.id}')">Ouvrir</button>`;
+        else if(!dv) out+=`<button class="btn btn-ghost" onclick="facturerProjet('${id}')">🧾 Facturer directement</button>`;
+        out+='</div>';
+        out+=`<div class="td-dim" style="font-size:11px;margin-top:6px">${dv?'Le devis pilote la suite : envoi, signature en ligne, acompte, facture — tout est synchronisé avec le dossier et l\'agenda.':'Le devis enclenche le flux complet (envoi, signature, acompte, facture). « Facturer directement » saute l\'étape devis.'}</div>`;
+        return out; })()}
     </div>
 
     <div class="panel"><div class="panel-title">📋 Suivi & brief</div>
@@ -3306,12 +3418,12 @@ function projEquipeHtml(p){
     const eff=(m.effets||[]).map(eid=>{ const e=DB.get('effets',eid); return e?esc(e.nom):null; }).filter(Boolean);
     return `<div style="border:1px solid var(--anthr);border-radius:var(--rsm);padding:12px;margin-top:10px">
       <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap">
-        <div class="td-strong">${esc(magNom(m.magicienId))} <span class="td-dim" style="font-weight:400;font-size:12px">${esc((DB.get('magiciens',m.magicienId)||{}).ville||'')}</span></div>
-        <div style="display:flex;gap:6px"><button class="btn btn-ghost btn-sm" onclick="ficheMagicienOpen('${p.id}','${m.id}')">📄 Fiche</button><button class="qa" title="Retirer" onclick="projDelMembre('${p.id}','${m.id}')">✕</button></div>
+        <div class="td-strong">${esc(magNom(m.magicienId))} <span class="td-dim" style="font-weight:400;font-size:12px">${esc((DB.get('magiciens',m.magicienId)||{}).ville||'')}</span> ${m.dispo==='Confirmé'?'<span class="badge accepte" style="font-size:10px">✓ confirmé</span>':(m.dispo==='Indisponible'?'<span class="badge refuse" style="font-size:10px">indispo</span>':'<span class="badge envoye" style="font-size:10px">en attente</span>')}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn btn-success btn-sm" onclick="waMembre('${p.id}','${m.id}')" title="Envoyer les infos par WhatsApp">💬 WhatsApp</button><button class="btn btn-ghost btn-sm" onclick="ficheMagicienOpen('${p.id}','${m.id}')">📄 Fiche</button><button class="qa" title="Retirer" onclick="projDelMembre('${p.id}','${m.id}')">✕</button></div>
       </div>
       <div class="form-grid c3" style="margin-top:8px">
         <div class="form-group"><label class="form-label" style="font-size:11px">Rôle</label><select class="form-control" onchange="projSetMembre('${p.id}','${m.id}','role',this.value)">${IMPOSSIBLE_ROLES.map(r=>`<option${r===m.role?' selected':''}>${r}</option>`).join('')}</select></div>
-        <div class="form-group"><label class="form-label" style="font-size:11px">Tarif convenu (€)</label><input class="form-control" type="number" value="${+m.tarif||0}" onchange="projSetMembre('${p.id}','${m.id}','tarif',+this.value||0)"></div>
+        <div class="form-group"><label class="form-label" style="font-size:11px">Tarif convenu (€ ${esc(p.tarifMode||'TTC')})</label><input class="form-control" type="number" value="${+m.tarif||0}" onchange="projSetMembre('${p.id}','${m.id}','tarif',+this.value||0)"></div>
         <div class="form-group"><label class="form-label" style="font-size:11px">Facturation</label><select class="form-control" onchange="projSetMembre('${p.id}','${m.id}','factMode',this.value)">${FACT_MODE.map(s=>`<option${s===(m.factMode||FACT_MODE[0])?' selected':''}>${s}</option>`).join('')}</select></div>
         <div class="form-group"><label class="form-label" style="font-size:11px">Disponibilité</label><select class="form-control" onchange="projSetMembre('${p.id}','${m.id}','dispo',this.value)">${DISPO_STATUTS.map(s=>`<option${s===m.dispo?' selected':''}>${s}</option>`).join('')}</select></div>
         <div class="form-group"><label class="form-label" style="font-size:11px">Paiement</label><select class="form-control" onchange="projSetMembre('${p.id}','${m.id}','statutPaiement',this.value)">${PAY_STATUTS.map(s=>`<option${s===m.statutPaiement?' selected':''}>${s}</option>`).join('')}</select></div>
@@ -3327,16 +3439,49 @@ function projSetMembre(pid,mid,field,val){ const p=getP(pid); const m=(p.equipe|
   if(field==='tarif'||field==='factMode') RENDERERS.projet({id:pid}); }   // maj des totaux budget
 function projDelMembre(pid,mid){ const p=getP(pid); p.equipe=(p.equipe||[]).filter(x=>x.id!==mid); saveP(p); RENDERERS.projet({id:pid}); }
 function projAddMembre(pid){
-  const mags=DB.all('magiciens');
-  if(!mags.length){ if(confirm('Aucun magicien dans ta banque. En ajouter maintenant ?')) gererMagiciens(); return; }
-  const opts=mags.map(m=>`<label style="display:flex;align-items:center;gap:8px;padding:8px;border-bottom:1px solid var(--anthr);cursor:pointer"><input type="checkbox" class="pm-cb" value="${m.id}"><span>${esc(((m.prenom?m.prenom+' ':'')+m.nom).trim())} <span class="td-dim">· ${esc(m.ville||'')}</span></span></label>`).join('');
-  openModal('Ajouter des magiciens',`<div style="max-height:340px;overflow:auto;border:1px solid var(--anthr);border-radius:var(--rsm)">${opts}</div>`,
-    `<button class="btn btn-ghost" onclick="gererMagiciens()">+ Nouveau magicien</button><button class="btn btn-ghost" onclick="closeModal()">Annuler</button><button class="btn btn-or" onclick="projAddMembreOk('${pid}')">Ajouter</button>`);
+  const p=getP(pid); const mags=DB.all('magiciens');
+  const dejaIds=new Set((p.equipe||[]).map(m=>m.magicienId));
+  const dispo=mags.filter(m=>!dejaIds.has(m.id));
+  const cible=+p.nbMagiciensCible||0, manque=cible?Math.max(0,cible-(p.equipe||[]).length):0;
+  const rows=dispo.map(m=>{
+    const nbProj=DB.all('projets').filter(x=>(x.equipe||[]).some(e=>e.magicienId===m.id)).length;
+    return `<label class="pm-row" data-s="${esc(((m.prenom||'')+' '+(m.nom||'')+' '+(m.ville||'')).toLowerCase())}" style="display:flex;align-items:center;gap:10px;padding:10px;border-bottom:1px solid var(--anthr);cursor:pointer">
+      <input type="checkbox" class="pm-cb" value="${m.id}" style="width:18px;height:18px">
+      <span style="flex:1;min-width:0"><span class="td-strong">${esc(((m.prenom?m.prenom+' ':'')+m.nom).trim())}</span>
+        <div class="td-dim" style="font-size:11px">${esc(m.ville||'—')}${m.tel?' · '+esc(m.tel):''}${nbProj?' · '+nbProj+' projet'+(nbProj>1?'s':''):' · jamais collaboré'}</div></span>
+      ${m.tel?'<span title="Joignable sur WhatsApp">💬</span>':''}</label>`;
+  }).join('')||'<div class="td-dim" style="padding:12px">Tous tes magiciens sont déjà dans l\'équipe. Ajoutes-en de nouveaux à la banque.</div>';
+  const body=`${manque?`<div class="alert info" style="margin-top:0"><span class="alert-icon">🎯</span><div>Il te manque encore <strong>${manque} magicien${manque>1?'s':''}</strong> pour ce projet.</div></div>`:''}
+    <input class="form-control" placeholder="🔍 Rechercher (nom, ville)…" oninput="pmFilter(this.value)" style="margin-bottom:8px">
+    <div style="max-height:320px;overflow:auto;border:1px solid var(--anthr);border-radius:var(--rsm)">${rows}</div>
+    <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px;cursor:pointer"><input type="checkbox" id="pm-wa" checked style="width:18px;height:18px">Proposer d'envoyer le message WhatsApp après l'ajout</label>`;
+  openModal('Ajouter des magiciens',body,
+    `<button class="btn btn-ghost" onclick="ficheMagicien('','${pid}')">+ Nouveau magicien</button><button class="btn btn-ghost" onclick="closeModal()">Annuler</button><button class="btn btn-or" onclick="projAddMembreOk('${pid}')">Ajouter</button>`);
 }
+function pmFilter(q){ q=(q||'').toLowerCase().trim(); document.querySelectorAll('.pm-row').forEach(r=>{ r.style.display=(!q||(r.dataset.s||'').includes(q))?'':'none'; }); }
 function projAddMembreOk(pid){
-  const ids=[...document.querySelectorAll('.pm-cb:checked')].map(c=>c.value); const p=getP(pid); p.equipe=p.equipe||[];
-  ids.forEach(mid=>{ if(!p.equipe.some(m=>m.magicienId===mid)) p.equipe.push({id:uid('MBR'),magicienId:mid,role:'Serveur',tarif:0,factMode:FACT_MODE[0],dispo:'En discussion',statutPaiement:'En discussion',effets:[],materielPerso:'',notes:''}); });
-  saveP(p); closeModal(); RENDERERS.projet({id:pid}); toast(ids.length+' magicien(s) ajouté(s)','ok');
+  const ids=[...document.querySelectorAll('.pm-cb:checked')].map(c=>c.value);
+  const wa=(document.getElementById('pm-wa')||{}).checked;
+  if(!ids.length){ toast('Aucun magicien sélectionné','err'); return; }
+  const p=getP(pid); p.equipe=p.equipe||[]; const nouveaux=[];
+  ids.forEach(mid=>{ if(!p.equipe.some(m=>m.magicienId===mid)){
+    const mb={id:uid('MBR'),magicienId:mid,role:'Serveur',tarif:0,factMode:FACT_MODE[0],dispo:'En discussion',statutPaiement:'En discussion',effets:[],materielPerso:'',notes:''};
+    p.equipe.push(mb); nouveaux.push(mb); } });
+  saveP(p); closeModal(); RENDERERS.projet({id:pid});
+  toast(ids.length+' magicien(s) ajouté(s)','ok');
+  if(wa&&nouveaux.length) setTimeout(()=>proposerWhatsApp(pid,nouveaux.map(m=>m.id)),250);
+}
+/* Après ajout : propose d'envoyer le message d'invitation à chacun */
+function proposerWhatsApp(pid,mids){
+  const p=getP(pid);
+  const list=mids.map(mid=>{ const m=(p.equipe||[]).find(x=>x.id===mid); if(!m)return ''; const mag=DB.get('magiciens',m.magicienId)||{};
+    return `<div style="display:flex;align-items:center;gap:10px;padding:10px;border-bottom:1px solid var(--anthr)">
+      <span style="flex:1"><span class="td-strong">${esc(magNom(m.magicienId))}</span><div class="td-dim" style="font-size:11px">${mag.tel?esc(mag.tel):'⚠ pas de numéro'}</div></span>
+      ${mag.tel?`<button class="btn btn-success btn-sm" onclick="waMembre('${pid}','${m.id}')">💬 Envoyer</button>`:`<button class="btn btn-ghost btn-sm" onclick="ficheMagicien('${m.magicienId}','${pid}')">+ Numéro</button>`}</div>`;
+  }).join('');
+  openModal('💬 Prévenir les magiciens',
+    `<div class="alert info" style="margin-top:0"><span class="alert-icon">💬</span><div>Le message contient <strong>date, lieu, rôle, tarif, costume et effets</strong>. Vérifie que le tarif et le rôle sont bien renseignés avant d'envoyer.</div></div>${list}`,
+    `<button class="btn btn-ghost" onclick="closeModal()">Plus tard</button>`);
 }
 function membreEffets(pid,mid){
   const p=getP(pid); const m=(p.equipe||[]).find(x=>x.id===mid); if(!m)return;
@@ -3371,23 +3516,71 @@ function projItemPar(pid,key,iid,v){ const p=getP(pid); const it=(p[key]||[]).fi
 function projItemDel(pid,key,iid){ const p=getP(pid); p[key]=(p[key]||[]).filter(x=>x.id!==iid); saveP(p); RENDERERS.projet({id:pid}); }
 
 /* ---------- BANQUE DE MAGICIENS ---------- */
-function gererMagiciens(){
-  const mags=DB.all('magiciens');
-  const rows=mags.map(m=>`<div style="border:1px solid var(--anthr);border-radius:var(--rsm);padding:10px;margin-bottom:8px">
-    <div class="form-grid c3">
-      <div class="form-group"><label class="form-label" style="font-size:11px">Prénom</label><input class="form-control" value="${esc(m.prenom||'')}" onchange="saveMag('${m.id}','prenom',this.value)"></div>
-      <div class="form-group"><label class="form-label" style="font-size:11px">Nom</label><input class="form-control" value="${esc(m.nom||'')}" onchange="saveMag('${m.id}','nom',this.value)"></div>
-      <div class="form-group"><label class="form-label" style="font-size:11px">Ville</label><input class="form-control" value="${esc(m.ville||'')}" onchange="saveMag('${m.id}','ville',this.value)"></div>
-      <div class="form-group"><label class="form-label" style="font-size:11px">Téléphone</label><input class="form-control" value="${esc(m.tel||'')}" onchange="saveMag('${m.id}','tel',this.value)"></div>
-      <div class="form-group"><label class="form-label" style="font-size:11px">Email</label><input class="form-control" value="${esc(m.email||'')}" onchange="saveMag('${m.id}','email',this.value)"></div>
-      <div class="form-group" style="display:flex;align-items:end"><button class="btn btn-danger btn-sm" onclick="delMag('${m.id}')">🗑 Supprimer</button></div>
-    </div>
-    <div class="form-group" style="margin-top:6px"><input class="form-control" placeholder="Notes (style, spécialités…)" value="${esc(m.notes||'')}" onchange="saveMag('${m.id}','notes',this.value)"></div>
-  </div>`).join('')||'<div class="td-dim" style="padding:8px">Banque vide.</div>';
-  openModal('🎩 Banque de magiciens ('+mags.length+')',`<div style="max-height:440px;overflow:auto">${rows}</div>`,
-    `<button class="btn btn-or" onclick="addMag()">+ Nouveau magicien</button><button class="btn btn-ghost" onclick="closeModal();if(_currentView==='projet')RENDERERS.projet(currentParams);else RENDERERS.projets()">Fermer</button>`);
+function magStats(id){
+  const projs=DB.all('projets').filter(p=>(p.equipe||[]).some(m=>m.magicienId===id));
+  const membres=projs.map(p=>(p.equipe||[]).find(m=>m.magicienId===id));
+  const gagne=membres.reduce((s,m)=>s+(+m.tarif||0),0);
+  const der=projs.filter(p=>p.date).sort((a,b)=>b.date.localeCompare(a.date))[0];
+  return {nb:projs.length,gagne,dernier:der?der.date:'',projets:projs};
 }
-function addMag(){ DB.save('magiciens',{id:uid('MAG'),prenom:'',nom:'Nouveau magicien',ville:'',tel:'',email:'',notes:''}); gererMagiciens(); }
+function gererMagiciens(){
+  const mags=DB.all('magiciens').slice().sort((a,b)=>((a.prenom||'')+a.nom).localeCompare((b.prenom||'')+b.nom));
+  const rows=mags.map(m=>{ const st=magStats(m.id);
+    return `<div class="mag-row" data-s="${esc(((m.prenom||'')+' '+(m.nom||'')+' '+(m.ville||'')+' '+(m.notes||'')).toLowerCase())}"
+      style="display:flex;align-items:center;gap:10px;padding:11px;border-bottom:1px solid var(--anthr)">
+      <div style="flex:1;min-width:0;cursor:pointer" onclick="ficheMagicien('${m.id}')">
+        <div class="td-strong">${esc(((m.prenom?m.prenom+' ':'')+m.nom).trim()||'—')}</div>
+        <div class="td-dim" style="font-size:11px">${esc(m.ville||'—')}${m.tel?' · '+esc(m.tel):' · ⚠ pas de numéro'}${st.nb?' · '+st.nb+' projet'+(st.nb>1?'s':''):''}${st.dernier?' · dernier '+fmtDateShort(st.dernier):''}</div>
+      </div>
+      ${m.tel?`<button class="btn btn-ghost btn-sm" title="WhatsApp" onclick="waOpen('${esc(m.tel)}','Salut ${esc(m.prenom||m.nom||'')} !')">💬</button>`:''}
+      <button class="btn btn-ghost btn-sm" onclick="ficheMagicien('${m.id}')">✎</button></div>`;
+  }).join('')||'<div class="empty" style="padding:20px"><div class="empty-icon">🎩</div><div class="empty-text">Banque vide</div><div class="empty-sub">Ajoute les magiciens avec qui tu travailles.</div></div>';
+  openModal('🎩 Banque de magiciens ('+mags.length+')',
+    `<input class="form-control" placeholder="🔍 Rechercher (nom, ville, spécialité)…" oninput="magFilter(this.value)" style="margin-bottom:10px">
+     <div style="max-height:420px;overflow:auto;border:1px solid var(--anthr);border-radius:var(--rsm)">${rows}</div>`,
+    `<button class="btn btn-or" onclick="ficheMagicien('')">+ Nouveau magicien</button><button class="btn btn-ghost" onclick="closeModal();if(_currentView==='projet')RENDERERS.projet(currentParams);else RENDERERS.projets()">Fermer</button>`);
+}
+function magFilter(q){ q=(q||'').toLowerCase().trim(); document.querySelectorAll('.mag-row').forEach(r=>{ r.style.display=(!q||(r.dataset.s||'').includes(q))?'':'none'; }); }
+/* Fiche magicien : création ou édition, dans une modale propre (retourAuProjet = ajoute direct à l'équipe après création) */
+function ficheMagicien(id,retourProjet){
+  const m=id?(DB.get('magiciens',id)||{}):{id:'',prenom:'',nom:'',ville:'',tel:'',email:'',specialites:'',notes:''};
+  const st=id?magStats(id):null;
+  const body=`<div class="form-grid">
+      <div class="form-group"><label class="form-label">Prénom</label><input class="form-control" id="mg-prenom" value="${esc(m.prenom||'')}"></div>
+      <div class="form-group"><label class="form-label">Nom <span class="req">*</span></label><input class="form-control" id="mg-nom" value="${esc(m.nom||'')}"></div>
+      <div class="form-group"><label class="form-label">Ville</label><input class="form-control" id="mg-ville" value="${esc(m.ville||'')}"></div>
+      <div class="form-group"><label class="form-label">Téléphone <span class="td-dim">(pour WhatsApp)</span></label><input class="form-control" id="mg-tel" value="${esc(m.tel||'')}" placeholder="06 12 34 56 78"></div>
+      <div class="form-group"><label class="form-label">Email</label><input class="form-control" id="mg-email" value="${esc(m.email||'')}"></div>
+      <div class="form-group"><label class="form-label">Tarif habituel (€)</label><input class="form-control" id="mg-tarifRef" type="number" value="${+m.tarifRef||0}"></div>
+    </div>
+    <div class="form-group"><label class="form-label">Spécialités / style</label><input class="form-control" id="mg-specialites" value="${esc(m.specialites||'')}" placeholder="close-up, manipulation, mentalisme, bilingue…"></div>
+    <div class="form-group"><label class="form-label">Notes</label><textarea class="form-control" id="mg-notes" style="min-height:60px">${esc(m.notes||'')}</textarea></div>
+    ${st&&st.nb?`<div class="panel" style="margin-top:6px"><div class="panel-title" style="font-size:13px">📊 Historique</div>
+      <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:8px">
+        ${kpi('info','Projets',st.nb)}${kpi('or','Cumulé',fmtEur(st.gagne))}${kpi('vert','Dernier',st.dernier?fmtDateShort(st.dernier):'—')}</div>
+      <div class="td-dim" style="font-size:12px">${st.projets.slice(0,5).map(p=>esc(p.nom||'projet')+(p.date?(' ('+fmtDateShort(p.date)+')'):'')).join(' · ')}</div></div>`:''}`;
+  const foot=`${id?`<button class="btn btn-danger" onclick="delMag('${id}')">🗑 Supprimer</button>`:''}
+    <button class="btn btn-ghost" onclick="gererMagiciens()">Annuler</button>
+    <button class="btn btn-or" onclick="saveFicheMagicien('${id}','${retourProjet||''}')">💾 Enregistrer</button>`;
+  openModal(id?('🎩 '+esc(((m.prenom?m.prenom+' ':'')+m.nom).trim())):'🎩 Nouveau magicien',body,foot);
+}
+function saveFicheMagicien(id,retourProjet){
+  const g=k=>((document.getElementById('mg-'+k)||{}).value||'').trim();
+  if(!g('nom')){ toast('Le nom est requis','err'); return; }
+  const m=id?(DB.get('magiciens',id)||{id}):{id:uid('MAG')};
+  ['prenom','nom','ville','tel','email','specialites','notes'].forEach(k=>m[k]=g(k));
+  m.tarifRef=+((document.getElementById('mg-tarifRef')||{}).value)||0;
+  DB.save('magiciens',m); logActivite((id?'Magicien modifié · ':'Magicien ajouté · ')+m.nom);
+  toast(id?'✓ Magicien mis à jour':'🎩 Magicien ajouté','ok');
+  if(retourProjet){   // créé depuis un projet → on l'ajoute direct à l'équipe
+    const p=getP(retourProjet);
+    if(p){ p.equipe=p.equipe||[];
+      const mb={id:uid('MBR'),magicienId:m.id,role:'Serveur',tarif:m.tarifRef||0,factMode:FACT_MODE[0],dispo:'En discussion',statutPaiement:'En discussion',effets:[],materielPerso:'',notes:''};
+      p.equipe.push(mb); saveP(p); closeModal(); RENDERERS.projet({id:retourProjet});
+      setTimeout(()=>proposerWhatsApp(retourProjet,[mb.id]),250); return; }
+  }
+  gererMagiciens();
+}
 function saveMag(id,f,v){ const m=DB.get('magiciens',id); if(m){ m[f]=v; DB.save('magiciens',m); } }
 function delMag(id){
   const refs=DB.all('projets').filter(p=>(p.equipe||[]).some(m=>m.magicienId===id));
@@ -3429,14 +3622,30 @@ function importEffetsBase(){
   toast(n?('✨ '+n+' effets importés'):'Déjà à jour','ok'); gererEffets();
 }
 
-/* ---------- FICHES PDF ---------- */
+/* ---------- FICHES PDF (charte LouisMagie) ---------- */
 function pdfSection(doc,y,title,lines){
   const arr=(lines||[]).filter(Boolean); if(!arr.length) return y;
-  if(y>258){ doc.addPage(); y=20; }
-  doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(...P_OR); doc.text(title,15,y); y+=5.6;
+  if(y>252){ doc.addPage(); y=20; }
+  // titre de section : bandeau clair + filet orange (charte devis/facture)
+  doc.setFillColor(...P_LIGHT); doc.roundedRect(15,y-4.6,180,8.4,1.6,1.6,'F');
+  doc.setFillColor(...P_OR); doc.rect(15,y-4.6,2.4,8.4,'F');
+  doc.setFont('helvetica','bold'); doc.setFontSize(8.6); doc.setTextColor(...P_OR); doc.text(title,20,y+1.1);
+  y+=9.5;
   doc.setFont('helvetica','normal'); doc.setFontSize(9.6); doc.setTextColor(...P_NOIR);
-  arr.forEach(l=>{ doc.splitTextToSize(l,180).forEach(s=>{ if(y>276){ doc.addPage(); y=20; } doc.text(s,15,y); y+=5; }); });
-  return y+3.5;
+  arr.forEach(l=>{ doc.splitTextToSize(l,178).forEach((s,i)=>{ if(y>276){ doc.addPage(); y=20; } doc.text(s,i?21:18,y); y+=5; }); });
+  return y+4.5;
+}
+/* Tableau à la charte (en-tête noir, lignes alternées) */
+function pdfGrid(doc,y,head,body,widths){
+  if(!body.length) return y;
+  const cs={}; (widths||[]).forEach((w,i)=>{ if(w) cs[i]={cellWidth:w}; });
+  if(cs[head.length-1]) cs[head.length-1].halign='right';
+  doc.autoTable({startY:y,head:[head],body,theme:'grid',margin:{left:15,right:15},
+    headStyles:{fillColor:P_NOIR,textColor:P_BLANC,fontStyle:'bold',fontSize:8.6,cellPadding:3,lineWidth:0},
+    alternateRowStyles:{fillColor:[249,246,242]},
+    styles:{fontSize:8.8,cellPadding:3,textColor:P_NOIR,lineColor:P_LINE,lineWidth:.1,valign:'middle',overflow:'linebreak'},
+    columnStyles:Object.assign({0:{fontStyle:'bold'}},cs)});
+  return doc.lastAutoTable.finalY+7;
 }
 function effLabel(eid){ const e=DB.get('effets',eid); return e?(e.nom+(e.materiel?(' ('+e.materiel+')'):'')):''; }
 function pdfFicheMagicien(pid,mid){
@@ -3448,10 +3657,15 @@ function pdfFicheMagicien(pid,mid){
     {titre:'ÉVÉNEMENT',lines:['Agence : '+(p.agence||'—'),'Lieu : '+(p.lieu||'—'),p.typeEvenement?('Type : '+p.typeEvenement):'',p.nbInvites?('Invités : '+p.nbInvites):'',p.ambiance?('Ambiance : '+p.ambiance):'']});
   y+=2;
   y=pdfSection(doc,y,'TES EFFETS',(m.effets||[]).map(eid=>'•  '+effLabel(eid)));
+  const dev=p.tarifMode==='HT'?' HT':' TTC';
+  y=pdfSection(doc,y,'TA MISSION',[
+    'Rôle : '+(m.role||'—')+(p.dureePresta?('   ·   Horaire : '+p.dureePresta):''),
+    +m.tarif?('Tarif convenu : '+fmtEurPdf(m.tarif)+dev+'   ·   '+(m.factMode==='Directe agence'?"tu factures l'agence directement":'facturation via LouisMagie')):'' ]);
   const prat=[];
   if(m.materielPerso) prat.push('Matériel perso à apporter : '+m.materielPerso);
   if(p.costume) prat.push('Costume : '+p.costume);
   const lo=p.logistique||{}; if(lo.transport)prat.push('Transport : '+lo.transport); if(lo.hebergement)prat.push('Hébergement : '+lo.hebergement); if(lo.repas)prat.push('Repas : '+lo.repas);
+  if(p.whatsappGroupe) prat.push('Groupe WhatsApp du projet : '+p.whatsappGroupe);
   if(m.notes) prat.push('Notes : '+m.notes);
   y=pdfSection(doc,y,'INFOS PRATIQUES',prat);
   const tousItems=(p.equipement||[]).concat(p.consommables||[]);
@@ -3464,20 +3678,66 @@ function pdfFicheMagicien(pid,mid){
 }
 function pdfFicheProjet(pid){
   const p=getP(pid); if(!p)return null; const doc=pdfNew();
-  let y=pdfHeader(doc,'FICHE PROJET',p.nom||'Imagine',[['Date',p.date?fmtDateShort(p.date):'—'],['Statut',p.statut||'—']]);
+  let y=pdfHeader(doc,'FEUILLE DE ROUTE',p.nom||'Imagine',[['Date',p.date?fmtDateShort(p.date):'—'],['Statut',p.statut||'—']]);
   y=pdfBlocs(doc,y,
-    {titre:'ÉVÉNEMENT',nom:p.nom||'—',lines:['Agence : '+(p.agence||'—'),'Lieu : '+(p.lieu||'—'),p.typeEvenement?('Type : '+p.typeEvenement):'',p.nbInvites?('Invités : '+p.nbInvites):'']},
+    {titre:'ÉVÉNEMENT',nom:p.nom||'—',lines:['Agence : '+(p.agence||'—'),'Lieu : '+(p.lieu||'—'),p.typeEvenement?('Type : '+p.typeEvenement):'',p.nbInvites?('Invités : '+p.nbInvites):'',p.dureePresta?('Horaire : '+p.dureePresta):'']},
     {titre:'CADRE',lines:[p.theme?('Thème : '+p.theme):'',p.ambiance?('Ambiance : '+p.ambiance):'',p.costume?('Costume : '+p.costume):'',(p.logistique||{}).transport?('Transport : '+p.logistique.transport):'']});
   y+=2;
-  y=pdfSection(doc,y,'ÉQUIPE',(p.equipe||[]).map(m=>'•  '+magNom(m.magicienId)+' ('+((DB.get('magiciens',m.magicienId)||{}).ville||'—')+') — '+(m.role||'—')+((m.effets||[]).length?(' — Effets : '+(m.effets||[]).map(eid=>(DB.get('effets',eid)||{}).nom).filter(Boolean).join(', ')):'')));
-  y=pdfSection(doc,y,'CONSOMMABLES',(p.consommables||[]).map(c=>'•  '+c.label+(c.qte?(' ×'+c.qte):'')+(c.par?('  — '+c.par):'')));
-  y=pdfSection(doc,y,'ÉQUIPEMENT',(p.equipement||[]).map(e=>'•  '+e.label+(e.par?('  — '+e.par):'')));
+  const eq=(p.equipe||[]).map(m=>[magNom(m.magicienId),m.role||'—',
+    (m.effets||[]).map(eid=>(DB.get('effets',eid)||{}).nom).filter(Boolean).join(', ')||'—']);
+  if(eq.length){ y=pdfSection(doc,y,'ÉQUIPE ('+eq.length+' MAGICIENS)',[]); y=pdfGrid(doc,y-4.5,['Magicien','Rôle','Effets'],eq,[46,32,null]); }
+  const cons=(p.consommables||[]).map(c=>[c.label||'—',c.qte||'—',c.par||'—']);
+  if(cons.length){ y=pdfSection(doc,y,'CONSOMMABLES',[]); y=pdfGrid(doc,y-4.5,['Consommable','Qté','Fourni par'],cons,[null,20,34]); }
+  const equip=(p.equipement||[]).map(e=>[e.label||'—',e.par||'—']);
+  if(equip.length){ y=pdfSection(doc,y,'ÉQUIPEMENT',[]); y=pdfGrid(doc,y-4.5,['Équipement','Fourni par'],equip,[null,34]); }
   const lo=p.logistique||{};
   y=pdfSection(doc,y,'LOGISTIQUE',[lo.transport?('Transport : '+lo.transport):'',lo.hebergement?('Hébergement : '+lo.hebergement):'',lo.repas?('Repas : '+lo.repas):'',p.costume?('Costume : '+p.costume):'']);
-  y=pdfSection(doc,y,'CHECKLIST',(p.checklist||[]).map(c=>(c.fait?'[x] ':'[ ] ')+c.label));
+  y=pdfSection(doc,y,'CHECKLIST',(p.checklist||[]).map(c=>(c.fait?'[X]  ':'[  ]  ')+c.label));
   y=pdfSection(doc,y,'BRIEF & RÈGLES',[p.notes,p.notesBrief,p.briefUrl?('Brief complet : '+p.briefUrl):''].filter(Boolean));
   pdfFooter(doc); return doc;
 }
+/* FICHE RÉCAP COMPLÈTE : tout le projet, magicien par magicien, avec budget — document de référence */
+function pdfFicheRecap(pid){
+  const p=getP(pid); if(!p)return null; const doc=pdfNew();
+  const dev=p.tarifMode==='HT'?' HT':' TTC';
+  let y=pdfHeader(doc,'RÉCAPITULATIF',p.nom||'Imagine',[['Date',p.date?fmtDateShort(p.date):'—'],['Magiciens',String((p.equipe||[]).length)]]);
+  y=pdfBlocs(doc,y,
+    {titre:'ÉVÉNEMENT',nom:p.nom||'—',lines:['Agence : '+(p.agence||'—'),'Lieu : '+(p.lieu||'—'),p.typeEvenement?('Type : '+p.typeEvenement):'',p.nbInvites?('Invités : '+p.nbInvites):'',p.dureePresta?('Horaire : '+p.dureePresta):'']},
+    {titre:'PRODUCTION',lines:['Statut : '+(p.statut||'—'),p.theme?('Thème : '+p.theme):'',p.ambiance?('Ambiance : '+p.ambiance):'',p.costume?('Costume : '+p.costume):'',
+      (+p.nbMagiciensCible?('Cible : '+p.nbMagiciensCible+' magiciens · '+(p.equipe||[]).filter(m=>m.dispo==='Confirmé').length+' confirmés'):'')]});
+  y+=2;
+  // Équipe détaillée : une section par magicien
+  (p.equipe||[]).forEach(m=>{
+    const mag=DB.get('magiciens',m.magicienId)||{};
+    const eff=(m.effets||[]).map(eid=>effLabel(eid)).filter(Boolean);
+    const l=[];
+    l.push('Rôle : '+(m.role||'—')+'   ·   Tarif : '+fmtEurPdf(m.tarif)+dev+'   ·   '+(m.factMode||FACT_MODE[0]));
+    l.push('Statut : '+(m.dispo||'—')+'   ·   Paiement : '+(m.statutPaiement||'—'));
+    if(mag.tel||mag.email) l.push('Contact : '+[mag.tel,mag.email].filter(Boolean).join('  ·  '));
+    if(eff.length) l.push('Effets : '+eff.join(', '));
+    if(m.materielPerso) l.push('Apporte : '+m.materielPerso);
+    if(m.notes) l.push('Notes : '+m.notes);
+    y=pdfSection(doc,y,(magNom(m.magicienId)||'MAGICIEN').toUpperCase()+(mag.ville?('  —  '+mag.ville):''),l);
+  });
+  // Budget
+  const coutG=projCoutGlobal(p), coutD=projCoutDirect(p), gestion=+p.maGestionMontant||0, tot=projTotalAgence(p);
+  const brows=[];
+  if(coutG>0) brows.push(['Magiciens facturés via moi',fmtEurPdf(coutG)+dev]);
+  if(gestion>0) brows.push(['Direction artistique & coordination',fmtEurPdf(gestion)+dev]);
+  brows.push(['TOTAL FACTURÉ À L\'AGENCE',fmtEurPdf(tot)+dev]);
+  if(coutD>0) brows.push(['(magiciens en facturation directe)',fmtEurPdf(coutD)+dev]);
+  if(+p.budgetTotal) brows.push(['Budget annoncé par l\'agence',fmtEurPdf(p.budgetTotal)+dev]);
+  y=pdfSection(doc,y,'BUDGET',[]); y=pdfGrid(doc,y-4.5,['Poste','Montant'],brows,[null,42]);
+  // Logistique + consommables résumés
+  const lo=p.logistique||{};
+  y=pdfSection(doc,y,'LOGISTIQUE & FOURNITURES',[
+    lo.transport?('Transport : '+lo.transport):'',lo.hebergement?('Hébergement : '+lo.hebergement):'',lo.repas?('Repas : '+lo.repas):'',
+    (p.consommables||[]).length?('Consommables : '+(p.consommables||[]).map(c=>c.label+(c.qte?(' ×'+c.qte):'')+(c.par?(' ['+c.par+']'):'')).join(', ')):'',
+    (p.equipement||[]).length?('Équipement : '+(p.equipement||[]).map(e=>e.label+(e.par?(' ['+e.par+']'):'')).join(', ')):'']);
+  y=pdfSection(doc,y,'BRIEF, RÈGLES & SUIVI',[p.notes,p.notesBrief,p.briefUrl?('Brief complet : '+p.briefUrl):'',p.whatsappGroupe?('Groupe WhatsApp : '+p.whatsappGroupe):'',p.feedback?('Feedback : '+p.feedback):''].filter(Boolean));
+  pdfFooter(doc); return doc;
+}
+function ficheRecapOpen(pid){ const doc=pdfFicheRecap(pid); if(!doc)return; showDocPreview(doc,'Récap · '+(getP(pid).nom||''),'recap-'+((getP(pid).nom||'projet'))); }
 function showDocPreview(doc,title,filename){
   const url=doc.output('bloburl'); window._pvDoc=doc; window._pvName=(filename||'document').replace(/[^A-Za-z0-9_-]/g,'_');
   if(isIOS()){ window.open(url,'_blank'); return; }
