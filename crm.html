@@ -558,15 +558,17 @@ function uploadLogo(input){
       const cfg=DB.config(); cfg.logo=data; DB.saveConfig(cfg);
       if(cloudUrl()) cloudPost({action:'putConfig',config:DB.config()});   // pousse tout de suite (pour ?action=logo)
       document.querySelectorAll('.brand-logo').forEach(i=>i.src=data); const pv=document.getElementById('logo-preview'); if(pv)pv.src=data;
+      prepareLogo();
       logActivite('Logo mis à jour'); toast('🎨 Logo enregistré','ok'); if(_currentView==='reglages') RENDERERS.reglages();
     };
     img.onerror=()=>toast('Image illisible','err'); img.src=ev.target.result;
   };
   r.readAsDataURL(f);
 }
+function majLogoAvecNom(v){ const c=DB.config(); c.logoAvecNom=!!v; DB.saveConfig(c); toast(v?'Le nom ne sera plus répété à côté du logo':'Le nom sera écrit à côté du logo','ok'); }
 function resetLogo(){ const cfg=DB.config(); delete cfg.logo; DB.saveConfig(cfg);
   if(cloudUrl()) cloudPost({action:'putConfig',config:DB.config()});
-  document.querySelectorAll('.brand-logo').forEach(i=>i.src=LOGO_B64);
+  document.querySelectorAll('.brand-logo').forEach(i=>i.src=LOGO_B64); prepareLogo();
   toast('Logo par défaut rétabli','ok'); if(_currentView==='reglages') RENDERERS.reglages();
 }
 
@@ -1516,52 +1518,140 @@ function emetteur(){ const c=DB.config();
   };
 }
 function pdfNew(){ const {jsPDF}=window.jspdf; return new jsPDF({unit:'mm',format:'a4'}); }
+
+/* ── Logo : mesure du ratio + variantes lisibles sur fond clair ET sur fond sombre ──
+   Corrige le logo invisible (clair sur blanc) et l'écrasement du ratio dans les PDF. */
+let _logoMeta=null;
+function prepareLogo(){
+  try{
+    const src=logoSrc(); if(!src){ _logoMeta=null; return; }
+    const img=new Image();
+    img.onload=function(){
+      try{
+        const c=document.createElement('canvas'); c.width=img.width; c.height=img.height;
+        const cx=c.getContext('2d'); cx.drawImage(img,0,0);
+        const d=cx.getImageData(0,0,c.width,c.height);
+        const px=d.data, n=c.width*c.height;
+        // 1) Logo à fond uni opaque (cas courant : dessin noir sur fond blanc) → on détoure le fond
+        let opaques=0; for(let i=3;i<px.length;i+=4) if(px[i]>30) opaques++;
+        if(opaques > n*0.92){
+          const br=px[0],bg=px[1],bb=px[2];                       // couleur du coin = fond présumé
+          let proches=0;
+          for(let i=0;i<px.length;i+=4){
+            if(Math.abs(px[i]-br)+Math.abs(px[i+1]-bg)+Math.abs(px[i+2]-bb) < 60) proches++;
+          }
+          if(proches > n*0.25){                                    // fond uni confirmé → transparent
+            for(let i=0;i<px.length;i+=4){
+              const dist=Math.abs(px[i]-br)+Math.abs(px[i+1]-bg)+Math.abs(px[i+2]-bb);
+              if(dist<40) px[i+3]=0; else if(dist<80) px[i+3]=Math.round(px[i+3]*(dist-40)/40);
+            }
+            cx.putImageData(d,0,0);
+          }
+        }
+        // 2) Luminance du DESSIN seul (pixels visibles après détourage)
+        let sum=0,wsum=0;
+        for(let i=0;i<px.length;i+=4){
+          const a=px[i+3]/255; if(a<0.15) continue;
+          sum+=((0.2126*px[i]+0.7152*px[i+1]+0.0722*px[i+2])/255)*a; wsum+=a;
+        }
+        const lum=wsum?sum/wsum:0.5;
+        const detoure=c.toDataURL('image/png');                    // logo détouré, fond transparent
+        // 3) Variante inversée (la transparence est conservée)
+        const inv=cx.createImageData(d);
+        for(let i=0;i<px.length;i+=4){
+          inv.data[i]=255-px[i]; inv.data[i+1]=255-px[i+1]; inv.data[i+2]=255-px[i+2]; inv.data[i+3]=px[i+3];
+        }
+        const c2=document.createElement('canvas'); c2.width=c.width; c2.height=c.height;
+        c2.getContext('2d').putImageData(inv,0,0);
+        const invUrl=c2.toDataURL('image/png');
+        _logoMeta={ratio:img.width/Math.max(1,img.height), lum, detoure,
+          onDark:  lum<0.45 ? invUrl : detoure,   // dessin sombre → inversé pour rester lisible sur noir
+          onLight: lum>0.60 ? invUrl : detoure};  // dessin clair  → inversé pour rester lisible sur blanc
+      }catch(_){ _logoMeta={ratio:img.width/Math.max(1,img.height),lum:.5,onDark:src,onLight:src}; }
+    };
+    img.onerror=function(){ _logoMeta=null; };
+    img.src=src;
+  }catch(_){ _logoMeta=null; }
+}
+/* Place le logo en respectant son ratio, dans une variante lisible sur le fond demandé */
+function pdfLogo(doc,x,y,maxH,onDark,maxW){
+  const m=_logoMeta; const src=m?(onDark?m.onDark:m.onLight):logoSrc();
+  if(!src) return 0;
+  const ratio=(m&&m.ratio>0)?m.ratio:1;
+  let w=maxH*ratio, h=maxH; const lim=maxW||46;
+  if(w>lim){ w=lim; h=w/ratio; }               // ratio toujours respecté (plus d'écrasement)
+  const yy=y+(maxH-h)/2;                        // centré verticalement dans la hauteur allouée
+  try{ doc.addImage(src,'PNG',x,yy,w,h,undefined,'FAST'); return w; }
+  catch(_){ return 0; }
+}
+
+/* En-tête : bandeau noir (charte 70/25/5), logo lisible, cartouche document */
 function pdfHeader(doc,type,num,dates){
   const e=emetteur();
-  doc.setFillColor(...P_OR); doc.rect(0,0,210,4,'F');
-  // logo
-  let bxText=15; try{ const lg=logoSrc(); if(lg){ doc.addImage(lg,'PNG',15,8,18,18,undefined,'FAST'); bxText=37; } }catch(_){}
-  // marque
-  doc.setFont('helvetica','bold'); doc.setFontSize(23);
-  doc.setTextColor(...P_NOIR); doc.text('Louis',bxText,20);
-  const w=doc.getTextWidth('Louis'); doc.setTextColor(...P_OR); doc.text('Magie',bxText+w,20);
-  doc.setFont('helvetica','normal'); doc.setFontSize(7); doc.setTextColor(...P_GRIS);
-  doc.text('MAGICIEN  ·  CLOSE-UP  ·  MENTALISME  ·  MAGIE DIGITALE',bxText,25.5);
-  // émetteur
-  doc.setFontSize(8.3); doc.setTextColor(...P_GRIS); let y=37;
-  [[e.contact,e.statut].filter(Boolean).join(' — '), e.adresse, e.siret?('SIRET '+e.siret):'', [e.tel,e.email].filter(Boolean).join('  ·  '), e.site]
-    .filter(Boolean).forEach(l=>{ doc.text(l,15,y); y+=4; });
-  // bloc document (droite)
-  const bx=133,bw=62,by=12;
-  doc.setFillColor(...P_LIGHT); doc.roundedRect(bx,by,bw,40,2.5,2.5,'F');
-  doc.setFont('helvetica','bold'); doc.setFontSize(13); doc.setTextColor(...P_OR);
-  doc.text(type,bx+bw/2,by+9,{align:'center'});
-  doc.setFontSize(11.5); doc.setTextColor(...P_NOIR); doc.text(num,bx+bw/2,by+16,{align:'center'});
-  doc.setDrawColor(...P_LINE); doc.setLineWidth(.3); doc.line(bx+6,by+20,bx+bw-6,by+20);
-  doc.setFontSize(8.3); let dy=by+26;
-  dates.forEach(d=>{ doc.setFont('helvetica','normal'); doc.setTextColor(...P_GRIS); doc.text(d[0],bx+6,dy);
-    doc.setFont('helvetica','bold'); doc.setTextColor(...P_NOIR); doc.text(String(d[1]),bx+bw-6,dy,{align:'right'}); dy+=5.6; });
-  // séparateur
-  doc.setDrawColor(...P_LINE); doc.setLineWidth(.4); doc.line(15,58,195,58);
-  return 66;
+  const H=46;
+  // bandeau noir pleine largeur + filet orange signature
+  doc.setFillColor(...P_NOIR); doc.rect(0,0,210,H,'F');
+  doc.setFillColor(...P_OR);   doc.rect(0,H,210,2.4,'F');
+  // halo orange discret (rappel du site)
+  doc.setFillColor(30,18,8); doc.circle(196,4,26,'F');
+
+  // ── Identité (gauche) — le nom n'est pas répété si le logo le contient déjà
+  const nomDansLogo=DB.config().logoAvecNom===true;
+  let tx=15;
+  const lw=pdfLogo(doc,15,10,nomDansLogo?21:17,true,nomDansLogo?60:26);
+  if(lw) tx=15+lw+7;
+  if(!nomDansLogo){
+    doc.setFont('helvetica','bold'); doc.setFontSize(20);
+    doc.setTextColor(...P_BLANC); doc.text('Louis',tx,22);
+    const w=doc.getTextWidth('Louis');
+    doc.setTextColor(...P_OR); doc.text('Magie',tx+w,22);
+  }
+  doc.setFont('helvetica','normal'); doc.setFontSize(6.4); doc.setTextColor(150,145,138);
+  doc.text('M A G I C I E N   ·   C L O S E - U P   ·   M E N T A L I S M E',tx,nomDansLogo?21:27.5);
+  // coordonnées émetteur, discrètes dans le bandeau
+  doc.setFontSize(7.4); doc.setTextColor(125,120,113);
+  doc.text([e.contact,e.adresse].filter(Boolean).join('  ·  '),tx,34.5);
+  doc.text([e.tel,e.email].filter(Boolean).join('  ·  '),tx,38.6);
+
+  // ── Cartouche document (droite)
+  const bx=138,bw=57;
+  doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(...P_OR);
+  doc.text(String(type).toUpperCase(),195,15.5,{align:'right',charSpace:1.1});
+  // numéro / titre : taille adaptée pour ne jamais chevaucher l'identité à gauche
+  const txt=String(num); let fs=17;
+  doc.setFontSize(fs); while(doc.getTextWidth(txt)>72 && fs>8){ fs-=0.5; doc.setFontSize(fs); }
+  doc.setTextColor(...P_BLANC); doc.text(txt,195,24.5,{align:'right'});
+  doc.setDrawColor(58,56,50); doc.setLineWidth(.3); doc.line(bx,28.5,195,28.5);
+  doc.setFontSize(7.8); let dy=34;
+  (dates||[]).forEach(d=>{
+    doc.setFont('helvetica','normal'); doc.setTextColor(140,135,128); doc.text(d[0],bx,dy);
+    doc.setFont('helvetica','bold');   doc.setTextColor(...P_BLANC);  doc.text(String(d[1]),195,dy,{align:'right'});
+    dy+=5.2;
+  });
+  return H+12;
 }
 function pdfBlocs(doc,y,client,presta){
   const lh=4.6, cl=(client.lines||[]).filter(Boolean), pl=presta?(presta.lines||[]).filter(Boolean):[];
-  const h=18+Math.max(cl.length,pl.length)*lh+3;
-  // carte client
-  doc.setFillColor(...P_LIGHT); doc.roundedRect(15,y,88,h,2,2,'F');
-  doc.setFont('helvetica','bold'); doc.setFontSize(7.5); doc.setTextColor(...P_OR); doc.text(client.titre||'ADRESSÉ À',20,y+6);
-  doc.setFontSize(11.5); doc.setTextColor(...P_NOIR); doc.splitTextToSize(client.nom||'—',80).slice(0,2).forEach((s,i)=>doc.text(s,20,y+12.5+i*5));
-  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(...P_GRIS); let cy=y+18.5;
-  cl.forEach(l=>{ doc.splitTextToSize(l,78).forEach(s=>{ doc.text(s,20,cy); cy+=lh; }); });
+  const h=Math.max(30, 19+Math.max(cl.length,pl.length)*lh+3);
+  // carte destinataire : crème + accent orange à gauche (charte)
+  doc.setFillColor(...P_LIGHT); doc.roundedRect(15,y,88,h,2.5,2.5,'F');
+  doc.setFillColor(...P_OR); doc.rect(15,y+3,1.8,h-6,'F');
+  doc.setFont('helvetica','bold'); doc.setFontSize(6.6); doc.setTextColor(...P_OR);
+  doc.text(client.titre||'ADRESSÉ À',21,y+6.5,{charSpace:.9});
+  doc.setFontSize(11.5); doc.setTextColor(...P_NOIR);
+  doc.splitTextToSize(client.nom||'—',78).slice(0,2).forEach((s,i)=>doc.text(s,21,y+13+i*5));
+  doc.setFont('helvetica','normal'); doc.setFontSize(8.6); doc.setTextColor(...P_GRIS); let cy=y+19.5;
+  cl.forEach(l=>{ doc.splitTextToSize(l,76).forEach(s=>{ doc.text(s,21,cy); cy+=lh; }); });
   // carte prestation
   if(presta){
-    doc.setFillColor(...P_LIGHT); doc.roundedRect(107,y,88,h,2,2,'F');
-    doc.setFont('helvetica','bold'); doc.setFontSize(7.5); doc.setTextColor(...P_OR); doc.text(presta.titre||'PRESTATION',112,y+6);
-    doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(...P_NOIR); let py=y+12.5;
-    pl.forEach(l=>{ doc.splitTextToSize(l,78).forEach(s=>{ doc.text(s,112,py); py+=lh; }); });
+    doc.setFillColor(...P_LIGHT); doc.roundedRect(107,y,88,h,2.5,2.5,'F');
+    doc.setFillColor(...P_OR); doc.rect(107,y+3,1.8,h-6,'F');
+    doc.setFont('helvetica','bold'); doc.setFontSize(6.6); doc.setTextColor(...P_OR);
+    doc.text(presta.titre||'PRESTATION',113,y+6.5,{charSpace:.9});
+    doc.setFont('helvetica','normal'); doc.setFontSize(8.8); doc.setTextColor(...P_NOIR); let py=y+13;
+    pl.forEach(l=>{ doc.splitTextToSize(l,76).forEach(s=>{ doc.text(s,113,py); py+=lh; }); });
   }
-  return y+h+7;
+  return y+h+9;
 }
 function pdfTable(doc,y,head,body,amtWidth){
   const three=head.length===3;
@@ -1577,14 +1667,16 @@ function pdfTable(doc,y,head,body,amtWidth){
 }
 function pdfTotaux(doc,y,rows,total){
   const x0=120,x1=193,bw=75;
-  doc.setFontSize(9.5);
+  doc.setFontSize(9.2);
   rows.forEach(r=>{ doc.setFont('helvetica','normal'); doc.setTextColor(...P_GRIS); doc.text(r[0],x0,y);
-    doc.setTextColor(...P_NOIR); doc.text(r[1],x1,y,{align:'right'}); y+=6.2; });
-  y+=1;
-  doc.setFillColor(...P_OR); doc.roundedRect(x0-4,y-5.6,bw+4,12,2,2,'F');
-  doc.setFont('helvetica','bold'); doc.setFontSize(12.5); doc.setTextColor(...P_NOIR);
-  doc.text(total[0],x0,y+1.7); doc.text(total[1],x1,y+1.7,{align:'right'});
-  return y+13;
+    doc.setFont('helvetica','bold'); doc.setTextColor(...P_NOIR); doc.text(r[1],x1,y,{align:'right'}); y+=6.2; });
+  y+=2;
+  // bloc total : orange plein, texte blanc (hiérarchie CTA de la charte)
+  doc.setFillColor(...P_OR); doc.roundedRect(x0-5,y-6,bw+5,13.5,2,2,'F');
+  doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(...P_BLANC);
+  doc.text(String(total[0]).toUpperCase(),x0,y-0.6,{charSpace:.7});
+  doc.setFontSize(13.5); doc.text(total[1],x1,y+2.6,{align:'right'});
+  return y+15;
 }
 function pdfReglement(doc,y,condTitle,condLines){
   const e=emetteur();
@@ -1602,14 +1694,61 @@ function pdfReglement(doc,y,condTitle,condLines){
   }
   return ry;
 }
+/* Cadre « Bon pour accord » ancré en bas de page (devis) */
+function pdfBonPourAccord(doc){
+  const y=232, h=40;
+  doc.setDrawColor(...P_LINE); doc.setLineWidth(.4); doc.roundedRect(112,y,83,h,2.5,2.5,'S');
+  doc.setFillColor(...P_OR); doc.rect(112,y+3,1.8,h-6,'F');
+  doc.setFont('helvetica','bold'); doc.setFontSize(6.6); doc.setTextColor(...P_OR);
+  doc.text('BON POUR ACCORD',118,y+7,{charSpace:.9});
+  doc.setFont('helvetica','normal'); doc.setFontSize(7.6); doc.setTextColor(...P_GRIS);
+  doc.text('Date et signature du client',118,y+12.5);
+  doc.text('précédées de la mention « Bon pour accord »',118,y+16.6);
+  doc.setDrawColor(...P_LINE); doc.setLineWidth(.3); doc.line(118,y+h-6,189,y+h-6);
+  // rappel signature en ligne, à gauche du cadre
+  doc.setFont('helvetica','bold'); doc.setFontSize(7.4); doc.setTextColor(...P_NOIR);
+  doc.text('Plus simple : signez en ligne',15,y+8);
+  doc.setFont('helvetica','normal'); doc.setFontSize(7.2); doc.setTextColor(...P_GRIS);
+  doc.splitTextToSize("Le lien de signature électronique se trouve dans l'email accompagnant ce devis. Valeur juridique identique.",92)
+    .forEach((l,i)=>doc.text(l,15,y+13.5+i*4.2));
+}
+/* Cachet incliné (ex. ACQUITTÉE) — discret, en bas de la zone de contenu */
+function pdfCachet(doc,texte,rgb,y){
+  if(!doc.setGState) return;
+  const x=150, yy=y||205;
+  doc.saveGraphicsState(); doc.setGState(new doc.GState({opacity:.5}));
+  doc.setDrawColor(...rgb); doc.setLineWidth(1.1);
+  doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.setTextColor(...rgb);
+  const w=doc.getTextWidth(texte)+14;
+  // cadre incliné dessiné à la main (jsPDF ne pivote pas les rectangles)
+  const a=-11*Math.PI/180, cos=Math.cos(a), sin=Math.sin(a), hh=11;
+  const pts=[[0,0],[w,0],[w,hh],[0,hh]].map(p=>[x+p[0]*cos-p[1]*sin, yy+p[0]*sin+p[1]*cos]);
+  for(let i=0;i<4;i++){ const p=pts[i], q=pts[(i+1)%4]; doc.line(p[0],p[1],q[0],q[1]); }
+  doc.text(texte,x+7*cos-7.6*sin, yy+7*sin+7.6*cos,{angle:11});
+  doc.restoreGraphicsState(); doc.setTextColor(0,0,0);
+}
+
+/* Pied de page appliqué à TOUTES les pages, avec pagination */
 function pdfFooter(doc){
   const e=emetteur();
-  doc.setDrawColor(...P_LINE); doc.setLineWidth(.4); doc.line(15,282,195,282);
-  doc.setFont('helvetica','normal'); doc.setFontSize(7.2); doc.setTextColor(...P_GRIS);
-  doc.text(['LouisMagie',e.contact,e.statut].filter(Boolean).join('  ·  '),105,287,{align:'center'});
-  doc.text([e.siret?('SIRET '+e.siret):'',e.adresse,e.email,e.site].filter(Boolean).join('  ·  '),105,291,{align:'center'});
-  doc.setFont('helvetica','bold'); doc.setTextColor(...P_OR); doc.setFontSize(7.4);
-  doc.text(e.mentionTva,105,295.5,{align:'center'});
+  const n=doc.internal.getNumberOfPages();
+  for(let p=1;p<=n;p++){
+    doc.setPage(p);
+    doc.setFillColor(...P_LIGHT); doc.rect(0,280,210,17,'F');
+    doc.setFillColor(...P_OR);    doc.rect(0,280,210,.9,'F');
+    doc.setFont('helvetica','bold'); doc.setFontSize(7.4); doc.setTextColor(...P_NOIR);
+    doc.text('LouisMagie',15,286);
+    const w=doc.getTextWidth('LouisMagie');
+    doc.setFont('helvetica','normal'); doc.setTextColor(...P_GRIS);
+    doc.text('  ·  '+[e.contact,e.statut].filter(Boolean).join('  ·  '),15+w,286);
+    doc.setFontSize(6.9);
+    doc.text([e.siret?('SIRET '+e.siret):'',e.adresse,e.email,e.site].filter(Boolean).join('  ·  '),15,290.4);
+    doc.setFont('helvetica','bold'); doc.setTextColor(...P_OR); doc.setFontSize(6.9);
+    doc.text(e.mentionTva,15,294.6);
+    if(n>1){ doc.setFont('helvetica','normal'); doc.setTextColor(...P_GRIS); doc.setFontSize(7.4);
+      doc.text('Page '+p+' / '+n,195,294.6,{align:'right'}); }
+  }
+  doc.setPage(n);
 }
 
 /* ───── PDF devis ───── */
@@ -1636,6 +1775,7 @@ function pdfDevis(id,returnDoc){
        'Devis valable 30 jours. Solde réglé après la prestation.']
     : ['Devis valable 30 jours.','Règlement à réception après la prestation.'];
   pdfReglement(doc,doc.lastAutoTable.finalY+9,'CONDITIONS',cond);
+  if(doc.internal.getNumberOfPages()===1) pdfBonPourAccord(doc);   // cadre signature manuscrite (repli au lien en ligne)
   pdfFooter(doc);
   if(returnDoc) return doc;
   doc.output('dataurlnewwindow'); logActivite('PDF généré · devis '+id);
@@ -2059,25 +2199,26 @@ function pdfFacture(id,returnDoc){
   const dateP=dev.dateEvenement?(' — '+fmtDateFr(dev.dateEvenement)):'';
   let body, totaux, totalLabel, totalVal, cond;
   if(f.type==='avoir'){
-    body=[['Avoir — annulation de la facture '+(f.avoirDe||'')+dateP,fmtEurPdf(f.montantFacture)]];
-    totaux=[['Montant annulé',fmtEurPdf(f.montantFacture)]];
-    totalLabel='AVOIR'; totalVal=fmtEurPdf(f.montantFacture);
+    body=[['Avoir — annulation de la facture '+(f.avoirDe||'')+dateP,fmtEurPdf(factMontant(f))]];
+    totaux=[['Montant annulé',fmtEurPdf(factMontant(f))]];
+    totalLabel='AVOIR'; totalVal=fmtEurPdf(factMontant(f));
     cond=['Avoir émis le '+fmtDateFr(f.dateEmission)+' annulant la facture '+(f.avoirDe||'')+'.','Ce document annule et remplace la facture concernée.'];
   } else if(f.type==='acompte'){
-    body=[['Acompte de réservation sur prestation de magie'+dateP,fmtEurPdf(f.montantFacture)]];
+    body=[['Acompte de réservation sur prestation de magie'+dateP,fmtEurPdf(factMontant(f))]];
     totaux=[['Montant total de la prestation',fmtEurPdf(f.montantTTC)]];
-    totalLabel='ACOMPTE ENCAISSÉ'; totalVal=fmtEurPdf(f.montantFacture);
+    totalLabel='ACOMPTE ENCAISSÉ'; totalVal=fmtEurPdf(factMontant(f));
     cond=['Acompte encaissé le '+fmtDateFr(f.datePaiement)+'. Le solde sera facturé après la prestation.','Cette facture d\'acompte sera déduite de la facture de solde.'];
   } else if(f.type==='solde'){
     body=[['Prestation de magie'+dateP,fmtEurPdf(f.montantTTC)],['Acompte déjà facturé'+(f.acompteRef?(' (facture '+f.acompteRef+')'):''),'- '+fmtEurPdf(f.acompteVerse)]];
     totaux=[['Montant total prestation',fmtEurPdf(f.montantTTC)],['Acompte déjà versé','- '+fmtEurPdf(f.acompteVerse)]];
-    totalLabel='SOLDE À RÉGLER'; totalVal=fmtEurPdf(f.soldeDu);
+    totalLabel=f.statut==='Payée'?'SOLDE RÉGLÉ':'SOLDE À RÉGLER'; totalVal=fmtEurPdf(f.statut==='Payée'?(f.montantTTC-(+f.acompteVerse||0)):f.soldeDu);
     cond = f.statut==='Payée'?['Solde acquitté le '+fmtDateFr(f.datePaiement)+'. Merci de votre confiance.']
       :['Merci de régler le solde de '+fmtEurPdf(f.soldeDu)+' avant le '+fmtDateFr(f.dateEcheance)+'.','En cas de retard : pénalités au taux légal, indemnité forfaitaire de 40 € (art. L441-10 C. com.).'];
   } else {
-    body=[[f.designation||('Prestation de magie'+dateP),fmtEurPdf(f.montantFacture)]];
-    totaux=[['Montant',fmtEurPdf(f.montantFacture)]];
-    totalLabel='TOTAL À RÉGLER'; totalVal=fmtEurPdf(f.soldeDu);
+    body=[[f.designation||('Prestation de magie'+dateP),fmtEurPdf(factMontant(f))]];
+    totaux=[['Montant',fmtEurPdf(factMontant(f))]];
+    if(+f.acompteVerse>0) totaux.push(['Acompte déjà versé','- '+fmtEurPdf(f.acompteVerse)]);
+    totalLabel=f.statut==='Payée'?'TOTAL RÉGLÉ':'TOTAL À RÉGLER'; totalVal=fmtEurPdf(f.statut==='Payée'?(factMontant(f)-(+f.acompteVerse||0)):f.soldeDu);
     cond = f.statut==='Payée'?['Facture acquittée le '+fmtDateFr(f.datePaiement)+'. Merci de votre confiance.']
       :['Merci de régler '+fmtEurPdf(f.soldeDu)+' avant le '+fmtDateFr(f.dateEcheance)+'.','En cas de retard : pénalités au taux légal, indemnité forfaitaire de 40 € (art. L441-10 C. com.).'];
   }
@@ -2086,6 +2227,7 @@ function pdfFacture(id,returnDoc){
   pdfTable(doc,y,['Désignation','Montant'],body);
   pdfTotaux(doc,doc.lastAutoTable.finalY+9,totaux,[totalLabel,totalVal]);
   pdfReglement(doc,doc.lastAutoTable.finalY+9,f.type==='avoir'?'AVOIR':'CONDITIONS DE PAIEMENT',cond);
+  if(f.statut==='Payée'&&f.type!=='avoir') pdfCachet(doc,'ACQUITTÉE',[46,158,99],196);
   // Filigrane bien visible pour avoir / facture annulée
   if((f.type==='avoir'||f.statut==='Annulée')&&doc.setGState){
     const wm=f.type==='avoir'?'AVOIR':'ANNULÉE';
@@ -2975,7 +3117,8 @@ RENDERERS.reglages=function(){
           <input type="file" id="logo-file" accept="image/png,image/jpeg,image/webp" onchange="uploadLogo(this)" style="display:none">
           <button class="btn btn-or" onclick="document.getElementById('logo-file').click()">📤 Choisir un logo</button>
           ${cfg.logo?`<button class="btn btn-ghost" onclick="resetLogo()">↺ Logo par défaut</button>`:''}
-          <div class="td-dim" style="font-size:12px;margin-top:8px">PNG (fond transparent conseillé) ou JPG. Redimensionné automatiquement (max 256 px).</div>
+          <div class="td-dim" style="font-size:12px;margin-top:8px">PNG (fond transparent conseillé) ou JPG. Redimensionné automatiquement (max 256 px). Le fond uni est détouré et le logo s'éclaircit tout seul sur les fonds sombres.</div>
+          <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;cursor:pointer"><input type="checkbox" ${cfg.logoAvecNom?'checked':''} onchange="majLogoAvecNom(this.checked)" style="width:18px;height:18px">Mon logo contient déjà « LouisMagie » <span class="td-dim">(n'écrit pas le nom à côté sur les PDF)</span></label>
         </div>
       </div>
     </div>
@@ -3792,7 +3935,7 @@ function pdfSection(doc,y,title,lines){
   doc.setFont('helvetica','bold'); doc.setFontSize(8.6); doc.setTextColor(...P_OR); doc.text(title,20,y+1.1);
   y+=9.5;
   doc.setFont('helvetica','normal'); doc.setFontSize(9.6); doc.setTextColor(...P_NOIR);
-  arr.forEach(l=>{ doc.splitTextToSize(l,178).forEach((s,i)=>{ if(y>276){ doc.addPage(); y=20; } doc.text(s,i?21:18,y); y+=5; }); });
+  arr.forEach(l=>{ doc.splitTextToSize(l,178).forEach((s,i)=>{ if(y>270){ doc.addPage(); y=22; } doc.text(s,i?21:18,y); y+=5; }); });
   return y+4.5;
 }
 /* Tableau à la charte (en-tête noir, lignes alternées) */
@@ -3912,6 +4055,7 @@ function ficheProjetOpen(pid){ const doc=pdfFicheProjet(pid); if(!doc)return; sh
 (async function boot(){
   try{ applyTheme(localStorage.getItem('lm_theme')||'dark'); }catch(_){ applyTheme('dark'); }
   try{ document.querySelectorAll('.brand-logo').forEach(i=>i.src=logoSrc()); }catch(_){}
+  prepareLogo();                       // mesure ratio + variantes claires/sombres pour les PDF
   await ensureSeed();
   setCloudStatus(cloudUrl()?'sync':'off');
   // pull se fait après login (showApp), car l'API exige le mot de passe
