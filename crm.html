@@ -3032,13 +3032,18 @@ const IMPOSSIBLE_ROLES=['Serveur','Hôte d\'accueil','Invité','Barman','Vestiai
 const DISPO_STATUTS=['En discussion','Confirmé','Indisponible'];
 const PAY_STATUTS=['En discussion','Confirmé','Payé'];
 const AGENCE_PAY=['En attente','Acompte reçu','Payé'];
+const FACT_MODE=['Globale (via moi)','Directe agence'];   // le magicien facture via moi ou directement l'agence
+const FOURNI_PAR=['Agence','Magiciens','Moi'];
+const COSTUME_PAR=['Fourni par l\'agence','Apporté par les magiciens','Fourni par moi','À définir'];
 function getP(id){ return DB.get('projets',id); }
 function saveP(p){ p.updatedAt=new Date().toISOString(); return DB.save('projets',p); }
 function magNom(id){ const m=DB.get('magiciens',id); return m?((m.prenom?m.prenom+' ':'')+m.nom).trim():'—'; }
 function projStatutColor(s){ return {'Prospect':'#8a8a8a','En préparation':'#E8A13A','Confirmé':'#3FB97A','Réalisé':'#4A9DE8','Facturé':'#27AE60','Annulé':'#E5564B'}[s]||'#8a8a8a'; }
 function projBadge(s){ return `<span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:600;color:#fff;background:${projStatutColor(s)}">${esc(s)}</span>`; }
-function projCoutEquipe(p){ return (p.equipe||[]).reduce((s,m)=>s+(+m.tarif||0),0); }
-function projTotalAgence(p){ return projCoutEquipe(p)+(+p.maGestionMontant||0); }
+function projCoutEquipe(p){ return (p.equipe||[]).reduce((s,m)=>s+(+m.tarif||0),0); }                                           // total tarifs magiciens
+function projCoutGlobal(p){ return (p.equipe||[]).filter(m=>m.factMode!=='Directe agence').reduce((s,m)=>s+(+m.tarif||0),0); }  // magiciens facturés via moi
+function projCoutDirect(p){ return (p.equipe||[]).filter(m=>m.factMode==='Directe agence').reduce((s,m)=>s+(+m.tarif||0),0); }  // magiciens qui facturent l'agence en direct
+function projTotalAgence(p){ return projCoutGlobal(p)+(+p.maGestionMontant||0); }                                              // ce que MOI je facture à l'agence
 
 /* ---------- LISTE DES PROJETS ---------- */
 RENDERERS.projets=function(){
@@ -3080,8 +3085,8 @@ function projFieldRe(pid,field,val){ projField(pid,field,val); RENDERERS.projet(
 RENDERERS.projet=function(params){
   const id=(params||currentParams||{}).id; const p=getP(id);
   const el=document.getElementById('view-projet'); if(!p){ el.innerHTML='<div class="empty"><div class="empty-text">Projet introuvable</div></div>'; return; }
-  const coutEquipe=projCoutEquipe(p), total=projTotalAgence(p), budget=+p.budgetTotal||0;
-  const marge=budget-total;
+  const coutEquipe=projCoutEquipe(p), total=projTotalAgence(p), direct=projCoutDirect(p), budget=+p.budgetTotal||0;
+  const marge=budget-total-direct;
   document.getElementById('topbar-actions').innerHTML=`<button class="btn btn-ghost btn-sm" onclick="nav('projets')">← Projets</button>`;
   el.innerHTML=`
     <div class="panel"><div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
@@ -3096,12 +3101,13 @@ RENDERERS.projet=function(params){
         <div class="form-group"><label class="form-label">Type d'événement</label><input class="form-control" value="${esc(p.typeEvenement||'')}" onchange="projField('${id}','typeEvenement',this.value)" placeholder="soirée de gala, lancement…"></div>
         <div class="form-group"><label class="form-label">Nombre d'invités</label><input class="form-control" value="${esc(p.nbInvites||'')}" onchange="projField('${id}','nbInvites',this.value)"></div>
         <div class="form-group"><label class="form-label">Thème</label><input class="form-control" value="${esc(p.theme||'')}" onchange="projField('${id}','theme',this.value)"></div>
-        <div class="form-group" style="grid-column:span 2"><label class="form-label">Ambiance / contexte</label><input class="form-control" value="${esc(p.ambiance||'')}" onchange="projField('${id}','ambiance',this.value)" placeholder="luxe feutré, cocktail debout, dress code…"></div>
+        <div class="form-group"><label class="form-label">Ambiance / contexte</label><input class="form-control" value="${esc(p.ambiance||'')}" onchange="projField('${id}','ambiance',this.value)" placeholder="luxe feutré, cocktail debout…"></div>
+        <div class="form-group"><label class="form-label">👔 Costume</label><select class="form-control" onchange="projField('${id}','costume',this.value)">${['',...COSTUME_PAR].map(s=>`<option${s===(p.costume||'')?' selected':''}>${s||'—'}</option>`).join('')}</select></div>
       </div>
     </div>
 
     <div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><div class="panel-title" style="margin:0">🎩 Équipe (${(p.equipe||[]).length})</div>
-      <button class="btn btn-or btn-sm" onclick="projAddMembre('${id}')">+ Ajouter un magicien</button></div>
+      <div style="display:flex;gap:8px"><button class="btn btn-ghost btn-sm" onclick="ficheProjetOpen('${id}')">📄 Fiche projet</button><button class="btn btn-or btn-sm" onclick="projAddMembre('${id}')">+ Ajouter un magicien</button></div></div>
       ${projEquipeHtml(p)}
     </div>
 
@@ -3120,12 +3126,13 @@ RENDERERS.projet=function(params){
 
     <div class="panel"><div class="panel-title">💶 Budget & facturation</div>
       <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr)">
-        ${kpi('info','Coût équipe',fmtEur(coutEquipe),'magiciens')}
-        ${kpi('or','Ma gestion',fmtEur(+p.maGestionMontant||0))}
-        ${kpi('vert','À facturer agence',fmtEur(total))}
-        ${kpi(marge>=0?'vert':'rouge','Marge / budget',fmtEur(marge))}
+        ${kpi('info','Coût équipe',fmtEur(coutEquipe),'tous magiciens')}
+        ${kpi('or','À facturer agence',fmtEur(total),'via moi + gestion')}
+        ${kpi('info','Facturé en direct',fmtEur(direct),'magiciens → agence')}
+        ${kpi(marge>=0?'vert':'rouge','Marge vs budget',fmtEur(marge))}
       </div>
-      <div class="form-grid c3" style="margin-top:12px">
+      <div class="td-dim" style="font-size:12px;margin:8px 0">« À facturer agence » = magiciens qui passent <strong>par moi</strong> + ma gestion. Les magiciens en <strong>facturation directe</strong> facturent l'agence eux-mêmes (non inclus).</div>
+      <div class="form-grid c3" style="margin-top:6px">
         <div class="form-group"><label class="form-label">Ma gestion de projet (€)</label><input class="form-control" type="number" value="${+p.maGestionMontant||0}" onchange="projFieldRe('${id}','maGestionMontant',+this.value||0)"></div>
         <div class="form-group"><label class="form-label">Budget annoncé agence (€)</label><input class="form-control" type="number" value="${budget}" onchange="projFieldRe('${id}','budgetTotal',+this.value||0)"></div>
         <div class="form-group"><label class="form-label">Paiement agence</label><select class="form-control" onchange="projField('${id}','statutAgence',this.value)">${AGENCE_PAY.map(s=>`<option${s===p.statutAgence?' selected':''}>${s}</option>`).join('')}</select></div>
@@ -3152,14 +3159,15 @@ function projEquipeHtml(p){
     return `<div style="border:1px solid var(--anthr);border-radius:var(--rsm);padding:12px;margin-top:10px">
       <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap">
         <div class="td-strong">${esc(magNom(m.magicienId))} <span class="td-dim" style="font-weight:400;font-size:12px">${esc((DB.get('magiciens',m.magicienId)||{}).ville||'')}</span></div>
-        <button class="qa" title="Retirer" onclick="projDelMembre('${p.id}','${m.id}')">✕</button>
+        <div style="display:flex;gap:6px"><button class="btn btn-ghost btn-sm" onclick="ficheMagicienOpen('${p.id}','${m.id}')">📄 Fiche</button><button class="qa" title="Retirer" onclick="projDelMembre('${p.id}','${m.id}')">✕</button></div>
       </div>
       <div class="form-grid c3" style="margin-top:8px">
         <div class="form-group"><label class="form-label" style="font-size:11px">Rôle</label><select class="form-control" onchange="projSetMembre('${p.id}','${m.id}','role',this.value)">${IMPOSSIBLE_ROLES.map(r=>`<option${r===m.role?' selected':''}>${r}</option>`).join('')}</select></div>
         <div class="form-group"><label class="form-label" style="font-size:11px">Tarif convenu (€)</label><input class="form-control" type="number" value="${+m.tarif||0}" onchange="projSetMembre('${p.id}','${m.id}','tarif',+this.value||0)"></div>
+        <div class="form-group"><label class="form-label" style="font-size:11px">Facturation</label><select class="form-control" onchange="projSetMembre('${p.id}','${m.id}','factMode',this.value)">${FACT_MODE.map(s=>`<option${s===(m.factMode||FACT_MODE[0])?' selected':''}>${s}</option>`).join('')}</select></div>
         <div class="form-group"><label class="form-label" style="font-size:11px">Disponibilité</label><select class="form-control" onchange="projSetMembre('${p.id}','${m.id}','dispo',this.value)">${DISPO_STATUTS.map(s=>`<option${s===m.dispo?' selected':''}>${s}</option>`).join('')}</select></div>
         <div class="form-group"><label class="form-label" style="font-size:11px">Paiement</label><select class="form-control" onchange="projSetMembre('${p.id}','${m.id}','statutPaiement',this.value)">${PAY_STATUTS.map(s=>`<option${s===m.statutPaiement?' selected':''}>${s}</option>`).join('')}</select></div>
-        <div class="form-group" style="grid-column:span 2"><label class="form-label" style="font-size:11px">Accessoires / matériel perso apporté</label><input class="form-control" value="${esc(m.materielPerso||'')}" onchange="projSetMembre('${p.id}','${m.id}','materielPerso',this.value)"></div>
+        <div class="form-group"><label class="form-label" style="font-size:11px">Matériel perso apporté</label><input class="form-control" value="${esc(m.materielPerso||'')}" onchange="projSetMembre('${p.id}','${m.id}','materielPerso',this.value)"></div>
       </div>
       <div style="margin-top:8px"><div style="display:flex;justify-content:space-between;align-items:center"><label class="form-label" style="font-size:11px;margin:0">✨ Effets attribués</label><button class="btn btn-ghost btn-sm" onclick="membreEffets('${p.id}','${m.id}')">Choisir les effets</button></div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${eff.length?eff.map(n=>`<span class="badge accepte" style="font-size:11px">${n}</span>`).join(''):'<span class="td-dim" style="font-size:12px">Aucun effet choisi</span>'}</div></div>
@@ -3168,7 +3176,7 @@ function projEquipeHtml(p){
   }).join('');
 }
 function projSetMembre(pid,mid,field,val){ const p=getP(pid); const m=(p.equipe||[]).find(x=>x.id===mid); if(!m)return; m[field]=val; saveP(p);
-  if(field==='tarif') RENDERERS.projet({id:pid}); }   // maj des totaux budget
+  if(field==='tarif'||field==='factMode') RENDERERS.projet({id:pid}); }   // maj des totaux budget
 function projDelMembre(pid,mid){ const p=getP(pid); p.equipe=(p.equipe||[]).filter(x=>x.id!==mid); saveP(p); RENDERERS.projet({id:pid}); }
 function projAddMembre(pid){
   const mags=DB.all('magiciens');
@@ -3179,7 +3187,7 @@ function projAddMembre(pid){
 }
 function projAddMembreOk(pid){
   const ids=[...document.querySelectorAll('.pm-cb:checked')].map(c=>c.value); const p=getP(pid); p.equipe=p.equipe||[];
-  ids.forEach(mid=>{ if(!p.equipe.some(m=>m.magicienId===mid)) p.equipe.push({id:uid('MBR'),magicienId:mid,role:'Serveur',tarif:0,dispo:'En discussion',statutPaiement:'En discussion',effets:[],materielPerso:'',notes:''}); });
+  ids.forEach(mid=>{ if(!p.equipe.some(m=>m.magicienId===mid)) p.equipe.push({id:uid('MBR'),magicienId:mid,role:'Serveur',tarif:0,factMode:FACT_MODE[0],dispo:'En discussion',statutPaiement:'En discussion',effets:[],materielPerso:'',notes:''}); });
   saveP(p); closeModal(); RENDERERS.projet({id:pid}); toast(ids.length+' magicien(s) ajouté(s)','ok');
 }
 function membreEffets(pid,mid){
@@ -3198,10 +3206,12 @@ function membreEffetsOk(pid,mid){ const ids=[...document.querySelectorAll('.me-c
 /* ----- Listes cochables (consommables / équipement / checklist) ----- */
 function projListHtml(pid,key,ph){
   const p=getP(pid); const arr=p[key]||[];
-  const rows=arr.map(it=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--anthr)">
+  const withPar=(key==='consommables'||key==='equipement');
+  const rows=arr.map(it=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--anthr);flex-wrap:wrap">
     <input type="checkbox" ${it.fait?'checked':''} onchange="projItemToggle('${pid}','${key}','${it.id}')" style="width:18px;height:18px">
-    <input class="form-control" style="flex:1;border:none;background:none;padding:4px 0${it.fait?';text-decoration:line-through;opacity:.6':''}" value="${esc(it.label||'')}" onchange="projItemLabel('${pid}','${key}','${it.id}',this.value)">
-    ${key==='consommables'?`<input class="form-control" style="max-width:70px" placeholder="qté" value="${esc(it.qte||'')}" onchange="projItemQte('${pid}','${it.id}',this.value)">`:''}
+    <input class="form-control" style="flex:1;min-width:120px;border:none;background:none;padding:4px 0${it.fait?';text-decoration:line-through;opacity:.6':''}" value="${esc(it.label||'')}" onchange="projItemLabel('${pid}','${key}','${it.id}',this.value)">
+    ${key==='consommables'?`<input class="form-control" style="max-width:60px" placeholder="qté" value="${esc(it.qte||'')}" onchange="projItemQte('${pid}','${it.id}',this.value)">`:''}
+    ${withPar?`<select class="form-control" style="max-width:120px;font-size:12px" title="Fourni par" onchange="projItemPar('${pid}','${key}','${it.id}',this.value)">${['',...FOURNI_PAR].map(s=>`<option${s===(it.par||'')?' selected':''}>${s||'fourni par…'}</option>`).join('')}</select>`:''}
     <button class="qa" onclick="projItemDel('${pid}','${key}','${it.id}')">✕</button></div>`).join('');
   return `<div>${rows}</div><button class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="projItemAdd('${pid}','${key}')">+ Ajouter</button>`;
 }
@@ -3209,6 +3219,7 @@ function projItemAdd(pid,key){ const p=getP(pid); p[key]=p[key]||[]; p[key].push
 function projItemToggle(pid,key,iid){ const p=getP(pid); const it=(p[key]||[]).find(x=>x.id===iid); if(it){ it.fait=!it.fait; saveP(p); RENDERERS.projet({id:pid}); } }
 function projItemLabel(pid,key,iid,v){ const p=getP(pid); const it=(p[key]||[]).find(x=>x.id===iid); if(it){ it.label=v; saveP(p); } }
 function projItemQte(pid,iid,v){ const p=getP(pid); const it=(p.consommables||[]).find(x=>x.id===iid); if(it){ it.qte=v; saveP(p); } }
+function projItemPar(pid,key,iid,v){ const p=getP(pid); const it=(p[key]||[]).find(x=>x.id===iid); if(it){ it.par=v; saveP(p); } }
 function projItemDel(pid,key,iid){ const p=getP(pid); p[key]=(p[key]||[]).filter(x=>x.id!==iid); saveP(p); RENDERERS.projet({id:pid}); }
 
 /* ---------- BANQUE DE MAGICIENS ---------- */
@@ -3246,11 +3257,83 @@ function gererEffets(){
       <button class="btn btn-danger btn-sm" onclick="delEff('${e.id}')">🗑</button>
     </div></div>`).join('')||'<div class="td-dim" style="padding:8px">Banque d\'effets vide.</div>';
   openModal('✨ Banque d\'effets ('+effs.length+')',`<div style="max-height:440px;overflow:auto">${rows}</div>`,
-    `<button class="btn btn-or" onclick="addEff()">+ Nouvel effet</button><button class="btn btn-ghost" onclick="closeModal();if(_currentView==='projet')RENDERERS.projet(currentParams);else RENDERERS.projets()">Fermer</button>`);
+    `<button class="btn btn-ghost" onclick="importEffetsBase()">📥 Importer la bibliothèque de base</button><button class="btn btn-or" onclick="addEff()">+ Nouvel effet</button><button class="btn btn-ghost" onclick="closeModal();if(_currentView==='projet')RENDERERS.projet(currentParams);else RENDERERS.projets()">Fermer</button>`);
 }
 function addEff(){ DB.save('effets',{id:uid('EFF'),nom:'Nouvel effet',categorie:'',description:'',materiel:''}); gererEffets(); }
 function saveEff(id,f,v){ const e=DB.get('effets',id); if(e){ e[f]=v; DB.save('effets',e); } }
 function delEff(id){ if(!confirm('Supprimer cet effet de la banque ?'))return; DB.remove('effets',id); gererEffets(); }
+/* Bibliothèque d'effets de base (importable, non destructif) */
+const EFFETS_BASE=[
+  ['Apparitions',[['Toasts sous une dove pan','Pan Dove'],['Colombes','Pan Dove'],['Bouteille de champagne',''],['Rose','papier flash'],['Verre','Perfect Glass'],['Coupe de champagne',''],['Glaçon',''],['Macarons','']]],
+  ['Transformations',[['Eau → vin','Infinity Wine'],['Rose qui change de couleur','Rainbow'],['Billet qui change',''],['Cigarette qui se rallume','']]],
+  ['Lévitations',[['Paille','FI / Loops'],['Coupe qui flotte','Airborne'],['Rose qui lévite',''],['Foulard qui lévite',''],['Billets qui lévitent',''],['Verre qui flotte',"Carson's Drink"],['Coupe qui vole','zombie ball sous foulard']]],
+  ['Feu & Lumière',[['Flamme → rose',''],['Lumos','flash dent'],["D'Light flash",''],['Feu aux doigts',''],['Flash papier / coton flash','']]],
+  ['Mentalisme & Close-up',[['Extreme Burn',''],['Change de billet',''],['Flash mentalisme',''],['Max Shot','apparition shooter'],['Split',''],['Flash téléphone',''],['Mouth coil',''],['Inscription secrète dans la main',''],['Torsion de métal','']]],
+  ['Autres',[['Neige japonaise','']]],
+];
+function importEffetsBase(){
+  const exist=new Set(DB.all('effets').map(e=>(e.nom||'').toLowerCase())); let n=0;
+  EFFETS_BASE.forEach(([cat,list])=>list.forEach(([nom,mat])=>{ if(exist.has(nom.toLowerCase()))return;
+    DB.save('effets',{id:uid('EFF'),nom,categorie:cat,description:'',materiel:mat}); n++; }));
+  toast(n?('✨ '+n+' effets importés'):'Déjà à jour','ok'); gererEffets();
+}
+
+/* ---------- FICHES PDF ---------- */
+function pdfSection(doc,y,title,lines){
+  const arr=(lines||[]).filter(Boolean); if(!arr.length) return y;
+  if(y>258){ doc.addPage(); y=20; }
+  doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(...P_OR); doc.text(title,15,y); y+=5.6;
+  doc.setFont('helvetica','normal'); doc.setFontSize(9.6); doc.setTextColor(...P_NOIR);
+  arr.forEach(l=>{ doc.splitTextToSize(l,180).forEach(s=>{ if(y>276){ doc.addPage(); y=20; } doc.text(s,15,y); y+=5; }); });
+  return y+3.5;
+}
+function effLabel(eid){ const e=DB.get('effets',eid); return e?(e.nom+(e.materiel?(' ('+e.materiel+')'):'')):''; }
+function pdfFicheMagicien(pid,mid){
+  const p=getP(pid); const m=(p.equipe||[]).find(x=>x.id===mid); if(!p||!m)return null;
+  const mag=DB.get('magiciens',m.magicienId)||{}; const doc=pdfNew();
+  let y=pdfHeader(doc,'FICHE MISSION',p.nom||'Imagine',[['Date',p.date?fmtDateShort(p.date):'—'],['Rôle',m.role||'—']]);
+  y=pdfBlocs(doc,y,
+    {titre:'MAGICIEN',nom:((mag.prenom?mag.prenom+' ':'')+(mag.nom||'')).trim()||'—',lines:[mag.ville,mag.tel,mag.email]},
+    {titre:'ÉVÉNEMENT',lines:['Agence : '+(p.agence||'—'),'Lieu : '+(p.lieu||'—'),p.typeEvenement?('Type : '+p.typeEvenement):'',p.nbInvites?('Invités : '+p.nbInvites):'',p.ambiance?('Ambiance : '+p.ambiance):'']});
+  y+=2;
+  y=pdfSection(doc,y,'✨ TES EFFETS',(m.effets||[]).map(eid=>'•  '+effLabel(eid)));
+  const prat=[];
+  if(m.materielPerso) prat.push('Matériel perso à apporter : '+m.materielPerso);
+  if(p.costume) prat.push('Costume : '+p.costume);
+  const lo=p.logistique||{}; if(lo.transport)prat.push('Transport : '+lo.transport); if(lo.hebergement)prat.push('Hébergement : '+lo.hebergement); if(lo.repas)prat.push('Repas : '+lo.repas);
+  if(m.notes) prat.push('Notes : '+m.notes);
+  y=pdfSection(doc,y,'INFOS PRATIQUES',prat);
+  const eqMag=(p.equipement||[]).filter(e=>e.par==='Magiciens').map(e=>'•  '+e.label);
+  const eqAg=(p.equipement||[]).concat(p.consommables||[]).filter(e=>e.par==='Agence').map(e=>'•  '+e.label+(e.qte?(' ×'+e.qte):''));
+  y=pdfSection(doc,y,'À APPORTER PAR LES MAGICIENS',eqMag);
+  y=pdfSection(doc,y,"FOURNI PAR L'AGENCE",eqAg);
+  y=pdfSection(doc,y,'BRIEF & RÈGLES',[p.notes,p.briefUrl?('Brief complet : '+p.briefUrl):''].filter(Boolean));
+  pdfFooter(doc); return doc;
+}
+function pdfFicheProjet(pid){
+  const p=getP(pid); if(!p)return null; const doc=pdfNew();
+  let y=pdfHeader(doc,'FICHE PROJET',p.nom||'Imagine',[['Date',p.date?fmtDateShort(p.date):'—'],['Statut',p.statut||'—']]);
+  y=pdfBlocs(doc,y,
+    {titre:'ÉVÉNEMENT',nom:p.nom||'—',lines:['Agence : '+(p.agence||'—'),'Lieu : '+(p.lieu||'—'),p.typeEvenement?('Type : '+p.typeEvenement):'',p.nbInvites?('Invités : '+p.nbInvites):'']},
+    {titre:'CADRE',lines:[p.theme?('Thème : '+p.theme):'',p.ambiance?('Ambiance : '+p.ambiance):'',p.costume?('Costume : '+p.costume):'',(p.logistique||{}).transport?('Transport : '+p.logistique.transport):'']});
+  y+=2;
+  y=pdfSection(doc,y,'🎩 ÉQUIPE',(p.equipe||[]).map(m=>'•  '+magNom(m.magicienId)+' ('+((DB.get('magiciens',m.magicienId)||{}).ville||'—')+') — '+(m.role||'—')+((m.effets||[]).length?(' — Effets : '+(m.effets||[]).map(eid=>(DB.get('effets',eid)||{}).nom).filter(Boolean).join(', ')):'')));
+  y=pdfSection(doc,y,'🍾 CONSOMMABLES',(p.consommables||[]).map(c=>'•  '+c.label+(c.qte?(' ×'+c.qte):'')+(c.par?('  — '+c.par):'')));
+  y=pdfSection(doc,y,'🔔 ÉQUIPEMENT',(p.equipement||[]).map(e=>'•  '+e.label+(e.par?('  — '+e.par):'')));
+  const lo=p.logistique||{};
+  y=pdfSection(doc,y,'🚚 LOGISTIQUE',[lo.transport?('Transport : '+lo.transport):'',lo.hebergement?('Hébergement : '+lo.hebergement):'',lo.repas?('Repas : '+lo.repas):'',p.costume?('Costume : '+p.costume):'']);
+  y=pdfSection(doc,y,'✅ CHECKLIST',(p.checklist||[]).map(c=>(c.fait?'[x] ':'[ ] ')+c.label));
+  y=pdfSection(doc,y,'📋 BRIEF & RÈGLES',[p.notes,p.notesBrief,p.briefUrl?('Brief complet : '+p.briefUrl):''].filter(Boolean));
+  pdfFooter(doc); return doc;
+}
+function showDocPreview(doc,title,filename){
+  const url=doc.output('bloburl'); window._pvDoc=doc; window._pvName=(filename||'document').replace(/[^A-Za-z0-9_-]/g,'_');
+  const ov=document.getElementById('pdfviewer');
+  ov.innerHTML=`<div class="pv-bar"><span class="pv-title">${esc(title||'Document')}</span><span style="display:flex;gap:8px;flex-shrink:0"><button class="btn btn-ghost btn-sm" onclick="window._pvDoc&&window._pvDoc.save(window._pvName+'.pdf')">⬇ Télécharger</button><button class="btn btn-or btn-sm" onclick="closePdfViewer()">✕ Fermer</button></span></div><iframe src="${url}" class="pv-frame" title="aperçu"></iframe>`;
+  ov.classList.add('open');
+}
+function ficheMagicienOpen(pid,mid){ const doc=pdfFicheMagicien(pid,mid); if(!doc)return; showDocPreview(doc,'Fiche · '+magNom((getP(pid).equipe.find(x=>x.id===mid)||{}).magicienId),'fiche-'+magNom((getP(pid).equipe.find(x=>x.id===mid)||{}).magicienId)); }
+function ficheProjetOpen(pid){ const doc=pdfFicheProjet(pid); if(!doc)return; showDocPreview(doc,'Fiche projet · '+(getP(pid).nom||''),'fiche-projet'); }
 
 (async function boot(){
   try{ applyTheme(localStorage.getItem('lm_theme')||'dark'); }catch(_){ applyTheme('dark'); }
