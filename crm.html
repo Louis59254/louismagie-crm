@@ -14,7 +14,7 @@
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
   --or:#FF7700;--or-deep:#E56200;--or-soft:rgba(255,119,0,.14);--or-line:rgba(255,119,0,.35);
-  --noir:#0A0A08;--noir2:#141410;--noir3:#1E1E1A;--anthr:#2C2C28;
+  --noir:#0A0A08;--noir2:#141410;--noir3:#1E1E1A;--anthr:#2C2C28;--bd:#2C2C28;
   --creme:#F5F2EE;--blanc:#FDFCFB;--gc:#C8C3BB;--gm:#8A8580;--gf:#5A5650;
   --ok:#3FB97A;--okl:rgba(63,185,122,.14);
   --warn:#E8A13A;--warnl:rgba(232,161,58,.14);
@@ -26,7 +26,7 @@
 }
 :root[data-theme="light"]{
   --or:#EA6A00;--or-deep:#C75900;--or-soft:rgba(234,106,0,.12);--or-line:rgba(234,106,0,.3);
-  --noir:#F0EBE4;--noir2:#FFFFFF;--noir3:#F4F0EA;--anthr:#E1DACF;
+  --noir:#F0EBE4;--noir2:#FFFFFF;--noir3:#F4F0EA;--anthr:#E1DACF;--bd:#E1DACF;
   --creme:#1C1A15;--blanc:#0E0E0C;--gc:#3A372F;--gm:#6E695F;--gf:#A39C90;
   --ok:#2E9E63;--okl:rgba(46,158,99,.13);
   --warn:#C97E14;--warnl:rgba(201,126,20,.13);
@@ -156,8 +156,9 @@ tbody tr:hover td{background:var(--noir3)}
 .action-box-title{font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--gm);margin-bottom:8px}
 .action-box .btn{width:100%;justify-content:center;margin-bottom:6px}
 @media(max-width:560px){.action-grid{grid-template-columns:1fr}}
-.badge.refuse,.badge.relance2,.badge.impaye{background:var(--erl);color:var(--er)}
-.badge.contentieux{background:#3a0d0a;color:#FF8B7E}
+.badge.refuse,.badge.relance2,.badge.impaye,.badge.annulee{background:var(--erl);color:var(--er)}
+.badge.contentieux,.badge.encontentieux{background:#3a0d0a;color:#FF8B7E}
+.badge.facture,.badge.solde,.badge.avoir,.badge.complete{background:var(--infol);color:var(--info)}
 
 /* ── BUTTONS ── */
 .btn{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border:none;border-radius:var(--rsm);font-family:'DM Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,sans-serif;font-size:12px;font-weight:600;cursor:pointer;transition:all .16s;white-space:nowrap}
@@ -332,10 +333,16 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
   .cal-grid{gap:3px}.cal-cell{min-height:62px;font-size:10px;padding:4px 5px}
   /* lignes de devis : empile proprement */
   #dv-lines .form-grid{grid-template-columns:1fr 1fr!important}
-  /* modale plein écran */
+  /* modale plein écran (100dvh = barre Safari iOS prise en compte) */
   #modal-bg{padding:0}
-  .modal{width:100%;max-width:100%;height:100vh;max-height:100vh;border-radius:0;border:none}
-  .modal-footer{position:sticky;bottom:0;background:var(--noir2)}
+  .modal{width:100%;max-width:100%;height:100vh;height:100dvh;max-height:100vh;max-height:100dvh;border-radius:0;border:none}
+  .modal-footer{position:sticky;bottom:0;background:var(--noir2);padding-bottom:calc(10px + env(safe-area-inset-bottom))}
+  /* anti-zoom iOS : tout champ de saisie >=16px, y compris styles inline */
+  input,select,textarea,#mkt-editor,[contenteditable]{font-size:16px!important}
+  /* cibles tactiles confortables */
+  .qa{width:40px;height:40px;font-size:16px}
+  #toast{white-space:normal;max-width:92vw;text-align:center}
+  .modal .form-grid,.modal .form-grid.c3{grid-template-columns:1fr!important}
 }
 </style>
 </head>
@@ -348,6 +355,7 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
     <div class="login-logo">LouisMagie</div>
     <div class="login-title">Espace<br><em>Administration</em></div>
     <input type="password" id="pwd" placeholder="Mot de passe" onkeydown="if(event.key==='Enter')doLogin()">
+    <label style="display:flex;align-items:center;gap:8px;justify-content:center;font-size:13px;color:var(--gm);margin-bottom:12px;cursor:pointer"><input type="checkbox" id="pwd-stay" checked style="width:16px;height:16px">Rester connecté sur cet appareil</label>
     <button class="login-btn" onclick="doLogin()">Accéder au CRM</button>
     <div class="login-err" id="login-err">Mot de passe incorrect</div>
   </div>
@@ -392,6 +400,7 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
     <button class="mn" data-v="agenda" onclick="nav('agenda')"><span class="ic">📅</span>Agenda</button>
     <button class="mn" data-v="devis" onclick="nav('devis')"><span class="ic">📄</span>Devis</button>
     <button class="mn" data-v="factures" onclick="nav('factures')"><span class="ic">🧾</span>Factures</button>
+    <button class="mn" data-v="projets" onclick="nav('projets')"><span class="ic">🎭</span>Imagine</button>
   </nav>
   <div id="pdfviewer"></div>
 
@@ -464,9 +473,10 @@ function fmtDateFr(d){ if(!d) return '—'; const x=new Date(d); if(isNaN(x)) re
   return x.toLocaleDateString('fr-FR',{day:'2-digit',month:'long',year:'numeric'}); }
 function fmtDateShort(d){ if(!d) return '—'; const x=new Date(d); if(isNaN(x)) return '—';
   return x.toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit',year:'2-digit'}); }
-function todayISO(){ return new Date().toISOString().slice(0,10); }
-function daysFromNow(d){ return Math.floor((new Date(d)-new Date())/(1000*86400)); }
-function daysSince(d){ return Math.floor((new Date()-new Date(d))/(1000*86400)); }
+/* Dates civiles LOCALES (les 'YYYY-MM-DD' sont parsés en UTC par new Date → décalage d'1 jour une partie de la journée) */
+function todayISO(){ const n=new Date(); return n.getFullYear()+'-'+String(n.getMonth()+1).padStart(2,'0')+'-'+String(n.getDate()).padStart(2,'0'); }
+function daysFromNow(d){ if(!d) return NaN; return Math.round((new Date(String(d).slice(0,10)+'T00:00:00')-new Date(todayISO()+'T00:00:00'))/86400000); }
+function daysSince(d){ return -daysFromNow(d); }
 function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function nextId(prefix, entity){
   const yr=new Date().getFullYear();
@@ -592,7 +602,7 @@ function applyTheme(t){
 function toggleTheme(){ applyTheme((document.documentElement.getAttribute('data-theme')==='light')?'dark':'light'); }
 function chartColors(){ const light=document.documentElement.getAttribute('data-theme')==='light';
   return { grid: light?'rgba(0,0,0,.08)':'rgba(255,255,255,.06)', txt: light?'#6E695F':'#8A8580', legend: light?'#3A372F':'#C8C3BB' }; }
-function badge(statut){ const s=(statut||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z]/g,'');
+function badge(statut){ const s=(statut||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]/g,'');
   return '<span class="badge '+s+'">'+esc(statut)+'</span>'; }
 function progressBar(steps){ // [{label,sub,state:'done'|'current'|'todo'|'skip'}]
   return '<div class="prog">'+steps.map(s=>`<div class="prog-step ${s.state}">
@@ -610,7 +620,7 @@ async function doLogin(){
     // Vérif côté serveur : le mot de passe = clé de sync. 1er appareil = définit le mot de passe.
     const j=await cloudPost({action:'login',auth:hash});
     if(j&&j.ok){
-      sessionStorage.setItem('lm_authh',hash); sessionStorage.setItem('lm_auth','1');
+      authStore(hash);
       const c=DB.config(); if(c.passwordHash!==hash){ c.passwordHash=hash; DB.saveConfig(c); } // garde pour le mode hors-ligne
       showApp(); return;
     }
@@ -618,10 +628,13 @@ async function doLogin(){
     if(j && j.ok===false && j.error==='non autorisé'){ errEl.style.display='block'; return; }
   }
   // hors-ligne : comparaison locale
-  if(hash===DB.config().passwordHash){ sessionStorage.setItem('lm_authh',hash); sessionStorage.setItem('lm_auth','1'); showApp(); }
+  if(hash===DB.config().passwordHash){ authStore(hash); showApp(); }
   else errEl.style.display='block';
 }
-function doLogout(){ sessionStorage.removeItem('lm_auth'); sessionStorage.removeItem('lm_authh'); location.reload(); }
+function authStore(hash){ const stay=(document.getElementById('pwd-stay')||{}).checked;
+  sessionStorage.setItem('lm_authh',hash); sessionStorage.setItem('lm_auth','1');
+  if(stay){ localStorage.setItem('lm_authh',hash); localStorage.setItem('lm_auth','1'); } }
+function doLogout(){ ['lm_auth','lm_authh'].forEach(k=>{ sessionStorage.removeItem(k); localStorage.removeItem(k); }); location.reload(); }
 function showApp(){
   document.getElementById('login-screen').style.display='none';
   document.getElementById('app').style.display='flex';
@@ -649,8 +662,9 @@ function nav(view,params){
   const tt=document.getElementById('topbar-title');
   tt.innerHTML=(VIEW_TITLES[view]||'')+' <span id="topbar-date">· '+new Date().toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'})+'</span>';
   document.getElementById('topbar-actions').innerHTML='';
-  document.querySelectorAll('#mobnav .mn').forEach(b=>b.classList.toggle('active', b.dataset.v===view));
+  document.querySelectorAll('#mobnav .mn').forEach(b=>b.classList.toggle('active', b.dataset.v===navKey));
   toggleSidebar(false);
+  window.scrollTo(0,0);
   if(RENDERERS[view]) RENDERERS[view](currentParams);
   else if(vEl) vEl.innerHTML='<div class="empty"><div class="empty-icon">🛠️</div><div class="empty-text">Vue en construction</div><div class="empty-sub">Livrée au prochain incrément.</div></div>';
 }
@@ -743,10 +757,21 @@ RENDERERS.dashboard=function(){
   // Alertes (fermables : × masque X jours, ré-apparaît ensuite)
   let alertes='';
   function alrt(key,type,icon,txt,days){ if(key&&isSnoozed(key))return; alertes+=alertHtml(type,icon,txt,key,days); }
-  const relancesDues=factures.filter(f=>f.statut==='Émise'&&daysSince(f.dateEcheance)>0);
-  if(relancesDues.length) alrt('relances-due','danger','🔔','<strong>'+relancesDues.length+' facture(s) échue(s)</strong> — relance à envoyer. <a onclick="nav(\'factures\')" style="color:inherit;text-decoration:underline;cursor:pointer">Voir factures</a>',3);
+  // Factures échues à relancer — inclut celles déjà en Relance 1/2 (délai suivant écoulé)
+  const cfgAl=DB.config();
+  const relancesDues=factures.filter(f=>{
+    if(f.type==='avoir'||f.statut==='Annulée'||f.statut==='Payée') return false;
+    if(f.statut==='Émise') return daysSince(f.dateEcheance)>0;
+    if(f.statut==='Relance 1') return f.dateRelance1&&daysSince(f.dateRelance1)>(cfgAl.delaiRelance2||15);
+    if(f.statut==='Relance 2') return f.dateRelance2&&daysSince(f.dateRelance2)>15;
+    return false;
+  });
+  relancesDues.forEach(f=>{ alrt('relance-'+f.id,'danger','🔔','<strong>Facture '+esc(f.id)+' impayée</strong> ('+fmtEur(f.soldeDu)+' · '+esc(clientNomFacture(f))+') — '+(f.statut==='Émise'?'relance 1':(f.statut==='Relance 1'?'relance 2':'contentieux ?'))+' à envoyer. <a onclick="voirFacture(\''+f.id+'\')" style="color:inherit;text-decoration:underline;cursor:pointer">Ouvrir</a>',3); });
+  // Prestations passées jamais clôturées → bloque la facture de solde + la demande d'avis
+  prestations.filter(p=>p.statutRealisation==='Confirmée'&&p.dateEvenement&&daysSince(p.dateEvenement)>0&&daysSince(p.dateEvenement)<=45).forEach(p=>{
+    alrt('cloture-'+p.id,'warning','🎬','<strong>Prestation passée</strong> ('+fmtDateShort(p.dateEvenement)+' · '+esc(p.typePrestation)+') — bien passée ? <a onclick="marquerRealisee(\''+p.id+'\')" style="color:inherit;text-decoration:underline;cursor:pointer">✓ Marquer réalisée</a> pour débloquer la facture de solde et l\'avis Google.',2); });
   const devisVieux=devis.filter(d=>d.statut==='Envoyé'&&daysSince(d.dateEnvoi)>7);
-  if(devisVieux.length) alrt('devis-vieux','warning','⏳','<strong>'+devisVieux.length+' devis</strong> envoyé(s) sans réponse depuis +7 jours. <a onclick="nav(\'devis\')" style="color:inherit;text-decoration:underline;cursor:pointer">Relancer</a>',3);
+  devisVieux.forEach(d=>{ alrt('dvieux-'+d.id,'warning','⏳','<strong>Devis '+esc(d.id)+' sans réponse</strong> ('+esc(d.nomClient)+', envoyé le '+fmtDateShort(d.dateEnvoi)+'). <a onclick="voirDevis(\''+d.id+'\')" style="color:inherit;text-decoration:underline;cursor:pointer">Ouvrir</a>',3); });
   const prestaProches=prestations.filter(p=>p.statutRealisation==='Confirmée'&&daysFromNow(p.dateEvenement)>=0&&daysFromNow(p.dateEvenement)<=7);
   prestaProches.forEach(p=>{ const j=daysFromNow(p.dateEvenement);
     alrt('presta-'+p.id,'info','📅','<strong>Prestation '+(j===0?"aujourd'hui":'J-'+j)+'</strong> · '+esc(p.typePrestation)+' — '+esc(p.lieu)+' ('+esc(p.horaire||p.creneau)+'). Contact : '+esc(p.contactSurPlace||'—'),2); });
@@ -755,6 +780,23 @@ RENDERERS.dashboard=function(){
   trimsADeclarer().forEach(q=>{ const ca=caTrimestre(q.an,q.t); const ech=trimEcheance(q.an,q.t); const jE=daysFromNow(ech);
     alrt('urssaf-'+q.an+'T'+q.t, q.et==='retard'?'danger':'warning', q.et==='retard'?'⚠️':'📊',
       '<strong>Déclaration URSSAF '+q.an+' T'+q.t+' '+(q.et==='retard'?'en retard':'à faire')+'</strong> — CA '+fmtEur(ca)+', échéance '+fmtDateShort(ech)+(jE>=0?(' (dans '+jE+' j)'):(' (dépassée de '+(-jE)+' j)'))+'. <a onclick="nav(\'compta\')" style="color:inherit;text-decoration:underline;cursor:pointer">Déclarer</a>',7); });
+  // 🎭 Projets Imagine qui approchent (J-14) : équipe pas prête = alerte forte
+  DB.all('projets').filter(x=>x.date&&x.statut!=='Annulé'&&x.statut!=='Facturé').forEach(x=>{
+    const j=daysFromNow(x.date); if(j<0||j>14) return;
+    const eq=x.equipe||[]; const pasConf=eq.filter(mm=>mm.dispo!=='Confirmé').length;
+    const type=(pasConf||!eq.length)?'warning':'info';
+    alrt('proj-'+x.id, j<=2?'danger':type,'🎭','<strong>Projet '+(j===0?"aujourd'hui":'J-'+j)+'</strong> · '+esc(x.nom||'Imagine')+' — '+esc(x.lieu||'')
+      +(eq.length?(' · '+(eq.length-pasConf)+'/'+eq.length+' magiciens confirmés'):' · <strong>aucun magicien</strong>')
+      +(pasConf||!eq.length?' ⚠':'')
+      +'. <a onclick="nav(\'projet\',{id:\''+x.id+'\'})" style="color:inherit;text-decoration:underline;cursor:pointer">Ouvrir le projet</a>',2); });
+  // 💰 Acompte pas reçu alors que l'événement approche (J-21) : la date n'est pas réellement bloquée
+  devis.filter(d=>d.statut==='Accepté'&&(d.acomptePct||0)>0&&d.dateEvenement).forEach(d=>{
+    const j=daysFromNow(d.dateEvenement); if(j<0||j>21) return;
+    alrt('acpt-'+d.id,'warning','💰','<strong>Acompte non reçu</strong> — '+esc(d.nomClient)+' ('+fmtDateShort(d.dateEvenement)+', J-'+j+'), la date n\'est pas garantie. <a onclick="voirDevis(\''+d.id+'\')" style="color:inherit;text-decoration:underline;cursor:pointer">Voir le devis</a>',3); });
+  // ⏳ Devis envoyé dont la DATE d'événement approche sans réponse (indépendant des 7 jours d'envoi)
+  devis.filter(d=>d.statut==='Envoyé'&&d.dateEvenement).forEach(d=>{
+    const j=daysFromNow(d.dateEvenement); if(j<0||j>10) return;
+    alrt('devy-'+d.id,'warning','⏳','<strong>Sans réponse & événement dans '+j+' j</strong> — devis '+esc(d.id)+' ('+esc(d.nomClient)+'). Relance ou libère le créneau. <a onclick="voirDevis(\''+d.id+'\')" style="color:inherit;text-decoration:underline;cursor:pointer">Ouvrir</a>',2); });
   if(!alertes) alertes=alertHtml('success','✓','Aucune alerte — tout est à jour. 🎩');
 
   // Activité
@@ -863,6 +905,31 @@ RENDERERS.stats=function(){
 
 /* ═══════════ VUE : DEMANDES ═══════════ */
 let _fDem={statut:'',source:''};
+/* Saisie manuelle d'une demande (téléphone, Instagram, bouche-à-oreille…) — garde la source pour les stats */
+function nouvelleDemande(){
+  const body=`<div class="form-grid">
+    <div class="form-group"><label class="form-label">Nom <span class="req">*</span></label><input class="form-control" id="nd-nom"></div>
+    <div class="form-group"><label class="form-label">Source</label><select class="form-control" id="nd-source">${['Téléphone','Instagram','Site web','Google','Recommandation','Facebook','Autre'].map(s=>`<option>${s}</option>`).join('')}</select></div>
+    <div class="form-group"><label class="form-label">Email</label><input class="form-control" id="nd-email"></div>
+    <div class="form-group"><label class="form-label">Téléphone</label><input class="form-control" id="nd-tel"></div>
+    <div class="form-group"><label class="form-label">Type d'événement</label><select class="form-control" id="nd-type">${['Mariage','Anniversaire','Soirée entreprise','Soirée privée','Autre'].map(t=>`<option>${t}</option>`).join('')}</select></div>
+    <div class="form-group"><label class="form-label">Date de l'événement</label><input class="form-control" type="date" id="nd-date"></div>
+    <div class="form-group"><label class="form-label">Lieu</label><input class="form-control" id="nd-lieu"></div>
+    <div class="form-group"><label class="form-label">Invités</label><input class="form-control" id="nd-invites"></div>
+  </div>
+  <div class="form-group"><label class="form-label">Prestation souhaitée / notes</label><textarea class="form-control" id="nd-notes" style="min-height:60px"></textarea></div>`;
+  openModal('Nouvelle demande',body,
+    `<button class="btn btn-ghost" onclick="closeModal()">Annuler</button><button class="btn btn-or" onclick="saveNouvelleDemande()">💾 Enregistrer</button>`);
+}
+function saveNouvelleDemande(){
+  const g=k=>((document.getElementById('nd-'+k)||{}).value||'').trim();
+  if(!g('nom')){ toast('Le nom est requis','err'); return; }
+  DB.save('demandes',{id:uid('DEM'),date:todayISO(),nom:g('nom'),email:g('email'),tel:g('tel'),typeEvenement:g('type'),
+    dateEvenement:g('date'),creneau:'',lieu:g('lieu'),distanceKm:0,nbInvites:g('invites'),prestationSouhaitee:g('notes'),
+    duree:'',budgetEstime:'',source:g('source'),statut:'Nouveau',notes:''});
+  logActivite('Demande saisie · '+g('nom')+' ('+g('source')+')');
+  closeModal(); updateBadges(); RENDERERS.demandes(); toast('📥 Demande enregistrée','ok');
+}
 RENDERERS.demandes=function(){
   const all=DB.all('demandes');
   const sources=[...new Set(all.map(d=>d.source).filter(Boolean))];
@@ -896,6 +963,7 @@ RENDERERS.demandes=function(){
     <div class="table-wrap"><div class="table-header">
       <div class="table-title">Demandes reçues</div>
       <div class="table-filters">
+        <button class="btn btn-or btn-sm" onclick="nouvelleDemande()">+ Nouvelle demande</button>
         <select class="filter-input" onchange="_fDem.statut=this.value;RENDERERS.demandes()">
           ${['','Nouveau','En cours','Converti','Ignoré'].map(s=>opt(s,_fDem.statut)).join('')}
         </select>
@@ -1067,7 +1135,8 @@ function timelineDevis(id){
     DB.all('recettes').filter(r=>r.ref===fs.id).forEach(r=>add(r.date,'💰','Solde encaissé · '+fmtEur(r.montant),'#C4973A'));
     add(fs.dateRelance1,'🔔','Relance 1 envoyée','#E67E22'); add(fs.dateRelance2,'🔔','Relance 2 envoyée','#E5564B');
     if(fs.statut==='Payée') add(fs.datePaiement,'✅','Facture payée','#27AE60'); }
-  DB.all('mails').filter(m=>m.kind==='avis'&&m.ref===id).forEach(m=>add(m.date,'⭐','Demande d\'avis Google envoyée','#E8A13A'));
+  const pIds=DB.all('prestations').filter(p=>p.idDevis===id).map(p=>p.id);
+  DB.all('mails').filter(m=>m.kind==='avis'&&(m.ref===id||pIds.includes(m.ref))).forEach(m=>add(m.date,'⭐','Demande d\'avis Google envoyée','#E8A13A'));
   ev.sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
   if(!ev.length) return '<div class="td-dim" style="padding:4px">Aucun événement enregistré.</div>';
   return '<div style="position:relative;padding-left:4px;margin-top:8px">'
@@ -1387,12 +1456,14 @@ function supprimerDevis(id){
   if(fac.length){ openModal('Suppression impossible',
     '<div class="alert warning" style="margin:0"><span class="alert-icon">⚠</span><div>Une facture (<strong>'+esc(fac[0].id)+'</strong>) est liée à ce devis. Supprime d\'abord la facture pour des raisons comptables.</div></div>',
     '<button class="btn btn-ghost" onclick="voirDevis(\''+id+'\')">Retour</button>'); return; }
+  const recs=DB.all('recettes').filter(r=>r.ref===id);
   openModal('Supprimer le devis '+esc(id)+' ?',
-    '<div class="alert danger" style="margin:0"><span class="alert-icon">🗑</span><div>Action irréversible. Le devis'+(pres.length?' et sa prestation liée ('+esc(pres[0].dateEvenement)+')':'')+' seront supprimés.</div></div>',
+    '<div class="alert danger" style="margin:0"><span class="alert-icon">🗑</span><div>Action irréversible. Le devis'+(pres.length?' et sa prestation liée ('+esc(pres[0].dateEvenement)+')':'')+' seront supprimés.'+(recs.length?'<br><strong>⚠ '+recs.length+' recette(s) au livre ('+fmtEur(recs.reduce((s,r)=>s+(+r.montant||0),0))+') seront aussi retirées</strong> (sinon elles fausseraient l\'URSSAF).':'')+'</div></div>',
     '<button class="btn btn-ghost" onclick="voirDevis(\''+id+'\')">Annuler</button><button class="btn btn-danger" onclick="confirmSupprimerDevis(\''+id+'\')">Supprimer définitivement</button>');
 }
 function confirmSupprimerDevis(id){
   DB.all('prestations').filter(p=>p.idDevis===id).forEach(p=>DB.remove('prestations',p.id));
+  DB.all('recettes').filter(r=>r.ref===id).forEach(r=>DB.remove('recettes',r.id));   // pas de recette orpheline au livre
   DB.remove('devis',id);
   logActivite('Devis '+id+' supprimé');
   closeModal(); updateBadges(); RENDERERS.devis(); toast('Devis supprimé','ok');
@@ -1581,9 +1652,9 @@ RENDERERS.agenda=function(){
     const ds=`${y}-${String(m+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
     const evts=prestations.filter(p=>p.dateEvenement===ds);
     const cls=p=>p.statutRealisation==='Réalisée'?'realisee':(p.statutRealisation==='Option'?'option':'');
-    const evtHtml=evts.map(p=>`<div class="cal-evt ${cls(p)}" onclick="event.stopPropagation();voirPrestation('${p.id}')">${esc(p.horaire||p.creneau||'')} · ${esc(p.typePrestation).slice(0,16)}</div>`).join('');
+    const evtHtml=evts.map(p=>`<div class="cal-evt ${cls(p)}" onclick="event.stopPropagation();voirPrestation('${p.id}')">${esc(p.horaire||p.creneau||'')} · ${esc((p.typePrestation||'').slice(0,16))}</div>`).join('');
     const projs=DB.all('projets').filter(x=>x.date===ds&&x.statut!=='Annulé');
-    const projHtml=projs.map(x=>`<div class="cal-evt" style="background:linear-gradient(135deg,#7B1FA2,#9C27B0);color:#fff;border:none" onclick="event.stopPropagation();nav('projet',{id:'${x.id}'})">🎭 ${esc(x.nom||'Projet').slice(0,15)}</div>`).join('');
+    const projHtml=projs.map(x=>`<div class="cal-evt" style="background:linear-gradient(135deg,#7B1FA2,#9C27B0);color:#fff;border:none" onclick="event.stopPropagation();nav('projet',{id:'${x.id}'})">🎭 ${esc((x.nom||'Projet').slice(0,15))}</div>`).join('');
     const rq=risqueJour(ds,null);
     const rqHtml=rq?`<div class="cal-risk ${rq.niveau==='risque'?'soft':''}" onclick="event.stopPropagation();analyseJour('${ds}')">⚠ ${rq.niveau==='conflit'?'conflit':'serré'}</div>`:'';
     cells+=`<div class="cal-cell ${ds===todayStr?'today':''}"><div class="cal-day">${day}</div>${evtHtml}${projHtml}${rqHtml}</div>`;
@@ -1608,7 +1679,7 @@ RENDERERS.agenda=function(){
       <div class="panel">
         <div class="cal-header">
           <button class="btn btn-ghost btn-sm" onclick="calNav(-1)">‹ Préc.</button>
-          <div class="cal-month">${moisLabel}</div>
+          <div class="cal-month" style="display:flex;align-items:center;gap:8px;justify-content:center">${moisLabel} <button class="btn btn-ghost btn-sm" onclick="_calRef=null;RENDERERS.agenda()" title="Revenir au mois courant">Aujourd'hui</button></div>
           <button class="btn btn-ghost btn-sm" onclick="calNav(1)">Suiv. ›</button>
         </div>
         <div class="cal-grid">${dows}${cells}</div>
@@ -1650,7 +1721,7 @@ function voirPrestation(id){
   if(p.statutRealisation==='Option') footer+=`<span class="td-dim" style="align-self:center">Devis non accepté — créneau en option</span>`;
   else if(p.statutRealisation!=='Réalisée') footer+=`<button class="btn btn-success" onclick="marquerRealisee('${id}')">✓ Marquer réalisée</button>`;
   else {
-    if(dev&&!DB.all('factures').find(f=>f.idDevis===dev.id)) footer+=`<button class="btn btn-ghost" onclick="facturerSolde('${dev.id}')">🧾 Facturer le solde</button>`;
+    if(dev&&!factSoldeDe(dev.id)) footer+=`<button class="btn btn-ghost" onclick="facturerSolde('${dev.id}')">🧾 Facturer le solde</button>`;
     footer+=`<button class="btn btn-or" onclick="avisGoogleMail('${id}')">${mailEnvoye('avis',id)?'★ Avis demandé':'★ Demander un avis Google'}</button>`;
   }
   openModal('Prestation · '+fmtDateShort(p.dateEvenement),body,footer);
@@ -1684,7 +1755,9 @@ function savePrestaNotes(id){ const p=DB.get('prestations',id); p.materielNotes=
 function marquerRealisee(id){
   const p=DB.get('prestations',id); p.statutRealisation='Réalisée'; DB.save('prestations',p);
   logActivite('Prestation réalisée · '+p.typePrestation+' ('+fmtDateShort(p.dateEvenement)+')');
-  closeModal(); RENDERERS.agenda(); toast('✓ Réalisée — solde facturable + avis Google à demander','ok');
+  closeModal(); updateBadges();
+  if(RENDERERS[_currentView]) RENDERERS[_currentView](currentParams);   // rafraîchit la vue courante (dashboard inclus)
+  toast('✓ Réalisée — solde facturable + avis Google à demander','ok');
 }
 function avisGoogleMail(id){
   const p=DB.get('prestations',id); if(!p)return;
@@ -1763,9 +1836,12 @@ function marquerPayee(id){
   const f=DB.get('factures',id); const solde=+f.soldeDu||0;
   f.statut='Payée'; f.datePaiement=todayISO(); f.soldeDu=0; DB.save('factures',f);
   addRecetteSolde(f,solde);
+  if(f.idProjet){ const p=DB.get('projets',f.idProjet); if(p){ p.statutAgence='Payé'; DB.save('projets',p); } }   // sync statut agence du projet
   logActivite('Facture '+id+' payée'); updateBadges(); RENDERERS.factures(); toast('✓ Facture payée — recette ajoutée au livre','ok');
 }
 function clientNomFacture(f){ if(f&&f.billingName) return f.billingName; const c=DB.get('clients',f.idClient); return c?(c.prenom+' '+c.nom).trim():((DB.get('devis',f.idDevis)||{}).nomClient||''); }
+/* Email destinataire d'une facture : override billing → fiche client → devis lié */
+function factEmailTo(f){ if(!f) return ''; return f.billingEmail||(DB.get('clients',f.idClient)||{}).email||(DB.get('devis',f.idDevis)||{}).email||''; }
 function envoyerFactureMail(id){
   const f=DB.get('factures',id); if(!f)return;
   const tpl=EMAIL_TPL.facture(f,clientNomFacture(f));
@@ -1867,11 +1943,22 @@ function creerAvoir(id){
   const wasPaid=f.statut==='Payée';
   if(!confirm('Créer un avoir qui ANNULE la facture '+id+' ?\n\n• La facture passe « Annulée »\n• Un avoir (montant négatif) est émis'+(wasPaid?'\n• L\'encaissement est retiré du livre de recettes':'')+'\n\nTu pourras ensuite refacturer proprement depuis le dossier.')) return;
   const m=factMontant(f);
-  DB.save('factures',{id:nextId('FAC','factures'),type:'avoir',dateEmission:todayISO(),idDevis:f.idDevis,idClient:f.idClient,
+  DB.save('factures',{id:nextId('FAC','factures'),type:'avoir',dateEmission:todayISO(),idDevis:f.idDevis,idClient:f.idClient,idProjet:f.idProjet||'',
+    designation:f.designation?('Avoir — '+f.designation):'',
     montantTTC:-(+f.montantTTC||0),montantFacture:-m,acompteVerse:0,soldeDu:0,dateEcheance:todayISO(),statut:'Émise',datePaiement:'',avoirDe:id,
     billingName:f.billingName||'',billingAddr:f.billingAddr||'',billingEmail:f.billingEmail||'',billingTel:f.billingTel||'',billingSiren:f.billingSiren||''});
   f.statut='Annulée'; f.soldeDu=0; DB.save('factures',f);
-  if(wasPaid) DB.all('recettes').filter(r=>r.ref===id).forEach(r=>DB.remove('recettes',r.id));   // annule la recette au livre
+  // Annule la recette au livre : les recettes d'acompte sont référencées par le DEVIS, les soldes par la FACTURE
+  if(wasPaid){
+    if(f.type==='acompte'){
+      DB.all('recettes').filter(r=>r.ref===f.idDevis&&r.type==='Acompte').forEach(r=>DB.remove('recettes',r.id));
+      const d=DB.get('devis',f.idDevis); if(d&&d.acompteRecu>0){ d.acompteRecu=0; DB.save('devis',d); }
+    } else {
+      DB.all('recettes').filter(r=>r.ref===id).forEach(r=>DB.remove('recettes',r.id));
+    }
+  }
+  // Facture de projet Imagine : ré-ouvre le projet pour permettre une refacturation propre
+  if(f.idProjet){ const p=DB.get('projets',f.idProjet); if(p){ if(p.factureId===id) p.factureId=''; if(p.statut==='Facturé') p.statut='Réalisé'; DB.save('projets',p); } }
   logActivite('Avoir émis sur facture '+id+(wasPaid?' — recette retirée':''));
   updateBadges(); toast('↩ Avoir créé — facture '+id+' annulée','ok'); nav('factures');
 }
@@ -1882,7 +1969,7 @@ function devisQuick(d){
   if(d.statut==='Brouillon') b=qbtn('btn-or',`envoyerDevisMail('${d.id}')`,'✉ Envoyer par email')+qbtn('btn-ghost',`majDevis('${d.id}','Envoyé')`,'✓ Déjà envoyé');
   else if(d.statut==='Envoyé') b=qbtn('btn-success',`majDevis('${d.id}','Accepté')`,'✓ Accepté')+qbtn('btn-warn',`majDevis('${d.id}','Refusé')`,'✗ Refusé');
   else if(d.statut==='Accepté') b=qbtn('btn-or',`enregistrerAcompte('${d.id}')`,'💰 Acompte reçu');
-  else if(d.statut==='Acompte reçu'&&!DB.all('factures').find(f=>f.idDevis===d.id)) b=qbtn('btn-or',`transformerEnFacture('${d.id}')`,'🧾 Créer la facture');
+  else if(d.statut==='Acompte reçu'&&!factSoldeDe(d.id)) b=qbtn('btn-or',`transformerEnFacture('${d.id}')`,'🧾 Facturer le solde');
   return b+qbtn('btn-ghost',`apercuPdf('Devis','${d.id}')`,'👁 PDF');
 }
 function factureQuick(f){
@@ -1897,11 +1984,18 @@ function factureQuick(f){
 function marquerRelanceManuelle(id){ const f=DB.get('factures',id); const type=f.statut==='Relance 1'?'R2':'R1'; confirmerRelance(id,type); voirFacture(id); toast('Relance '+type+' marquée faite','ok'); }
 function marquerFacturePayee(id){ marquerPayee(id); voirFacture(id); }
 function supprimerFacture(id){
+  const f=DB.get('factures',id)||{};
+  if(f.type==='avoir'&&f.avoirDe&&DB.get('factures',f.avoirDe)){
+    openModal('Suppression impossible','<div class="alert warning" style="margin:0"><span class="alert-icon">⚠</span><div>Cet avoir justifie l\'annulation de la facture <strong>'+esc(f.avoirDe)+'</strong>. Supprime d\'abord la facture annulée si tu veux vraiment tout effacer.</div></div>','<button class="btn btn-ghost" onclick="closeModal()">OK</button>'); return;
+  }
   openModal('Supprimer la facture '+esc(id)+' ?',
     '<div class="alert danger" style="margin:0"><span class="alert-icon">🗑</span><div>La facture sera supprimée (le devis lié repasse facturable). Les recettes déjà encaissées restent dans le livre de comptes.</div></div>',
     '<button class="btn btn-ghost" onclick="voirFacture(\''+id+'\')">Annuler</button><button class="btn btn-danger" onclick="confirmSupprimerFacture(\''+id+'\')">Supprimer définitivement</button>');
 }
-function confirmSupprimerFacture(id){ DB.remove('factures',id); logActivite('Facture '+id+' supprimée'); closeModal(); updateBadges(); RENDERERS.factures(); toast('Facture supprimée','ok'); }
+function confirmSupprimerFacture(id){
+  const f=DB.get('factures',id)||{};
+  if(f.idProjet){ const p=DB.get('projets',f.idProjet); if(p&&p.factureId===id){ p.factureId=''; if(p.statut==='Facturé')p.statut='Réalisé'; DB.save('projets',p); } }
+  DB.remove('factures',id); logActivite('Facture '+id+' supprimée'); closeModal(); updateBadges(); RENDERERS.factures(); toast('Facture supprimée','ok'); }
 function factureBack(id){
   const f=DB.get('factures',id); if(!f)return;
   const rmMail=k=>DB.all('mails').filter(m=>m.kind===k&&m.ref===id).forEach(m=>DB.remove('mails',m.id));
@@ -1997,12 +2091,14 @@ function pdfFacture(id,returnDoc){
 }
 function pdfBase64(kind,id){ try{ const doc=(kind==='Devis'?pdfDevis:pdfFacture)(id,true); return doc?doc.output('datauristring').split(',')[1]:''; }catch(_){ return ''; } }
 /* Visionneuse intégrée (pas de téléchargement forcé) */
+function isIOS(){ return /iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1); }
 function apercuPdf(kind,id){
   const doc=(kind==='Devis'?pdfDevis:pdfFacture)(id,true); if(!doc)return;
   const url=doc.output('bloburl');
   const rec=kind==='Devis'?DB.get('devis',id):DB.get('factures',id);
   const year=((kind==='Devis'?(rec&&rec.dateCreation):(rec&&rec.dateEmission))||'').slice(0,4)||(''+new Date().getFullYear());
   archivePdfCloud(doc, kind==='Devis'?'Devis':'Factures', id+'.pdf', year);   // archive Drive en passant
+  if(isIOS()){ window.open(url,'_blank'); return; }   // iOS : l'iframe ne montre que la 1ʳᵉ page → onglet natif multi-pages
   const ov=document.getElementById('pdfviewer');
   ov.innerHTML=`<div class="pv-bar"><span class="pv-title">${esc(kind)} · ${esc(id)}</span>
     <span style="display:flex;gap:8px;flex-shrink:0">
@@ -2187,7 +2283,7 @@ RENDERERS['devis-create']=function(params){
   else {
     d={id:'',dateCreation:todayISO(),idClient:'',nomClient:'',email:'',tel:'',dateEvenement:'',creneau:'Soirée',horaire:'',lieu:'',distanceKm:0,nbInvites:'',prestations:[{label:'',prix:0,duree:''}],montantHT:0,fraisDeplacement:0,tva:0,montantTTC:0,remise:0,acomptePct:cfg.acompteDefautPct||30,statut:'Brouillon',dateEnvoi:'',dateAcceptation:'',notes:'',idDemandeOrigine:''};
     if(params.demandeId){ const dem=DB.get('demandes',params.demandeId); if(dem){
-      Object.assign(d,{nomClient:dem.nom,email:dem.email,tel:dem.tel,dateEvenement:dem.dateEvenement,creneau:dem.creneau||'Soirée',lieu:dem.lieu,distanceKm:dem.distanceKm||0,nbInvites:dem.nbInvites,idDemandeOrigine:dem.id,prestations:[{label:dem.prestationSouhaitee||'',prix:0,duree:dem.duree||''}]}); } }
+      Object.assign(d,{nomClient:dem.nom,email:dem.email,tel:dem.tel,typeEvenement:dem.typeEvenement||'',dateEvenement:dem.dateEvenement,creneau:dem.creneau||'Soirée',lieu:dem.lieu,distanceKm:dem.distanceKm||0,nbInvites:dem.nbInvites,idDemandeOrigine:dem.id,prestations:[{label:dem.prestationSouhaitee||'',prix:0,duree:dem.duree||''}]}); } }
     if(params.clientId){ const c=DB.get('clients',params.clientId); if(c){
       Object.assign(d,{idClient:c.id,nomClient:(c.prenom+' '+c.nom).trim(),email:c.email,tel:c.tel,lieu:c.adresse}); } }
   }
@@ -2263,7 +2359,10 @@ function pickEntrepriseDevis(i){
   toast('Entreprise importée','ok');
 }
 function dvPickClient(name){
-  const c=DB.all('clients').find(x=>(x.prenom+' '+x.nom).trim()===name);
+  const n=(name||'').trim().toLowerCase();
+  const em=((document.getElementById('dv-email')||{}).value||'').trim().toLowerCase();
+  const c=DB.all('clients').find(x=>((x.prenom||'')+' '+(x.nom||'')).trim().toLowerCase()===n)
+        ||(em?DB.all('clients').find(x=>(x.email||'').toLowerCase()===em):null);
   if(c){ DV.idClient=c.id; document.getElementById('dv-email').value=c.email||''; document.getElementById('dv-tel').value=c.tel||''; if(!document.getElementById('dv-lieu').value)document.getElementById('dv-lieu').value=c.adresse||''; }
   else DV.idClient='';
 }
@@ -2324,10 +2423,10 @@ function dvSave(go){
   if(!DV.idClient && DV.nomClient){
     let c;
     if(DV.entreprise||DV.siren){
-      c={id:uid('CLI'),nom:DV.nomClient,prenom:'',email:DV.email,tel:DV.tel,adresse:DV.lieu,type:'entreprise',siren:DV.siren||'',naf:DV.naf||'',date1erDevis:todayISO(),nbDevis:0,nbPrestations:0,caTotal:0,sourceInitiale:''};
+      c={id:uid('CLI'),nom:DV.nomClient,prenom:'',email:DV.email,tel:DV.tel,adresse:DV.lieu,type:'entreprise',siren:DV.siren||'',naf:DV.naf||'',date1erDevis:todayISO(),nbDevis:0,nbPrestations:0,caTotal:0,sourceInitiale:(DB.get('demandes',DV.idDemandeOrigine)||{}).source||''};
     } else {
       const parts=DV.nomClient.split(' '); const nom=parts.length>1?parts.slice(1).join(' '):parts[0]; const prenom=parts.length>1?parts[0]:'';
-      c={id:uid('CLI'),nom,prenom,email:DV.email,tel:DV.tel,adresse:DV.lieu,type:'particulier',date1erDevis:todayISO(),nbDevis:0,nbPrestations:0,caTotal:0,sourceInitiale:''};
+      c={id:uid('CLI'),nom,prenom,email:DV.email,tel:DV.tel,adresse:DV.lieu,type:'particulier',date1erDevis:todayISO(),nbDevis:0,nbPrestations:0,caTotal:0,sourceInitiale:(DB.get('demandes',DV.idDemandeOrigine)||{}).source||''};
     }
     DB.save('clients',c); DV.idClient=c.id;
   }
@@ -2357,11 +2456,11 @@ const EMAIL_TPL={
       : (f.type==='solde'
         ? `Montant total prestation : ${fmtEur(f.montantTTC)}\nAcompte déjà versé : ${fmtEur(f.acompteVerse)}\nSolde à régler : ${fmtEur(f.soldeDu)}\nÉchéance : ${fmtDateFr(f.dateEcheance)}`
         : `Montant à régler : ${fmtEur(f.soldeDu)}\nÉchéance : ${fmtDateFr(f.dateEcheance)}`);
-    return { to:(DB.get('clients',f.idClient)||{}).email||'', subject:'Votre '+lbl+' LouisMagie — '+f.id,
+    return { to:factEmailTo(f), subject:'Votre '+lbl+' LouisMagie — '+f.id,
       body:`Bonjour ${prenomDe(nom)},\n\nVeuillez trouver ci-joint votre ${lbl} ${f.id}.\n\n${corps}\n\nMerci de votre confiance.\n\n${sig()}` }; },
-  relance1(f,nom){ return { to:(DB.get('clients',f.idClient)||{}).email||'', subject:'Rappel — facture '+f.id+' en attente de règlement',
+  relance1(f,nom){ return { to:factEmailTo(f), subject:'Rappel — facture '+f.id+' en attente de règlement',
       body:`Bonjour ${prenomDe(nom)},\n\nSauf erreur de notre part, la facture ${f.id} (solde de ${fmtEur(f.soldeDu)}), arrivée à échéance le ${fmtDateFr(f.dateEcheance)}, reste impayée.\n\nMerci de bien vouloir procéder au règlement dès que possible.\n\nBien cordialement,\n${sig()}` }; },
-  relance2(f,nom){ return { to:(DB.get('clients',f.idClient)||{}).email||'', subject:'2ème rappel — facture '+f.id,
+  relance2(f,nom){ return { to:factEmailTo(f), subject:'2ème rappel — facture '+f.id,
       body:`Bonjour ${prenomDe(nom)},\n\nMalgré notre première relance, la facture ${f.id} (${fmtEur(f.soldeDu)}) demeure impayée.\n\nSans règlement sous 8 jours, nous serons contraints d'engager une procédure de recouvrement.\n\nBien cordialement,\n${sig()}` }; },
   avis(p,nom){ const url=DB.config().googleReviewUrl||'';
     return { to:'', subject:'Merci pour votre confiance — votre avis compte',
@@ -2451,7 +2550,10 @@ function trimEtat(an,t){
 }
 function trimsADeclarer(){ // trimestres clos, non déclarés, avec du CA (évite de nagger sur les trimestres vides)
   const y=new Date().getFullYear(); const out=[];
-  [y-1,y].forEach(an=>[1,2,3,4].forEach(t=>{ const et=trimEtat(an,t); if((et==='a-declarer'||et==='retard')&&caTrimestre(an,t)>0) out.push({an,t,et}); }));
+  [y-1,y].forEach(an=>[1,2,3,4].forEach(t=>{ const et=trimEtat(an,t); if(et!=='a-declarer'&&et!=='retard')return;
+    const ca=caTrimestre(an,t); const j=daysFromNow(trimEcheance(an,t));
+    if(ca>0 || et==='retard' || j<=7) out.push({an,t,et});   // déclaration obligatoire même à 0 € → rappel J-7
+  }));
   return out;
 }
 function cotisTaux(){ return +(DB.config().tauxUrssaf||23.1); }
@@ -2661,13 +2763,13 @@ function mktRappels(){ // {c, raison, info, key}
   const now=new Date(), mois=now.getMonth(), an=now.getFullYear(); const out=[]; const vus=new Set();
   const add=(c,raison,info)=>{ const key='mkt-'+raison+'-'+c.id; if(isSnoozed(key))return; out.push({c,raison,info,key}); };
   // anniversaires ce mois (prestation/devis passé, même mois, >=1 an)
-  DB.all('devis').forEach(d=>{ if(!d.idClient||!d.dateEvenement)return; const dt=new Date(d.dateEvenement); if(isNaN(dt))return;
+  DB.all('devis').forEach(d=>{ if(!d.idClient||!d.dateEvenement)return; if(!['Accepté','Acompte reçu'].includes(d.statut))return; const dt=new Date(d.dateEvenement); if(isNaN(dt))return;
     const ya=an-dt.getFullYear(); if(dt.getMonth()===mois&&ya>=1){ const c=DB.get('clients',d.idClient); if(c&&c.email&&!vus.has('a'+c.id)){ vus.add('a'+c.id); add(c,'anniv','Prestation il y a '+ya+' an'+(ya>1?'s':'')+' ('+fmtDateShort(d.dateEvenement)+')'); } } });
   // dormants : dernier devis > 8 mois
   DB.all('clients').filter(c=>c.email).forEach(c=>{ const last=clientDernierEvt(c.id); if(last&&daysSince(last)>240&&!vus.has('a'+c.id)&&!vus.has('d'+c.id)){ vus.add('d'+c.id); add(c,'dormant','Pas de prestation depuis '+Math.round(daysSince(last)/30)+' mois'); } });
   return out;
 }
-function dismissRappel(key){ const c=DB.config(); c.dismissed=c.dismissed||{}; const u=new Date(); u.setDate(u.getDate()+90); c.dismissed[key]=u.toISOString(); DB.saveConfig(c); RENDERERS.marketing(); updateBadges(); toast('Suggestion masquée','ok'); }
+function dismissRappel(key){ mktCaptureDraft(); const c=DB.config(); c.dismissed=c.dismissed||{}; const u=new Date(); u.setDate(u.getDate()+90); c.dismissed[key]=u.toISOString(); DB.saveConfig(c); RENDERERS.marketing(); updateBadges(); toast('Suggestion masquée','ok'); }
 RENDERERS.marketing=function(){
   const clients=DB.all('clients').filter(c=>c.email);
   const rappels=mktRappels();
@@ -2816,6 +2918,7 @@ async function envoyerCampagne(){
 
   // ENVOI IMMÉDIAT
   if(auto){
+    if(!confirm('Envoyer MAINTENANT cet email à '+ids.length+' contact(s) ?\n\nObjet : '+subjectTpl)) return;
     let ok=0,fail=0;
     for(let i=0;i<ids.length;i++){ const c=DB.get('clients',ids[i]); if(!c||!c.email){fail++;continue;}
       const mailId=uid('MAIL');
@@ -2829,11 +2932,11 @@ async function envoyerCampagne(){
     toast('✅ '+ok+' envoyé(s)'+(fail?' · '+fail+' échec(s)':''),'ok'); RENDERERS.marketing();
   } else {
     const emails=ids.map(id=>(DB.get('clients',id)||{}).email).filter(Boolean).join(',');
-    window.open('mailto:?bcc='+encodeURIComponent(emails)+'&subject='+encodeURIComponent(subjectTpl.replace(/{prenom}/g,'').replace(/{nom}/g,''))+'&body='+encodeURIComponent(stripHtml(bodyHtmlTpl)),'_blank');
+    window.open('mailto:?bcc='+encodeURIComponent(emails)+'&subject='+encodeURIComponent(subjectTpl.replace(/\s*{prenom}\s*/g,' ').replace(/\s*{nom}\s*/g,' ').trim())+'&body='+encodeURIComponent(stripHtml(bodyHtmlTpl).replace(/Bonjour\s*{prenom}\s*,?/gi,'Bonjour,').replace(/\s*{prenom}\s*/g,' ').replace(/\s*{nom}\s*/g,' ')),'_blank');
     toast('Messagerie ouverte ('+ids.length+' contacts en Cci)','ok');
   }
 }
-function annulerPlanif(id){ DB.remove('planifs',id); RENDERERS.marketing(); toast('Planification annulée','ok'); }
+function annulerPlanif(id){ mktCaptureDraft(); DB.remove('planifs',id); RENDERERS.marketing(); toast('Planification annulée','ok'); }
 
 /* ═══════════ VUE : RÉGLAGES & CATALOGUE ═══════════ */
 RENDERERS.reglages=function(){
@@ -2972,7 +3075,7 @@ async function changePwd(){
   if(cloudUrl()){
     const j=await cloudPost({action:'setAuth',auth:cloudAuth(),new:nh});
     if(!j||!j.ok){ toast('Échec serveur : '+((j&&j.error)||'?'),'err'); return; }
-    sessionStorage.setItem('lm_authh',nh);
+    sessionStorage.setItem('lm_authh',nh); if(localStorage.getItem('lm_authh')) localStorage.setItem('lm_authh',nh);
   }
   const cfg=DB.config(); cfg.passwordHash=nh; DB.saveConfig(cfg);
   document.getElementById('cfg-pwd').value=''; toast('Mot de passe changé (synchronisé)','ok');
@@ -2994,7 +3097,7 @@ function cloudQueueEntity(entity){ if(!cloudUrl())return; clearTimeout(_cloudTim
   _cloudTimers[entity]=setTimeout(()=>cloudPost({action:'putEntity',entity,rows:DB.all(entity)}),1500); }
 function cloudQueueConfig(){ if(!cloudUrl())return; clearTimeout(_cloudTimers._cfg);
   _cloudTimers._cfg=setTimeout(()=>cloudPost({action:'putConfig',config:DB.config()}),1500); }
-function cloudAuth(){ return sessionStorage.getItem('lm_authh')||''; }
+function cloudAuth(){ return sessionStorage.getItem('lm_authh')||localStorage.getItem('lm_authh')||''; }
 function cloudPost(payload){ const url=cloudUrl(); if(!url) return Promise.resolve({ok:false});
   setCloudStatus('sync'); payload.token=DB.config().backendToken||''; if(!payload.auth) payload.auth=cloudAuth();
   return fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload)})
@@ -3060,6 +3163,7 @@ function facturerProjet(pid){
   if(factureProjetDe(pid)){ toast('Une facture existe déjà pour ce projet','err'); return; }
   const montant=projTotalAgence(p);
   if(montant<=0){ toast('Montant à facturer nul — renseigne les tarifs (via moi) et/ou ta gestion','err'); return; }
+  if(!(p.agence||'').trim()){ toast('Renseigne d\'abord le nom de l\'agence cliente (en haut du projet)','err'); return; }
   if(!confirm('Créer une facture de '+fmtEur(montant)+' à « '+(p.agence||'l\'agence')+' » ?\n\n(magiciens facturés via moi + ma gestion de projet)\nElle apparaîtra dans tes Factures LouisMagie.')) return;
   const cfg=DB.config(); const ech=new Date(); ech.setDate(ech.getDate()+(cfg.delaiRelance1||30));
   const fid=nextId('FAC','factures');
@@ -3176,9 +3280,23 @@ RENDERERS.projet=function(params){
       <div class="form-group"><label class="form-label">Feedback post-prestation</label><textarea class="form-control" style="min-height:80px" onchange="projField('${id}','feedback',this.value)">${esc(p.feedback||'')}</textarea></div>
     </div>
 
-    <div style="margin:10px 0 30px"><button class="btn btn-danger" onclick="supprimerProjet('${id}')">🗑 Supprimer le projet</button></div>`;
+    <div style="margin:10px 0 30px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-ghost" onclick="dupliquerProjet('${id}')">📋 Dupliquer ce projet</button><button class="btn btn-danger" onclick="supprimerProjet('${id}')">🗑 Supprimer le projet</button></div>`;
 };
-function supprimerProjet(id){ if(!confirm('Supprimer définitivement ce projet ?'))return; DB.remove('projets',id); toast('Projet supprimé','ok'); nav('projets'); }
+/* Duplique un projet (format répliqué : Paris/Cannes/Antalya…) — copie équipe/effets/consommables/checklist, remet les états à zéro */
+function dupliquerProjet(id){
+  const p=getP(id); if(!p)return;
+  const np=JSON.parse(JSON.stringify(p));
+  np.id=uid('PRJ'); np.nom=(p.nom||'Projet')+' (copie)'; np.date=''; np.statut='Prospect';
+  np.statutAgence='En attente'; np.factureId=''; np.feedback=''; np.createdAt=new Date().toISOString();
+  (np.equipe||[]).forEach(m=>{ m.id=uid('MBR'); m.dispo='En discussion'; m.statutPaiement='En discussion'; });
+  ['consommables','equipement','checklist'].forEach(k=>(np[k]||[]).forEach(it=>{ it.id=uid('IT'); it.fait=false; }));
+  saveP(np); logActivite('Projet dupliqué depuis '+(p.nom||id));
+  toast('📋 Projet dupliqué — mets à jour la date et le lieu','ok'); nav('projet',{id:np.id});
+}
+function supprimerProjet(id){
+  const fp=factureProjetDe(id);
+  if(fp){ toast('Impossible : la facture '+fp.id+' est liée à ce projet. Supprime ou annule-la d\'abord.','err'); return; }
+  if(!confirm('Supprimer définitivement ce projet ?'))return; DB.remove('projets',id); toast('Projet supprimé','ok'); nav('projets'); }
 function projLogi(pid,k,v){ const p=getP(pid); if(!p)return; p.logistique=p.logistique||{}; p.logistique[k]=v; saveP(p); }
 
 /* ----- Équipe ----- */
@@ -3271,7 +3389,10 @@ function gererMagiciens(){
 }
 function addMag(){ DB.save('magiciens',{id:uid('MAG'),prenom:'',nom:'Nouveau magicien',ville:'',tel:'',email:'',notes:''}); gererMagiciens(); }
 function saveMag(id,f,v){ const m=DB.get('magiciens',id); if(m){ m[f]=v; DB.save('magiciens',m); } }
-function delMag(id){ if(!confirm('Supprimer ce magicien de la banque ?'))return; DB.remove('magiciens',id); gererMagiciens(); }
+function delMag(id){
+  const refs=DB.all('projets').filter(p=>(p.equipe||[]).some(m=>m.magicienId===id));
+  if(refs.length){ toast('Impossible : présent dans '+refs.length+' projet(s) ('+refs.map(p=>p.nom||p.id).slice(0,3).join(', ')+'). Retire-le des équipes d\'abord.','err'); return; }
+  if(!confirm('Supprimer ce magicien de la banque ?'))return; DB.remove('magiciens',id); gererMagiciens(); }
 
 /* ---------- BANQUE D'EFFETS ---------- */
 function gererEffets(){
@@ -3326,17 +3447,18 @@ function pdfFicheMagicien(pid,mid){
     {titre:'MAGICIEN',nom:((mag.prenom?mag.prenom+' ':'')+(mag.nom||'')).trim()||'—',lines:[mag.ville,mag.tel,mag.email]},
     {titre:'ÉVÉNEMENT',lines:['Agence : '+(p.agence||'—'),'Lieu : '+(p.lieu||'—'),p.typeEvenement?('Type : '+p.typeEvenement):'',p.nbInvites?('Invités : '+p.nbInvites):'',p.ambiance?('Ambiance : '+p.ambiance):'']});
   y+=2;
-  y=pdfSection(doc,y,'✨ TES EFFETS',(m.effets||[]).map(eid=>'•  '+effLabel(eid)));
+  y=pdfSection(doc,y,'TES EFFETS',(m.effets||[]).map(eid=>'•  '+effLabel(eid)));
   const prat=[];
   if(m.materielPerso) prat.push('Matériel perso à apporter : '+m.materielPerso);
   if(p.costume) prat.push('Costume : '+p.costume);
   const lo=p.logistique||{}; if(lo.transport)prat.push('Transport : '+lo.transport); if(lo.hebergement)prat.push('Hébergement : '+lo.hebergement); if(lo.repas)prat.push('Repas : '+lo.repas);
   if(m.notes) prat.push('Notes : '+m.notes);
   y=pdfSection(doc,y,'INFOS PRATIQUES',prat);
-  const eqMag=(p.equipement||[]).filter(e=>e.par==='Magiciens').map(e=>'•  '+e.label);
-  const eqAg=(p.equipement||[]).concat(p.consommables||[]).filter(e=>e.par==='Agence').map(e=>'•  '+e.label+(e.qte?(' ×'+e.qte):''));
-  y=pdfSection(doc,y,'À APPORTER PAR LES MAGICIENS',eqMag);
-  y=pdfSection(doc,y,"FOURNI PAR L'AGENCE",eqAg);
+  const tousItems=(p.equipement||[]).concat(p.consommables||[]);
+  const it=l=>'•  '+l.label+(l.qte?(' ×'+l.qte):'');
+  y=pdfSection(doc,y,'À APPORTER PAR LES MAGICIENS',tousItems.filter(e=>e.par==='Magiciens').map(it));
+  y=pdfSection(doc,y,"FOURNI PAR L'AGENCE",tousItems.filter(e=>e.par==='Agence').map(it));
+  y=pdfSection(doc,y,'FOURNI PAR LOUIS',tousItems.filter(e=>e.par==='Moi').map(it));
   y=pdfSection(doc,y,'BRIEF & RÈGLES',[p.notes,p.briefUrl?('Brief complet : '+p.briefUrl):''].filter(Boolean));
   pdfFooter(doc); return doc;
 }
@@ -3347,17 +3469,18 @@ function pdfFicheProjet(pid){
     {titre:'ÉVÉNEMENT',nom:p.nom||'—',lines:['Agence : '+(p.agence||'—'),'Lieu : '+(p.lieu||'—'),p.typeEvenement?('Type : '+p.typeEvenement):'',p.nbInvites?('Invités : '+p.nbInvites):'']},
     {titre:'CADRE',lines:[p.theme?('Thème : '+p.theme):'',p.ambiance?('Ambiance : '+p.ambiance):'',p.costume?('Costume : '+p.costume):'',(p.logistique||{}).transport?('Transport : '+p.logistique.transport):'']});
   y+=2;
-  y=pdfSection(doc,y,'🎩 ÉQUIPE',(p.equipe||[]).map(m=>'•  '+magNom(m.magicienId)+' ('+((DB.get('magiciens',m.magicienId)||{}).ville||'—')+') — '+(m.role||'—')+((m.effets||[]).length?(' — Effets : '+(m.effets||[]).map(eid=>(DB.get('effets',eid)||{}).nom).filter(Boolean).join(', ')):'')));
-  y=pdfSection(doc,y,'🍾 CONSOMMABLES',(p.consommables||[]).map(c=>'•  '+c.label+(c.qte?(' ×'+c.qte):'')+(c.par?('  — '+c.par):'')));
-  y=pdfSection(doc,y,'🔔 ÉQUIPEMENT',(p.equipement||[]).map(e=>'•  '+e.label+(e.par?('  — '+e.par):'')));
+  y=pdfSection(doc,y,'ÉQUIPE',(p.equipe||[]).map(m=>'•  '+magNom(m.magicienId)+' ('+((DB.get('magiciens',m.magicienId)||{}).ville||'—')+') — '+(m.role||'—')+((m.effets||[]).length?(' — Effets : '+(m.effets||[]).map(eid=>(DB.get('effets',eid)||{}).nom).filter(Boolean).join(', ')):'')));
+  y=pdfSection(doc,y,'CONSOMMABLES',(p.consommables||[]).map(c=>'•  '+c.label+(c.qte?(' ×'+c.qte):'')+(c.par?('  — '+c.par):'')));
+  y=pdfSection(doc,y,'ÉQUIPEMENT',(p.equipement||[]).map(e=>'•  '+e.label+(e.par?('  — '+e.par):'')));
   const lo=p.logistique||{};
-  y=pdfSection(doc,y,'🚚 LOGISTIQUE',[lo.transport?('Transport : '+lo.transport):'',lo.hebergement?('Hébergement : '+lo.hebergement):'',lo.repas?('Repas : '+lo.repas):'',p.costume?('Costume : '+p.costume):'']);
-  y=pdfSection(doc,y,'✅ CHECKLIST',(p.checklist||[]).map(c=>(c.fait?'[x] ':'[ ] ')+c.label));
-  y=pdfSection(doc,y,'📋 BRIEF & RÈGLES',[p.notes,p.notesBrief,p.briefUrl?('Brief complet : '+p.briefUrl):''].filter(Boolean));
+  y=pdfSection(doc,y,'LOGISTIQUE',[lo.transport?('Transport : '+lo.transport):'',lo.hebergement?('Hébergement : '+lo.hebergement):'',lo.repas?('Repas : '+lo.repas):'',p.costume?('Costume : '+p.costume):'']);
+  y=pdfSection(doc,y,'CHECKLIST',(p.checklist||[]).map(c=>(c.fait?'[x] ':'[ ] ')+c.label));
+  y=pdfSection(doc,y,'BRIEF & RÈGLES',[p.notes,p.notesBrief,p.briefUrl?('Brief complet : '+p.briefUrl):''].filter(Boolean));
   pdfFooter(doc); return doc;
 }
 function showDocPreview(doc,title,filename){
   const url=doc.output('bloburl'); window._pvDoc=doc; window._pvName=(filename||'document').replace(/[^A-Za-z0-9_-]/g,'_');
+  if(isIOS()){ window.open(url,'_blank'); return; }
   const ov=document.getElementById('pdfviewer');
   ov.innerHTML=`<div class="pv-bar"><span class="pv-title">${esc(title||'Document')}</span><span style="display:flex;gap:8px;flex-shrink:0"><button class="btn btn-ghost btn-sm" onclick="window._pvDoc&&window._pvDoc.save(window._pvName+'.pdf')">⬇ Télécharger</button><button class="btn btn-or btn-sm" onclick="closePdfViewer()">✕ Fermer</button></span></div><iframe src="${url}" class="pv-frame" title="aperçu"></iframe>`;
   ov.classList.add('open');
@@ -3371,7 +3494,7 @@ function ficheProjetOpen(pid){ const doc=pdfFicheProjet(pid); if(!doc)return; sh
   await ensureSeed();
   setCloudStatus(cloudUrl()?'sync':'off');
   // pull se fait après login (showApp), car l'API exige le mot de passe
-  if(sessionStorage.getItem('lm_auth')==='1' && sessionStorage.getItem('lm_authh')) showApp();
+  if((sessionStorage.getItem('lm_auth')==='1'&&sessionStorage.getItem('lm_authh'))||(localStorage.getItem('lm_auth')==='1'&&localStorage.getItem('lm_authh'))) showApp();
 })();
 </script>
 </body>

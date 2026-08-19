@@ -176,8 +176,11 @@ if ($action === 'sign' || $action === 'signSubmit') {
     if ($img !== '' && (!preg_match('#^data:image/(png|jpeg);base64,[A-Za-z0-9+/=]+$#', $img) || strlen($img) > 500000)) $img = '';
     if($signataire===''&&$img==='') out(['ok'=>false,'error'=>'signature vide']);
     $now = date('c');
-    $devis[$idx]['statut']='Accepté';
-    $devis[$idx]['dateAcceptation']=date('Y-m-d');
+    // Garde : la signature ne fait AVANCER le statut que depuis Brouillon/Envoyé (jamais rétrograder « Acompte reçu » etc.)
+    if (in_array($d['statut'] ?? '', ['Brouillon','Envoyé',''])) {
+      $devis[$idx]['statut']='Accepté';
+      if (empty($devis[$idx]['dateAcceptation'])) $devis[$idx]['dateAcceptation']=date('Y-m-d');
+    }
     $devis[$idx]['signataire']=$signataire;
     $devis[$idx]['signatureImg']=$img;
     $devis[$idx]['signedAt']=$now;
