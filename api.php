@@ -202,7 +202,15 @@ if ($action === 'sign' || $action === 'signSubmit') {
   // action 'sign' : page HTML publique de signature
   header('Content-Type: text/html; charset=utf-8');
   $H=function($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); };
-  if(!$valid){ echo '<!doctype html><meta charset="utf-8"><div style="font-family:sans-serif;max-width:480px;margin:80px auto;text-align:center;color:#333"><h2>Lien invalide ou expiré</h2><p>Ce lien de signature n\'est plus valide. Contactez LouisMagie.</p></div>'; exit; }
+  if(!$valid){ echo '<!doctype html><html lang="fr"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+    .'<title>Lien invalide — LouisMagie</title>'
+    .'<body style="margin:0;background:#0A0A08;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px">'
+    .'<div style="max-width:420px;background:#FDFCFB;border-radius:14px;border-top:3px solid #FF7700;padding:40px 32px;text-align:center">'
+    .'<div style="font-size:24px;font-weight:800;letter-spacing:-.4px;color:#0A0A08;margin-bottom:22px">Louis<span style="color:#FF7700">Magie</span></div>'
+    .'<h2 style="font-size:18px;font-weight:700;color:#0A0A08;margin:0 0 10px">Lien invalide ou expiré</h2>'
+    .'<p style="font-size:14px;font-weight:300;color:#5A5650;line-height:1.7;margin:0">Ce lien de signature n\'est plus valide.<br>Contactez LouisMagie pour en recevoir un nouveau.</p>'
+    .'<a href="mailto:contact@louismagie.fr" style="display:inline-block;margin-top:24px;background:#FF7700;color:#fff;text-decoration:none;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;padding:15px 30px;border-radius:4px">Nous contacter</a>'
+    .'</div></body></html>'; exit; }
   $already = !empty($d['signataire']);
   $ttc=number_format((float)($d['montantTTC']??0),2,',',' ');
   $acPct=(float)($d['acomptePct']??0);
@@ -219,25 +227,44 @@ if ($action === 'sign' || $action === 'signSubmit') {
     : '';
   echo '<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
     .'<title>Signature du devis '.$jid.' — LouisMagie</title><style>'
-    .'*{box-sizing:border-box}body{margin:0;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#15120e;color:#1c1814;padding:18px}'
-    .'.wrap{max-width:560px;margin:0 auto;background:#fff;border-radius:18px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.4)}'
-    .'.hd{background:linear-gradient(135deg,#FF7700,#ff9d3d);color:#fff;padding:24px 22px}'
-    .'.hd h1{margin:0;font-size:20px;letter-spacing:.5px}.hd p{margin:4px 0 0;opacity:.95;font-size:13px}'
-    .'.bd{padding:22px}.bd h2{font-size:14px;color:#FF7700;margin:0 0 8px;text-transform:uppercase;letter-spacing:.5px}'
-    .'table{width:100%;border-collapse:collapse;font-size:14px;margin-bottom:14px}td{padding:7px 0;border-bottom:1px solid #eee}'
-    .'.r{text-align:right;white-space:nowrap}.dim{color:#888;font-size:13px}.tot{font-weight:700;font-size:16px}.tot td{color:#FF7700;border-bottom:none;padding-top:12px}'
-    .'.meta{font-size:13px;color:#555;margin-bottom:16px;line-height:1.6}'
-    .'label{display:block;font-size:13px;font-weight:600;margin:14px 0 6px;color:#333}'
-    .'input[type=text]{width:100%;padding:12px;border:1px solid #ccc;border-radius:10px;font-size:16px}'
-    .'#pad{width:100%;height:160px;border:2px dashed #FF7700;border-radius:12px;background:#fffdfa;touch-action:none;display:block}'
-    .'.padhint{font-size:12px;color:#999;text-align:center;margin-top:4px}'
-    .'.clr{background:none;border:none;color:#FF7700;font-size:13px;cursor:pointer;float:right}'
-    .'.chk{display:flex;align-items:flex-start;gap:10px;margin:16px 0;font-size:13px;color:#444}.chk input{margin-top:3px;width:18px;height:18px}'
-    .'button.go{width:100%;padding:15px;background:#FF7700;color:#fff;border:none;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer}button.go:disabled{opacity:.45}'
-    .'.done{background:#e9f9ef;color:#1d7a45;padding:16px;border-radius:12px;text-align:center;font-size:15px;line-height:1.5}'
-    .'.foot{text-align:center;font-size:11px;color:#aaa;padding:14px}'
+    // Charte graphique officielle LouisMagie : noir 70 % · crème 25 % · orange 5 %
+    .'<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+    .'<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&display=swap" rel="stylesheet">'
+    .'<style>'
+    .'*{box-sizing:border-box}'
+    .':root{--or:#FF7700;--or-deep:#E56200;--noir:#0A0A08;--anthr:#2C2C28;--creme:#F5F2EE;--creme2:#EDEAE5;--blanc:#FDFCFB;--gm:#8A8580;--gf:#5A5650}'
+    .'body{margin:0;font-family:"DM Sans",-apple-system,Segoe UI,Roboto,Arial,sans-serif;font-weight:300;background:var(--noir);color:var(--noir);padding:22px 14px;line-height:1.6}'
+    .'body::before{content:"";position:fixed;top:-140px;right:-140px;width:460px;height:460px;border-radius:50%;background:radial-gradient(circle,rgba(255,119,0,.10) 0%,transparent 65%);pointer-events:none}'
+    .'.wrap{max-width:560px;margin:0 auto;background:var(--blanc);border-radius:14px;overflow:hidden;box-shadow:0 24px 70px rgba(0,0,0,.45);position:relative}'
+    .'.hd{background:var(--noir);color:#fff;padding:30px 24px 26px;text-align:center;position:relative;border-top:3px solid var(--or)}'
+    .'.hd::after{content:"";position:absolute;top:-60px;right:-60px;width:220px;height:220px;border-radius:50%;background:radial-gradient(circle,rgba(255,119,0,.14) 0%,transparent 68%)}'
+    .'.hd h1{margin:0;font-family:Syne,sans-serif;font-size:24px;font-weight:800;letter-spacing:-.4px;position:relative}'
+    .'.hd h1 span{color:var(--or)}'
+    .'.hd p{margin:8px 0 0;font-size:10px;font-weight:400;letter-spacing:3px;text-transform:uppercase;color:rgba(255,255,255,.38);position:relative}'
+    .'.bd{padding:26px 24px}'
+    .'.bd h2{font-family:Syne,sans-serif;font-size:10px;font-weight:700;color:var(--or);margin:0 0 12px;text-transform:uppercase;letter-spacing:3px}'
+    .'table{width:100%;border-collapse:collapse;font-size:14px;margin-bottom:18px}'
+    .'td{padding:9px 0;border-bottom:1px solid var(--creme2);color:var(--gf)}'
+    .'.r{text-align:right;white-space:nowrap}.dim{color:var(--gm);font-size:13px}'
+    .'.tot{font-family:Syne,sans-serif;font-weight:800;font-size:17px}.tot td{color:var(--noir);border-bottom:none;padding-top:14px}.tot .r{color:var(--or)}'
+    .'.meta{font-size:14px;color:var(--gf);margin-bottom:22px;line-height:1.75;padding-bottom:18px;border-bottom:1px solid var(--creme2)}'
+    .'.meta b{font-family:Syne,sans-serif;font-size:17px;font-weight:800;color:var(--noir);display:block;margin-bottom:4px}'
+    .'label{display:block;font-size:11px;font-weight:500;margin:18px 0 7px;color:var(--noir);letter-spacing:.4px;text-transform:uppercase}'
+    .'input[type=text]{width:100%;padding:14px;border:1.5px solid var(--creme2);border-radius:8px;font-size:16px;font-family:inherit;background:var(--creme);color:var(--noir);outline:none;transition:border-color .2s}'
+    .'input[type=text]:focus{border-color:var(--or)}'
+    .'#pad{width:100%;height:170px;border:1.5px dashed rgba(255,119,0,.5);border-radius:8px;background:var(--creme);touch-action:none;display:block}'
+    .'.padhint{font-size:11px;color:var(--gm);text-align:center;margin-top:7px;letter-spacing:.3px}'
+    .'.clr{background:none;border:none;color:var(--or);font-size:11px;cursor:pointer;float:right;text-transform:none;letter-spacing:0;font-family:inherit}'
+    .'.chk{display:flex;align-items:flex-start;gap:11px;margin:20px 0;font-size:13px;color:var(--gf);text-transform:none;letter-spacing:0;font-weight:300}'
+    .'.chk input{margin-top:3px;width:20px;height:20px;accent-color:var(--or);flex-shrink:0}'
+    .'.chk b{color:var(--noir);font-weight:500}'
+    .'button.go{width:100%;padding:18px;background:var(--or);color:#fff;border:none;border-radius:4px;font-family:Syne,sans-serif;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;cursor:pointer;box-shadow:0 4px 20px rgba(255,119,0,.28);transition:all .22s ease}'
+    .'button.go:hover:not(:disabled){background:var(--or-deep);box-shadow:0 8px 32px rgba(255,119,0,.4);transform:translateY(-1px)}'
+    .'button.go:disabled{opacity:.35;box-shadow:none;cursor:not-allowed}'
+    .'.done{background:var(--creme);border-left:3px solid #2E9E63;color:#1d7a45;padding:20px;border-radius:8px;text-align:center;font-size:15px;line-height:1.6}'
+    .'.foot{text-align:center;font-size:10px;color:var(--gm);padding:18px 14px;letter-spacing:1.5px;text-transform:uppercase;background:var(--creme);border-top:1px solid var(--creme2)}'
     .'</style></head><body><div class="wrap">'
-    .'<div class="hd"><h1>LouisMagie</h1><p>Devis '.$jid.' · à valider</p></div><div class="bd">'
+    .'<div class="hd"><h1>Louis<span>Magie</span></h1><p>Devis '.$jid.' · à valider</p></div><div class="bd">'
     .'<div class="meta"><b>'.$H($d['nomClient']??'').'</b><br>'
     .($dEvt?'Événement : '.$H(date('d/m/Y',strtotime($dEvt))).($creneau?' · '.$H($creneau):'').'<br>':'')
     .($lieu?'Lieu : '.$H($lieu):'').'</div>'
@@ -276,7 +303,7 @@ if ($action === 'sign' || $action === 'signSubmit') {
       .'}).catch(function(){go.disabled=false;go.textContent="✍️ Signer et accepter";});});'
       .'</script>';
   }
-  echo '</div><div class="foot">LouisMagie — Louis Slosse · contact@louismagie.fr</div></body></html>';
+  echo '</div><div class="foot">LouisMagie · Louis Slosse · contact@louismagie.fr</div></body></html>';
   exit;
 }
 

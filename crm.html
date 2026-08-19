@@ -15,19 +15,19 @@
 :root{
   --or:#FF7700;--or-deep:#E56200;--or-soft:rgba(255,119,0,.14);--or-line:rgba(255,119,0,.35);
   --noir:#0A0A08;--noir2:#141410;--noir3:#1E1E1A;--anthr:#2C2C28;--bd:#2C2C28;
-  --creme:#F5F2EE;--blanc:#FDFCFB;--gc:#C8C3BB;--gm:#8A8580;--gf:#5A5650;
+  --creme:#F5F2EE;--creme2:#EDEAE5;--blanc:#FDFCFB;--gc:#C8C3BB;--gm:#8A8580;--gf:#5A5650;
   --ok:#3FB97A;--okl:rgba(63,185,122,.14);
   --warn:#E8A13A;--warnl:rgba(232,161,58,.14);
   --er:#E5564B;--erl:rgba(229,86,75,.14);
   --info:#4A9DE8;--infol:rgba(74,157,232,.14);
   --sh:0 2px 14px rgba(0,0,0,.4);--sh2:0 12px 40px rgba(0,0,0,.55);
   --sidebar:#060605;--topbar:rgba(10,10,8,.85);--login-bg:#161613;
-  --r:10px;--rsm:6px;--sb:244px;
+  --r:14px;--rsm:8px;--rbtn:4px;--sb:244px;   /* rayons charte : 4 (boutons) · 8 (champs) · 14 (cartes) */
 }
 :root[data-theme="light"]{
   --or:#EA6A00;--or-deep:#C75900;--or-soft:rgba(234,106,0,.12);--or-line:rgba(234,106,0,.3);
   --noir:#F0EBE4;--noir2:#FFFFFF;--noir3:#F4F0EA;--anthr:#E1DACF;--bd:#E1DACF;
-  --creme:#1C1A15;--blanc:#0E0E0C;--gc:#3A372F;--gm:#6E695F;--gf:#A39C90;
+  --creme:#1C1A15;--creme2:#242119;--blanc:#0E0E0C;--gc:#3A372F;--gm:#6E695F;--gf:#A39C90;
   --ok:#2E9E63;--okl:rgba(46,158,99,.13);
   --warn:#C97E14;--warnl:rgba(201,126,20,.13);
   --er:#D23B30;--erl:rgba(210,59,48,.12);
@@ -161,12 +161,14 @@ tbody tr:hover td{background:var(--noir3)}
 .badge.facture,.badge.solde,.badge.avoir,.badge.complete{background:var(--infol);color:var(--info)}
 
 /* ── BUTTONS ── */
-.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border:none;border-radius:var(--rsm);font-family:'DM Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,sans-serif;font-size:12px;font-weight:600;cursor:pointer;transition:all .16s;white-space:nowrap}
-.btn-or{background:var(--or);color:var(--noir)}.btn-or:hover{background:var(--or-deep)}
-.btn-success{background:var(--ok);color:#04240f}.btn-success:hover{filter:brightness(1.1)}
+.btn{display:inline-flex;align-items:center;gap:7px;padding:10px 16px;border:none;border-radius:var(--rbtn);font-family:'Syne','Trebuchet MS','Gill Sans',sans-serif;font-size:11px;font-weight:700;letter-spacing:1.2px;cursor:pointer;transition:all .22s ease;white-space:nowrap}
+.btn-or{background:var(--or);color:#fff;box-shadow:0 4px 18px rgba(255,119,0,.26)}
+.btn-or:hover{background:var(--or-deep);box-shadow:0 8px 28px rgba(255,119,0,.38);transform:translateY(-1px)}
+.btn-success{background:var(--ok);color:#fff}.btn-success:hover{filter:brightness(1.08);transform:translateY(-1px)}
 .btn-warn{background:var(--warn);color:#231400}.btn-warn:hover{filter:brightness(1.1)}
 .btn-danger{background:var(--er);color:#fff}.btn-danger:hover{filter:brightness(1.1)}
 .btn-ghost{background:transparent;color:var(--gc);border:1.5px solid var(--anthr)}.btn-ghost:hover{border-color:var(--or);color:var(--or)}
+.login-btn,.sb-cta{letter-spacing:1.5px;text-transform:uppercase}
 .btn-sm{padding:5px 10px;font-size:11px}
 .btn:disabled{opacity:.4;cursor:not-allowed}
 
@@ -508,7 +510,7 @@ function emailHtml(text){
     txt=txt.replace(/^.*action=sign.*$/m,'');                                          // sécurité : aucune URL résiduelle
     if(txt.indexOf(TOK)<0) txt+='\n\n'+TOK;                                            // repli : bouton à la fin
   }
-  const btn=sign?`<div style="text-align:center;margin:24px 0 8px"><a href="${sign[0]}" style="display:inline-block;background:#FF7700;background:linear-gradient(135deg,#FF7700,#ff9d3d);color:#ffffff;text-decoration:none;font-weight:bold;font-size:16px;padding:15px 40px;border-radius:12px;box-shadow:0 6px 18px rgba(255,119,0,.40)">✍️&nbsp;&nbsp;Signer mon devis en ligne</a><div style="color:#9a948b;font-size:11px;margin-top:11px">Signature électronique sécurisée · valeur « Bon pour accord »</div></div>`:'';
+  const btn=sign?`<div style="text-align:center;margin:28px 0 10px"><a href="${sign[0]}" style="display:inline-block;background:#FF7700;color:#ffffff;text-decoration:none;font-weight:bold;font-size:13px;letter-spacing:2px;text-transform:uppercase;padding:17px 38px;border-radius:4px;box-shadow:0 4px 20px rgba(255,119,0,.28)">Signer mon devis en ligne&nbsp;&nbsp;→</a><div style="color:#8A8580;font-size:11px;margin-top:12px;letter-spacing:.3px">Signature électronique sécurisée · valeur « Bon pour accord »</div></div>`:'';
   let body=e(txt.trim()).replace(/(https?:\/\/[^\s<]+)/g,'<a href="$1" style="color:#FF7700;word-break:break-all">$1</a>').replace(/\n/g,'<br>');
   if(sign) body=body.replace(TOK,btn);
   return emailShell(body);
@@ -521,20 +523,26 @@ function shadeHex(hex,pct){ hex=String(hex||'#FF7700').replace('#',''); if(hex.l
 function emailShell(innerHtml){
   const cfg=DB.config(), logo=(cfg.logo&&emailLogoUrl())?emailLogoUrl():'';
   const e=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  const mail=cfg.emailLouis||'contact@louismagie.fr', tel=cfg.entrepriseTel||'', logoH=logo?138:0;
+  const mail=cfg.emailLouis||'contact@louismagie.fr', tel=cfg.entrepriseTel||'', logoH=logo?128:0;
   const tagline=cfg.emailTagline!=null&&cfg.emailTagline!==''?cfg.emailTagline:'Magicien pour vos évènements';
   const hColor=cfg.emailHeaderColor||'#FF7700';
   const footerTpl=cfg.emailFooter!=null&&cfg.emailFooter!==''?cfg.emailFooter:'LouisMagie — Louis Slosse · Magicien\n{email} · {tel}\nDunkerque & Hauts-de-France';
   const footerHtml=footerTpl.replace(/{email}/g,mail).replace(/{tel}/g,tel).split('\n')
-    .map((l,i)=> i===0 ? `<strong style="color:${hColor}">${e(l)}</strong>` : `<span style="color:#c9c2b8">${e(l)}</span>`).join('<br>');
-  return `<!doctype html><html><body style="margin:0;background:#f4f1ec"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f1ec;padding:24px 0"><tr><td align="center">`
-    +`<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#fff;border-radius:14px;overflow:hidden;font-family:Arial,Helvetica,sans-serif">`
-    +`<tr><td align="center" style="background:linear-gradient(135deg,${hColor},${shadeHex(hColor,0.3)});padding:26px 28px">`
-    +(logo?`<img src="${logo}" alt="LouisMagie" height="${logoH}" style="max-height:${logoH}px;display:block;margin:0 auto 10px">`:'')
-    +(tagline?`<div style="color:#fff;font-size:17px;font-weight:bold;letter-spacing:1px">${e(tagline)}</div>`:'')+`</td></tr>`
-    +`<tr><td style="padding:28px;color:#222;font-size:15px;line-height:1.6">${innerHtml}</td></tr>`
-    +`<tr><td align="center" style="padding:18px 28px;background:#15120e;font-size:12px;line-height:1.7">${footerHtml}</td></tr>`
-    +`</table></td></tr></table></body></html>`;
+    .map((l,i)=> i===0 ? `<strong style="color:${hColor};letter-spacing:.5px">${e(l)}</strong>` : `<span style="color:rgba(255,255,255,.42)">${e(l)}</span>`).join('<br>');
+  // Charte LouisMagie : noir dominant, crème de respiration, orange en accent rare (règle 70/25/5)
+  return `<!doctype html><html><body style="margin:0;background:#F5F2EE"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F5F2EE;padding:28px 12px"><tr><td align="center">`
+    +`<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#FDFCFB;border-radius:14px;overflow:hidden;border:1px solid #EDEAE5;font-family:'Helvetica Neue',Arial,Helvetica,sans-serif">`
+    // En-tête noir profond, filet orange en signature
+    +`<tr><td style="height:3px;background:${hColor};font-size:0;line-height:0">&nbsp;</td></tr>`
+    +`<tr><td align="center" style="background:#0A0A08;padding:${logo?'30px 28px 26px':'26px 28px'}">`
+    +(logo?`<img src="${logo}" alt="LouisMagie" height="${logoH}" style="max-height:${logoH}px;display:block;margin:0 auto 14px">`:'')
+    +(tagline?`<div style="color:#FDFCFB;font-size:15px;font-weight:bold;letter-spacing:2.5px;text-transform:uppercase">${e(tagline)}</div>`:'')
+    +`</td></tr>`
+    +`<tr><td style="padding:32px 30px;color:#5A5650;font-size:15px;line-height:1.75">${innerHtml}</td></tr>`
+    +`<tr><td align="center" style="padding:22px 28px;background:#0A0A08;font-size:12px;line-height:1.8">${footerHtml}</td></tr>`
+    +`</table>`
+    +`<div style="max-width:600px;margin:14px auto 0;color:#8A8580;font-size:11px;text-align:center;font-family:'Helvetica Neue',Arial,sans-serif">louismagie.fr</div>`
+    +`</td></tr></table></body></html>`;
 }
 /* Emails au format riche (WYSIWYG) : le HTML est déjà formaté, on l'injecte tel quel dans la coquille */
 function emailHtmlRich(html){ return emailShell(html||''); }
@@ -1490,7 +1498,8 @@ function enregistrerAcompte(id,after){
 }
 
 /* ═══════════ MODULE PDF (template pro partagé) ═══════════ */
-const P_OR=[255,119,0], P_NOIR=[24,23,18], P_GRIS=[122,118,110], P_GRISC=[158,153,144], P_LIGHT=[247,244,240], P_LINE=[224,217,206], P_BLANC=[255,255,255];
+/* Palette PDF = charte graphique officielle LouisMagie */
+const P_OR=[255,119,0], P_ORD=[229,98,0], P_NOIR=[10,10,8], P_ANTHR=[44,44,40], P_GRIS=[138,133,128], P_GRISC=[200,195,187], P_LIGHT=[245,242,238], P_LINE=[237,234,229], P_BLANC=[253,252,251];
 function emetteur(){ const c=DB.config();
   return {
     contact:c.entrepriseContact||'Louis Slosse',
@@ -1516,7 +1525,7 @@ function pdfHeader(doc,type,num,dates){
   doc.setFont('helvetica','bold'); doc.setFontSize(23);
   doc.setTextColor(...P_NOIR); doc.text('Louis',bxText,20);
   const w=doc.getTextWidth('Louis'); doc.setTextColor(...P_OR); doc.text('Magie',bxText+w,20);
-  doc.setFont('helvetica','normal'); doc.setFontSize(7); doc.setTextColor(...P_GRISC);
+  doc.setFont('helvetica','normal'); doc.setFontSize(7); doc.setTextColor(...P_GRIS);
   doc.text('MAGICIEN  ·  CLOSE-UP  ·  MENTALISME  ·  MAGIE DIGITALE',bxText,25.5);
   // émetteur
   doc.setFontSize(8.3); doc.setTextColor(...P_GRIS); let y=37;
@@ -1596,7 +1605,7 @@ function pdfReglement(doc,y,condTitle,condLines){
 function pdfFooter(doc){
   const e=emetteur();
   doc.setDrawColor(...P_LINE); doc.setLineWidth(.4); doc.line(15,282,195,282);
-  doc.setFont('helvetica','normal'); doc.setFontSize(7.2); doc.setTextColor(...P_GRISC);
+  doc.setFont('helvetica','normal'); doc.setFontSize(7.2); doc.setTextColor(...P_GRIS);
   doc.text(['LouisMagie',e.contact,e.statut].filter(Boolean).join('  ·  '),105,287,{align:'center'});
   doc.text([e.siret?('SIRET '+e.siret):'',e.adresse,e.email,e.site].filter(Boolean).join('  ·  '),105,291,{align:'center'});
   doc.setFont('helvetica','bold'); doc.setTextColor(...P_OR); doc.setFontSize(7.4);
