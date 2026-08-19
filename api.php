@@ -16,8 +16,11 @@ $PDF_URL  = 'pdf';
 // CORS restreint : autorise seulement les requêtes de même origine (front + API sur le même domaine)
 $__origin = $_SERVER['HTTP_ORIGIN'] ?? '';
 $__host   = $_SERVER['HTTP_HOST'] ?? '';
-if ($__origin === '' || parse_url($__origin, PHP_URL_HOST) === $__host) {
+// Origines du site autorisées à poster le formulaire public (préflight inclus)
+$__formOrigins = array_filter(array_map('trim', explode(',', getenv('FORM_ORIGINS') ?: 'https://louismagie.fr,https://www.louismagie.fr')));
+if ($__origin === '' || parse_url($__origin, PHP_URL_HOST) === $__host || in_array($__origin, $__formOrigins, true)) {
   header('Access-Control-Allow-Origin: '.($__origin ?: '*'));
+  if ($__origin !== '') header('Vary: Origin');
 }
 header('Access-Control-Allow-Headers: Content-Type');
 header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
@@ -144,6 +147,74 @@ if ($action === 'track') {
     writeJson($f,$arr); }
   header('Content-Type: image/gif'); header('Cache-Control: no-store');
   echo base64_decode('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'); exit;
+}
+
+/* ===== Réception publique d'une demande depuis le site louismagie.fr =====
+   Le formulaire du site poste ici : la demande atterrit directement dans le CRM.
+   Protections : clé de formulaire, origine autorisée, pot de miel, limite par IP, validation. */
+if ($action === 'newDemande') {
+  $cfgPub = readJson("$DATA_DIR/config.json"); if(!is_array($cfgPub)) $cfgPub=[];
+  $key = getenv('FORM_KEY') ?: ($cfgPub['formKey'] ?? '');
+  // Origines autorisées (site + preview), configurables
+  $allow = array_filter(array_map('trim', explode(',', getenv('FORM_ORIGINS') ?: ($cfgPub['formOrigins'] ?? 'https://louismagie.fr,https://www.louismagie.fr'))));
+  $org = $_SERVER['HTTP_ORIGIN'] ?? '';
+  if ($org && in_array($org, $allow, true)) {
+    header('Access-Control-Allow-Origin: '.$org);
+    header('Vary: Origin');
+  }
+  if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') exit;
+  if ($key === '') out(['ok'=>false,'error'=>'formulaire non configuré']);
+  if (!hash_equals($key, (string)($req['key'] ?? $_GET['key'] ?? ''))) out(['ok'=>false,'error'=>'clé invalide']);
+  if (trim((string)($req['website'] ?? '')) !== '') out(['ok'=>true]);   // pot de miel : bot → on fait semblant d'accepter
+
+  // Limite : 5 envois / heure / IP
+  $ip = $_SERVER['REMOTE_ADDR'] ?? '?';
+  $rf = $DATA_DIR.'/_ratelimit.json'; $rl = readJson($rf); if(!is_array($rl)) $rl=[];
+  $now = time();
+  $rl = array_filter($rl, function($x) use($now){ return ($x['t'] ?? 0) > $now-3600; });
+  $nb = count(array_filter($rl, function($x) use($ip){ return ($x['ip'] ?? '') === $ip; }));
+  if ($nb >= 5) out(['ok'=>false,'error'=>'trop de demandes, réessayez plus tard']);
+  $rl[] = ['ip'=>$ip,'t'=>$now]; writeJson($rf, array_values($rl));
+
+  $clean = function($v,$max=400){ $v = trim((string)$v); $v = preg_replace('/[\x00-\x1F\x7F]/u',' ',$v); return mb_substr($v,0,$max); };
+  $nom = $clean($req['nom'] ?? $req['name'] ?? '', 120);
+  $mail = $clean($req['email'] ?? '', 160);
+  if ($nom === '' || !filter_var($mail, FILTER_VALIDATE_EMAIL)) out(['ok'=>false,'error'=>'nom ou email invalide']);
+  $dateEvt = $clean($req['dateEvenement'] ?? $req['date'] ?? '', 10);
+  if ($dateEvt !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateEvt)) $dateEvt = '';
+
+  $dem = [
+    'id'=>'DEM-'.date('ymd').'-'.substr(bin2hex(random_bytes(3)),0,5),
+    'date'=>date('Y-m-d'),
+    'nom'=>$nom, 'email'=>$mail,
+    'tel'=>$clean($req['tel'] ?? $req['phone'] ?? '', 40),
+    'typeEvenement'=>$clean($req['typeEvenement'] ?? $req['type'] ?? '', 60),
+    'dateEvenement'=>$dateEvt, 'creneau'=>'',
+    'lieu'=>$clean($req['lieu'] ?? '', 160), 'distanceKm'=>0,
+    'nbInvites'=>$clean($req['nbInvites'] ?? $req['guests'] ?? '', 40),
+    'prestationSouhaitee'=>$clean($req['message'] ?? '', 1500),
+    'duree'=>'', 'budgetEstime'=>$clean($req['budget'] ?? '', 60),
+    'source'=>$clean($req['source'] ?? 'Site web', 60),
+    'statut'=>'Nouveau', 'notes'=>'',
+    'recuLe'=>date('c'),
+  ];
+  $f = "$DATA_DIR/demandes.json"; $arr = readJson($f); if(!is_array($arr)) $arr=[];
+  $arr[] = $dem; writeJson($f, $arr);
+
+  // Notification immédiate (best effort)
+  $notif = getenv('SMTP_FROM') ?: getenv('SMTP_USER');
+  if ($notif) {
+    $corps = "Nouvelle demande depuis le site !\n\n"
+      ."Nom : $nom\nEmail : $mail\n".($dem['tel']?("Téléphone : ".$dem['tel']."\n"):'')
+      .($dem['typeEvenement']?("Type : ".$dem['typeEvenement']."\n"):'')
+      .($dem['dateEvenement']?("Date : ".$dem['dateEvenement']."\n"):'')
+      .($dem['lieu']?("Lieu : ".$dem['lieu']."\n"):'')
+      .($dem['nbInvites']?("Invités : ".$dem['nbInvites']."\n"):'')
+      .($dem['prestationSouhaitee']?("\nMessage :\n".$dem['prestationSouhaitee']."\n"):'')
+      ."\nElle est déjà dans ton CRM, onglet Demandes.";
+    @smtpSend($notif, '📥 Nouvelle demande — '.$nom, $corps);
+  }
+  out(['ok'=>true,'id'=>$dem['id']]);
 }
 
 /* ===== Logo public (sert le logo configuré pour l'en-tête des emails) ===== */
