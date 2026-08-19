@@ -3202,10 +3202,39 @@ function projBadge(s){ return `<span style="display:inline-block;padding:2px 10p
 function projCoutEquipe(p){ return (p.equipe||[]).reduce((s,m)=>s+(+m.tarif||0),0); }                                           // total tarifs magiciens
 function projCoutGlobal(p){ return (p.equipe||[]).filter(m=>m.factMode!=='Directe agence').reduce((s,m)=>s+(+m.tarif||0),0); }  // magiciens facturés via moi
 function projCoutDirect(p){ return (p.equipe||[]).filter(m=>m.factMode==='Directe agence').reduce((s,m)=>s+(+m.tarif||0),0); }  // magiciens qui facturent l'agence en direct
-function projTotalAgence(p){ return projCoutGlobal(p)+(+p.maGestionMontant||0); }                                              // ce que MOI je facture à l'agence
+function projSuppTotal(p){ return (p.lignesSupp||[]).reduce((s,l)=>s+(+l.prix||0),0); }                                        // VHR, personnalisation, options…
+function projTotalAgence(p){ return projCoutGlobal(p)+(+p.maGestionMontant||0)+projSuppTotal(p); }                             // ce que MOI je facture à l'agence
+/* Lignes supplémentaires facturables (VHR, personnalisation, matériel spécifique…) */
+function projSuppHtml(pid){
+  const p=getP(pid); const arr=p.lignesSupp||[];
+  const rows=arr.map(l=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--anthr);flex-wrap:wrap">
+    <input class="form-control" style="flex:1;min-width:150px" value="${esc(l.label||'')}" placeholder="Ex : VHR (voyage, hébergement, repas), personnalisation…" onchange="projSuppSet('${pid}','${l.id}','label',this.value)">
+    <input class="form-control" type="number" style="max-width:110px" value="${+l.prix||0}" onchange="projSuppSet('${pid}','${l.id}','prix',+this.value||0)">
+    <button class="qa" title="Retirer" onclick="projSuppDel('${pid}','${l.id}')">✕</button></div>`).join('');
+  return `<div>${rows}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center">
+      <button class="btn btn-ghost btn-sm" onclick="projSuppAdd('${pid}')">+ Ligne supplémentaire</button>
+      ${['VHR (voyage, hébergement, repas)','Personnalisation sur mesure','Matériel spécifique','Repérage / préparation sur site','Frais de déplacement'].map(t=>`<button class="btn btn-ghost btn-sm" style="font-size:11px;opacity:.85" onclick="projSuppAdd('${pid}','${esc(t).replace(/'/g,'&#39;')}')">+ ${esc(t.split(' (')[0])}</button>`).join('')}
+      ${arr.length?`<span class="td-dim" style="margin-left:auto">Sous-total : <strong>${fmtEur(projSuppTotal(p))}</strong></span>`:''}
+    </div>`;
+}
+function projSuppAdd(pid,label){ const p=getP(pid); p.lignesSupp=p.lignesSupp||[]; p.lignesSupp.push({id:uid('SUP'),label:label||'',prix:0}); saveP(p); RENDERERS.projet({id:pid}); }
+function projSuppSet(pid,lid,f,v){ const p=getP(pid); const l=(p.lignesSupp||[]).find(x=>x.id===lid); if(!l)return; l[f]=v; saveP(p); if(f==='prix')RENDERERS.projet({id:pid}); }
+function projSuppDel(pid,lid){ const p=getP(pid); p.lignesSupp=(p.lignesSupp||[]).filter(x=>x.id!==lid); saveP(p); RENDERERS.projet({id:pid}); }
 function factureProjetDe(pid){ return DB.all('factures').find(f=>f.idProjet===pid&&f.type!=='avoir'&&f.statut!=='Annulée'); }
+/* Choix de l'agence parmi les clients référencés (ou saisie libre) */
+function projSetAgence(pid,val){
+  const p=getP(pid); if(!p)return;
+  if(val==='__new'){ p.idAgence=''; }
+  else if(val){ const c=DB.get('clients',val);
+    if(c){ p.idAgence=c.id; p.agence=((c.prenom?c.prenom+' ':'')+c.nom).trim();
+      if(c.email) p.agenceEmail=c.email; if(c.tel) p.agenceTel=c.tel; } }
+  else { p.idAgence=''; p.agence=''; }
+  saveP(p); RENDERERS.projet({id:pid});
+}
 /* Retrouve (ou crée) la fiche client de l'agence — relie le projet au CRM clients */
 function clientAgence(p){
+  if(p.idAgence){ const c=DB.get('clients',p.idAgence); if(c) return c; }   // client déjà référencé
   const nom=(p.agence||'').trim(); if(!nom) return null;
   let c=DB.all('clients').find(x=>((x.prenom||'')+' '+(x.nom||'')).trim().toLowerCase()===nom.toLowerCase());
   if(!c){ c={id:uid('CLI'),nom,prenom:'',email:p.agenceEmail||'',tel:p.agenceTel||'',adresse:p.lieu||'',type:'entreprise',
@@ -3223,13 +3252,14 @@ function devisDepuisProjet(pid){
   if(!p.date){ toast('Renseigne d\'abord la date de l\'événement','err'); return; }
   const nbMag=(p.equipe||[]).length||(+p.nbMagiciensCible||0);
   const montantMagiciens=projCoutGlobal(p), gestion=+p.maGestionMontant||0;
-  const total=montantMagiciens+gestion;
-  if(total<=0){ toast('Renseigne les tarifs (via moi) et/ou ta gestion de projet','err'); return; }
+  const total=projTotalAgence(p);
+  if(total<=0){ toast('Renseigne les tarifs (via moi), ta gestion et/ou des lignes supplémentaires','err'); return; }
   if(!confirm('Créer un devis de '+fmtEur(total)+' pour « '+p.agence+' » ?\n\nIl apparaîtra dans tes Devis et suivra le flux habituel (envoi, signature, acompte, facture).')) return;
   const c=clientAgence(p); const cfg=DB.config();
   const lignes=[];
   if(montantMagiciens>0) lignes.push({label:'Magie immersive — équipe de '+(nbMag||1)+' magicien'+(nbMag>1?'s':'')+' (flash effects, personnages infiltrés)',prix:montantMagiciens,duree:p.dureePresta||''});
   if(gestion>0) lignes.push({label:'Direction artistique & coordination de projet (recrutement, brief, formation, logistique)',prix:gestion,duree:''});
+  (p.lignesSupp||[]).forEach(l=>{ if((l.label||'').trim()||+l.prix) lignes.push({label:(l.label||'Prestation complémentaire').trim(),prix:+l.prix||0,duree:''}); });
   const d={id:nextId('DEV','devis'),dateCreation:todayISO(),idProjet:pid,idClient:c?c.id:'',nomClient:p.agence,
     email:(c&&c.email)||p.agenceEmail||'',tel:(c&&c.tel)||p.agenceTel||'',typeEvenement:p.typeEvenement||'',
     dateEvenement:p.date,creneau:p.creneau||'Soirée',horaire:p.horaire||'',lieu:p.lieu||'',distanceKm:0,nbInvites:p.nbInvites||'',
@@ -3237,7 +3267,7 @@ function devisDepuisProjet(pid){
     acomptePct:cfg.acompteDefautPct||30,statut:'Brouillon',dateEnvoi:'',dateAcceptation:'',
     notes:'Projet Imagine the Impossible'+(p.theme?(' — '+p.theme):''),idDemandeOrigine:''};
   DB.save('devis',d); syncPrestationDevis(d);
-  p.idDevis=d.id; if(p.statut==='Prospect') p.statut='En préparation'; saveP(p);
+  p.idDevis=d.id; if(c&&!p.idAgence) p.idAgence=c.id; if(p.statut==='Prospect') p.statut='En préparation'; saveP(p);
   logActivite('Devis '+d.id+' généré depuis le projet '+(p.nom||pid));
   updateBadges(); toast('📄 Devis '+d.id+' créé — vérifie et envoie-le','ok'); nav('devis-create',{id:d.id});
 }
@@ -3290,7 +3320,7 @@ RENDERERS.projets=function(){
 };
 function nouveauProjet(){
   const p={id:uid('PRJ'),nom:'',date:'',lieu:'',agence:'',agenceEmail:'',agenceTel:'',budgetTotal:0,theme:'',typeEvenement:'',nbInvites:'',ambiance:'',
-    nbMagiciensCible:0,tarifMode:'TTC',whatsappGroupe:'',idDevis:'',horaire:'',creneau:'Soirée',dureePresta:'',
+    nbMagiciensCible:0,tarifMode:'TTC',whatsappGroupe:'',idDevis:'',idAgence:'',lignesSupp:[],horaire:'',creneau:'Soirée',dureePresta:'',
     statut:'Prospect',briefUrl:'',notesBrief:'',feedback:'',notes:'',maGestionMontant:0,statutAgence:'En attente',
     equipe:[],consommables:[],equipement:[],logistique:{transport:'',hebergement:'',repas:''},checklist:[],createdAt:new Date().toISOString()};
   saveP(p); logActivite('Projet Imagine créé'); nav('projet',{id:p.id});
@@ -3313,7 +3343,15 @@ RENDERERS.projet=function(params){
       <div class="form-grid c3">
         <div class="form-group"><label class="form-label">Nom du projet</label><input class="form-control" value="${esc(p.nom||'')}" onchange="projField('${id}','nom',this.value)"></div>
         <div class="form-group"><label class="form-label">Date</label><input class="form-control" type="date" value="${esc(p.date||'')}" onchange="projField('${id}','date',this.value)"></div>
-        <div class="form-group"><label class="form-label">Agence cliente</label><input class="form-control" value="${esc(p.agence||'')}" onchange="projField('${id}','agence',this.value)"></div>
+        <div class="form-group"><label class="form-label">Agence cliente ${p.idAgence?'<span class="td-dim" style="font-size:11px">· fiche client liée</span>':''}</label>
+          ${(()=>{ const cls=DB.all('clients').slice().sort((a,b)=>((a.prenom||'')+a.nom).localeCompare((b.prenom||'')+b.nom));
+            const cur=p.idAgence||'';
+            return `<select class="form-control" onchange="projSetAgence('${id}',this.value)">
+              <option value="">— Choisir dans mes clients —</option>
+              ${cls.map(c=>{const n=((c.prenom?c.prenom+' ':'')+c.nom).trim(); return `<option value="${c.id}"${c.id===cur?' selected':''}>${esc(n)}${c.type&&c.type!=='particulier'?' ('+esc(c.type)+')':''}</option>`;}).join('')}
+              <option value="__new"${(!cur&&p.agence)?' selected':''}>✏️ Autre / nouveau nom…</option></select>`; })()}
+          ${(!p.idAgence)?`<input class="form-control" style="margin-top:6px" value="${esc(p.agence||'')}" onchange="projField('${id}','agence',this.value)" placeholder="Nom de l'agence (si pas encore dans tes clients)">`:''}
+        </div>
         <div class="form-group"><label class="form-label">Email agence</label><input class="form-control" value="${esc(p.agenceEmail||'')}" onchange="projField('${id}','agenceEmail',this.value)" placeholder="pour le devis / la facture"></div>
         <div class="form-group"><label class="form-label">Lieu</label><input class="form-control" value="${esc(p.lieu||'')}" onchange="projField('${id}','lieu',this.value)"></div>
         <div class="form-group"><label class="form-label">Type d'événement</label><input class="form-control" value="${esc(p.typeEvenement||'')}" onchange="projField('${id}','typeEvenement',this.value)" placeholder="soirée de gala, lancement…"></div>
@@ -3374,6 +3412,9 @@ RENDERERS.projet=function(params){
         <div class="form-group"><label class="form-label">Tarifs exprimés en</label><select class="form-control" onchange="projFieldRe('${id}','tarifMode',this.value)">${TARIF_MODE.map(s=>`<option${s===(p.tarifMode||'TTC')?' selected':''}>${s}</option>`).join('')}</select></div>
         <div class="form-group"><label class="form-label">Paiement agence</label><select class="form-control" onchange="projField('${id}','statutAgence',this.value)">${AGENCE_PAY.map(s=>`<option${s===p.statutAgence?' selected':''}>${s}</option>`).join('')}</select></div>
       </div>
+      <div class="panel-title" style="margin-top:16px;font-size:13px">➕ Lignes supplémentaires facturées à l'agence</div>
+      <div class="td-dim" style="font-size:11px;margin-bottom:6px">VHR, personnalisation, matériel spécifique… Ces lignes s'ajoutent au total et apparaissent dans le devis généré.</div>
+      ${projSuppHtml(id)}
       ${(()=>{ const dv=devisProjetDe(id), fp=factureProjetDe(id);
         let out='<div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">';
         if(dv) out+=`<span style="padding:8px 12px;background:var(--okl);border-radius:var(--rsm)">📄 Devis <strong>${esc(dv.id)}</strong> · ${fmtEur(dv.montantTTC)} · ${badge(dv.statut)}</span><button class="btn btn-ghost btn-sm" onclick="voirDevis('${dv.id}')">Ouvrir le devis</button><button class="btn btn-ghost btn-sm" onclick="dossierEvenement('${dv.id}')">📁 Dossier</button>`;
@@ -3402,6 +3443,8 @@ function dupliquerProjet(id){
   np.statutAgence='En attente'; np.factureId=''; np.feedback=''; np.createdAt=new Date().toISOString();
   (np.equipe||[]).forEach(m=>{ m.id=uid('MBR'); m.dispo='En discussion'; m.statutPaiement='En discussion'; });
   ['consommables','equipement','checklist'].forEach(k=>(np[k]||[]).forEach(it=>{ it.id=uid('IT'); it.fait=false; }));
+  (np.lignesSupp||[]).forEach(l=>l.id=uid('SUP'));
+  np.idDevis='';
   saveP(np); logActivite('Projet dupliqué depuis '+(p.nom||id));
   toast('📋 Projet dupliqué — mets à jour la date et le lieu','ok'); nav('projet',{id:np.id});
 }
@@ -3724,6 +3767,7 @@ function pdfFicheRecap(pid){
   const brows=[];
   if(coutG>0) brows.push(['Magiciens facturés via moi',fmtEurPdf(coutG)+dev]);
   if(gestion>0) brows.push(['Direction artistique & coordination',fmtEurPdf(gestion)+dev]);
+  (p.lignesSupp||[]).forEach(l=>{ if((l.label||'').trim()||+l.prix) brows.push([l.label||'Prestation complémentaire',fmtEurPdf(l.prix)+dev]); });
   brows.push(['TOTAL FACTURÉ À L\'AGENCE',fmtEurPdf(tot)+dev]);
   if(coutD>0) brows.push(['(magiciens en facturation directe)',fmtEurPdf(coutD)+dev]);
   if(+p.budgetTotal) brows.push(['Budget annoncé par l\'agence',fmtEurPdf(p.budgetTotal)+dev]);
