@@ -38,9 +38,10 @@
 body{font-family:'DM Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,sans-serif;color:var(--creme);font-size:14px;background:var(--noir);min-height:100vh;-webkit-font-smoothing:antialiased;overflow-x:hidden}
 h1,h2,h3,h4,.disp{font-family:'Syne','Trebuchet MS','Gill Sans',sans-serif}
 ::selection{background:var(--or);color:var(--noir)}
-.brand-logo{width:64px;height:64px;object-fit:contain;display:block;margin:0 auto 12px}
-.sb-logo .brand-logo{width:40px;height:40px;margin:0}
-[data-theme="dark"] .brand-logo, :root:not([data-theme="light"]) .brand-logo{filter:invert(1)}
+.brand-logo{height:64px;width:auto;max-width:200px;object-fit:contain;display:block;margin:0 auto 14px}
+.sb-logo .brand-logo{height:46px;max-width:190px;margin:0}
+.sb-logo.logo-seul{justify-content:flex-start}
+.sb-logo.logo-seul .brand-logo{height:52px;max-width:196px}
 ::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:var(--anthr);border-radius:8px}::-webkit-scrollbar-track{background:transparent}
 
 /* ── LOGIN ── */
@@ -354,7 +355,7 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
 <div id="login-screen">
   <div class="login-card">
     <img class="brand-logo" alt="LouisMagie">
-    <div class="login-logo">LouisMagie</div>
+    <div class="login-logo" data-nom>LouisMagie</div>
     <div class="login-title">Espace<br><em>Administration</em></div>
     <input type="password" id="pwd" placeholder="Mot de passe" onkeydown="if(event.key==='Enter')doLogin()">
     <label style="display:flex;align-items:center;gap:8px;justify-content:center;font-size:13px;color:var(--gm);margin-bottom:12px;cursor:pointer"><input type="checkbox" id="pwd-stay" checked style="width:16px;height:16px">Rester connecté sur cet appareil</label>
@@ -368,7 +369,7 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
   <aside id="sidebar">
     <div class="sb-logo" style="display:flex;align-items:center;gap:10px">
       <img class="brand-logo" alt="">
-      <div><div class="sb-brand">Magicien · Dunkerque</div>
+      <div data-nom><div class="sb-brand">Magicien · Dunkerque</div>
       <div class="sb-name">Louis<em>Magie</em></div></div>
     </div>
     <nav class="sb-nav">
@@ -557,18 +558,30 @@ function uploadLogo(input){
       const data=c.toDataURL('image/png');
       const cfg=DB.config(); cfg.logo=data; DB.saveConfig(cfg);
       if(cloudUrl()) cloudPost({action:'putConfig',config:DB.config()});   // pousse tout de suite (pour ?action=logo)
-      document.querySelectorAll('.brand-logo').forEach(i=>i.src=data); const pv=document.getElementById('logo-preview'); if(pv)pv.src=data;
-      prepareLogo();
+      const pv=document.getElementById('logo-preview'); if(pv)pv.src=data;
+      prepareLogo(); appliquerLogos();
       logActivite('Logo mis à jour'); toast('🎨 Logo enregistré','ok'); if(_currentView==='reglages') RENDERERS.reglages();
     };
     img.onerror=()=>toast('Image illisible','err'); img.src=ev.target.result;
   };
   r.readAsDataURL(f);
 }
-function majLogoAvecNom(v){ const c=DB.config(); c.pdfAfficherNom=!!v; DB.saveConfig(c); toast(v?'Le nom sera écrit à côté du logo':'Le logo parle seul — nom retiré des PDF','ok'); }
+/* Applique la variante de logo lisible sur le thème courant + masque le nom si le logo le contient */
+function appliquerLogos(){
+  try{
+    const clair=document.documentElement.getAttribute('data-theme')==='light';
+    const m=_logoMeta, src=m?(clair?m.onLight:m.onDark):logoSrc();
+    document.querySelectorAll('.brand-logo').forEach(i=>{ if(src){ i.src=src; i.style.display=''; } else i.style.display='none'; i.style.filter='none'; });
+    const cacherNom=!!logoSrc() && DB.config().pdfAfficherNom!==true;
+    document.querySelectorAll('[data-nom]').forEach(el=>{ el.style.display=cacherNom?'none':''; });
+    const sb=document.querySelector('.sb-logo'); if(sb) sb.classList.toggle('logo-seul',cacherNom);
+  }catch(_){}
+}
+function majLogoAvecNom(v){ const c=DB.config(); c.pdfAfficherNom=!!v; DB.saveConfig(c); appliquerLogos();
+  toast(v?'Le nom sera écrit à côté du logo':'Le logo parle seul — nom retiré','ok'); }
 function resetLogo(){ const cfg=DB.config(); delete cfg.logo; DB.saveConfig(cfg);
   if(cloudUrl()) cloudPost({action:'putConfig',config:DB.config()});
-  document.querySelectorAll('.brand-logo').forEach(i=>i.src=LOGO_B64); prepareLogo();
+  prepareLogo(); appliquerLogos();
   toast('Logo par défaut rétabli','ok'); if(_currentView==='reglages') RENDERERS.reglages();
 }
 
@@ -609,7 +622,7 @@ function applyTheme(t){
   const dv=document.getElementById('view-dashboard');
   if(dv&&dv.classList.contains('active')&&typeof _charts!=='undefined'&&(_charts.ca||_charts.type)){ buildChartCA(); buildChartType(); }
 }
-function toggleTheme(){ applyTheme((document.documentElement.getAttribute('data-theme')==='light')?'dark':'light'); }
+function toggleTheme(){ applyTheme((document.documentElement.getAttribute('data-theme')==='light')?'dark':'light');  appliquerLogos(); }
 function chartColors(){ const light=document.documentElement.getAttribute('data-theme')==='light';
   return { grid: light?'rgba(0,0,0,.08)':'rgba(255,255,255,.06)', txt: light?'#6E695F':'#8A8580', legend: light?'#3A372F':'#C8C3BB' }; }
 function badge(statut){ const s=(statut||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]/g,'');
@@ -1567,7 +1580,8 @@ function prepareLogo(){
         _logoMeta={ratio:img.width/Math.max(1,img.height), lum, detoure,
           onDark:  lum<0.45 ? invUrl : detoure,   // dessin sombre → inversé pour rester lisible sur noir
           onLight: lum>0.60 ? invUrl : detoure};  // dessin clair  → inversé pour rester lisible sur blanc
-      }catch(_){ _logoMeta={ratio:img.width/Math.max(1,img.height),lum:.5,onDark:src,onLight:src}; }
+        appliquerLogos();
+      }catch(_){ _logoMeta={ratio:img.width/Math.max(1,img.height),lum:.5,onDark:src,onLight:src}; appliquerLogos(); }
     };
     img.onerror=function(){ _logoMeta=null; };
     img.src=src;
@@ -2718,7 +2732,8 @@ function trimsADeclarer(){ // trimestres clos, non déclarés, avec du CA (évit
   const y=new Date().getFullYear(); const out=[];
   [y-1,y].forEach(an=>[1,2,3,4].forEach(t=>{ const et=trimEtat(an,t); if(et!=='a-declarer'&&et!=='retard')return;
     const ca=caTrimestre(an,t); const j=daysFromNow(trimEcheance(an,t));
-    if(ca>0 || et==='retard' || j<=7) out.push({an,t,et});   // déclaration obligatoire même à 0 € → rappel J-7
+    // CA réel → toujours signalé ; trimestre sans activité → rappel court autour de l'échéance seulement
+    if(ca>0 || (j<=7 && j>=-30)) out.push({an,t,et});
   }));
   return out;
 }
@@ -4067,8 +4082,7 @@ function ficheProjetOpen(pid){ const doc=pdfFicheProjet(pid); if(!doc)return; sh
 
 (async function boot(){
   try{ applyTheme(localStorage.getItem('lm_theme')||'dark'); }catch(_){ applyTheme('dark'); }
-  try{ document.querySelectorAll('.brand-logo').forEach(i=>i.src=logoSrc()); }catch(_){}
-  prepareLogo();                       // mesure ratio + variantes claires/sombres pour les PDF
+  prepareLogo(); appliquerLogos();                       // mesure ratio + variantes claires/sombres pour les PDF
   await ensureSeed();
   setCloudStatus(cloudUrl()?'sync':'off');
   // pull se fait après login (showApp), car l'API exige le mot de passe
