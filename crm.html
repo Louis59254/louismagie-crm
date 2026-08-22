@@ -455,7 +455,7 @@ const LOGO_B64="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAACgCAYAAACLz2
    ════════════════════════════════════════════════════ */
 
 /* ───── Couche données (abstraction) ───── */
-const ENTITIES = ['demandes','devis','prestations','factures','clients','relances','activite','mails','catalogue','recettes','declarations','planifs','templates','projets','magiciens','effets'];
+const ENTITIES = ['demandes','devis','prestations','factures','clients','relances','activite','mails','catalogue','recettes','declarations','planifs','templates','projets','magiciens','effets','segments','campagnes'];
 const LS_PREFIX = 'lm_crm_';
 const DB = {
   all(e){ try{ return JSON.parse(localStorage.getItem(LS_PREFIX+e)) || []; }catch(_){ return []; } },
@@ -522,7 +522,7 @@ function shadeHex(hex,pct){ hex=String(hex||'#FF7700').replace('#',''); if(hex.l
   let r=(n>>16)&255,g=(n>>8)&255,b=n&255; r=Math.round(r+(255-r)*pct); g=Math.round(g+(255-g)*pct); b=Math.round(b+(255-b)*pct);
   return '#'+((1<<24)+(r<<16)+(g<<8)+b).toString(16).slice(1); }
 /* Coquille HTML brandée — header (logo + tagline + couleur) et footer paramétrables (Réglages) */
-function emailShell(innerHtml){
+function emailShell(innerHtml,opts){
   const cfg=DB.config(), logo=(cfg.logo&&emailLogoUrl())?emailLogoUrl():'';
   const e=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   const mail=cfg.emailLouis||'contact@louismagie.fr', tel=cfg.entrepriseTel||'', logoH=logo?128:0;
@@ -542,12 +542,31 @@ function emailShell(innerHtml){
     +`</td></tr>`
     +`<tr><td style="padding:32px 30px;color:#5A5650;font-size:15px;line-height:1.75">${innerHtml}</td></tr>`
     +`<tr><td align="center" style="padding:22px 28px;background:#0A0A08;font-size:12px;line-height:1.8">${footerHtml}</td></tr>`
+    +((opts&&opts.desabo)?`<tr><td align="center" style="padding:14px 28px;background:#0A0A08;border-top:1px solid #2C2C28"><a href="${opts.desabo}" style="color:#8A8580;font-size:11px;text-decoration:underline">Ne plus recevoir mes actualités</a></td></tr>`:'')
     +`</table>`
     +`<div style="max-width:600px;margin:14px auto 0;color:#8A8580;font-size:11px;text-align:center;font-family:'Helvetica Neue',Arial,sans-serif">louismagie.fr</div>`
     +`</td></tr></table></body></html>`;
 }
 /* Emails au format riche (WYSIWYG) : le HTML est déjà formaté, on l'injecte tel quel dans la coquille */
-function emailHtmlRich(html){ return emailShell(html||''); }
+function emailHtmlRich(html,opts){ return emailShell(html||'',opts); }
+/* Lien de désabonnement signé (obligatoire sur les emails d'actualité) */
+async function hmac16(msg,cle){
+  try{
+    const enc=new TextEncoder();
+    const k=await crypto.subtle.importKey('raw',enc.encode(cle),{name:'HMAC',hash:'SHA-256'},false,['sign']);
+    const sig=await crypto.subtle.sign('HMAC',k,enc.encode(msg));
+    return [...new Uint8Array(sig)].map(b=>b.toString(16).padStart(2,'0')).join('').slice(0,16);
+  }catch(_){ return ''; }
+}
+async function lienDesabo(email){
+  const base=cloudUrl(); if(!base||!email) return '';
+  const cfg=DB.config();
+  let secret=cfg.desaboKey||cfg.formKey;
+  if(!secret){ secret=genToken()+genToken().slice(0,8); const c=DB.config(); c.desaboKey=secret; DB.saveConfig(c);
+    if(cloudUrl()) await cloudPost({action:'putConfig',config:DB.config()}); }   // le serveur doit connaître le même secret
+  const sig=await hmac16(String(email).toLowerCase().trim(),secret);
+  return sig?(base+'?action=desabo&e='+encodeURIComponent(email)+'&s='+sig):'';
+}
 /* Version texte brut (alternative pour les clients sans HTML) */
 function stripHtml(h){ const d=document.createElement('div'); d.innerHTML=String(h||'').replace(/<\/(p|div|h[1-6]|li)>/gi,'\n').replace(/<br\s*\/?>/gi,'\n'); return (d.textContent||d.innerText||'').replace(/\n{3,}/g,'\n\n').trim(); }
 function uploadLogo(input){
@@ -3029,7 +3048,50 @@ const MKT_CAMPAIGNS=[
 ];
 function mktApply(str,c){ return str.replace(/{prenom}/g,prenomDe(c?(c.prenom||c.nom):'')).replace(/{sig}/g,sig()).replace(/{avisurl}/g,DB.config().googleReviewUrl||''); }
 
-let _mktFiltre='', _mktTpl='anniv', _mktSearch='', _mktDraft=null;
+let _mktFiltre='', _mktTpl='anniv', _mktSearch='', _mktDraft=null, _mktSeg='tous';
+/* Listes prêtes à l'emploi, calculées depuis les données */
+const MKT_SEGMENTS=[
+  {key:'tous',      label:'📋 Tous mes contacts',      f:c=>true},
+  {key:'clients',   label:'✅ Clients (ont réservé)',   f:c=>['particulier','entreprise','partenaire'].includes(c.type)&&(c.nbDevis||0)>0},
+  {key:'prospects', label:'🌱 Prospects (jamais réservé)', f:c=>c.type==='prospect'||!(c.nbDevis>0)},
+  {key:'entreprise',label:'🏢 Entreprises',            f:c=>c.type==='entreprise'},
+  {key:'particulier',label:'👤 Particuliers',          f:c=>c.type==='particulier'},
+  {key:'partenaire',label:'🤝 Partenaires & agences',  f:c=>c.type==='partenaire'},
+  {key:'actifs',    label:'🔥 Actifs (moins d\'un an)', f:c=>{const d=clientDernierEvt(c.id); return d&&daysSince(d)<=365;}},
+  {key:'dormants',  label:'😴 Dormants (plus d\'un an)', f:c=>{const d=clientDernierEvt(c.id); return d&&daysSince(d)>365;}},
+  {key:'anniv',     label:'🎂 Anniversaire ce mois',   f:c=>{const d=clientDernierEvt(c.id); if(!d)return false;
+      const dt=new Date(d); return dt.getMonth()===new Date().getMonth() && (new Date().getFullYear()-dt.getFullYear())>=1;}},
+  {key:'top',       label:'⭐ Meilleurs clients (CA)',  f:c=>(c.caTotal||0)>0, tri:(a,b)=>(b.caTotal||0)-(a.caTotal||0), limite:20},
+];
+/* Contacts d'un segment : joignables, non désabonnés */
+function segContacts(key){
+  const perso=(key||'').indexOf('seg:')===0 ? DB.get('segments',key.slice(4)) : null;
+  let liste=DB.all('clients').map(recalcClient).filter(c=>c.email&&!c.desabo);
+  if(perso) return liste.filter(c=>(perso.ids||[]).includes(c.id));
+  const s=MKT_SEGMENTS.find(x=>x.key===key)||MKT_SEGMENTS[0];
+  liste=liste.filter(s.f);
+  if(s.tri) liste.sort(s.tri);
+  if(s.limite) liste=liste.slice(0,s.limite);
+  return liste;
+}
+function segNom(key){
+  if((key||'').indexOf('seg:')===0){ const p=DB.get('segments',key.slice(4)); return p?p.nom:'Liste'; }
+  return (MKT_SEGMENTS.find(x=>x.key===key)||MKT_SEGMENTS[0]).label;
+}
+function segEnregistrer(){
+  const ids=[...document.querySelectorAll('#view-marketing .mkt-cb:checked')].map(cb=>cb.value);
+  if(!ids.length){ toast('Coche d\'abord des contacts','err'); return; }
+  const nom=prompt('Nom de cette liste (ex : « Agences Paris », « Mariages 2026 ») :',''); if(!nom) return;
+  const sg=DB.save('segments',{id:uid('SEG'),nom:nom.trim(),ids,createdAt:new Date().toISOString()});
+  _mktSeg='seg:'+sg.id; logActivite('Liste « '+nom.trim()+' » créée ('+ids.length+' contacts)');
+  toast('💾 Liste « '+nom.trim()+' » enregistrée','ok'); RENDERERS.marketing();
+}
+function segSupprimer(){
+  if(_mktSeg.indexOf('seg:')!==0) return;
+  const sg=DB.get('segments',_mktSeg.slice(4)); if(!sg) return;
+  if(!confirm('Supprimer la liste « '+sg.nom+' » ?\n\nLes contacts ne sont pas supprimés.')) return;
+  DB.remove('segments',sg.id); _mktSeg='tous'; toast('Liste supprimée','ok'); RENDERERS.marketing();
+}
 /* ── Studio mailing : contenu d'un modèle (sauvegardé ou intégré) → {subject, html} ── */
 function mktTemplateContent(key){
   if(key&&key.indexOf('tpl:')===0){ const t=DB.get('templates',key.slice(4)); if(t) return {subject:t.subject||'',html:t.html||''}; }
@@ -3097,9 +3159,8 @@ RENDERERS.marketing=function(){
       <button class="qa" title="Masquer cette suggestion" onclick="dismissRappel('${r.key}')">✕</button></div>`).join('')
     :'<div class="td-dim">Aucun rappel — tu es à jour 👌</div>';
 
-  const opt=(v,l)=>`<option value="${v}"${v===_mktFiltre?' selected':''}>${l}</option>`;
-  let liste=clients;
-  if(_mktFiltre) liste=liste.filter(c=>c.type===_mktFiltre);
+  const liste=segContacts(_mktSeg);
+  const desabos=DB.all('clients').filter(c=>c.email&&c.desabo).length;
   const cbList=liste.map(c=>`<label class="mkt-row" data-s="${esc((c.prenom+' '+c.nom+' '+c.email).toLowerCase())}" style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--anthr);cursor:pointer">
       <input type="checkbox" class="mkt-cb" value="${c.id}" checked>
       <span style="flex:1">${esc((c.prenom+' '+c.nom).trim())}<span class="td-dim"> · ${esc(c.email)}</span></span>
@@ -3131,9 +3192,11 @@ RENDERERS.marketing=function(){
             ${savedOpts?`<optgroup label="Mes modèles">${savedOpts}</optgroup>`:''}
             <optgroup label="Modèles intégrés">${builtinOpts}</optgroup>
             <option value="_new"${_mktTpl==='_new'?' selected':''}>🆕 Nouveau modèle vierge</option></select></div>
-        <div class="form-group"><label class="form-label">Filtrer les destinataires</label>
-          <select class="form-control" onchange="mktCaptureDraft();_mktFiltre=this.value;RENDERERS.marketing()">
-            ${opt('','Tous les contacts')}${opt('particulier','Particuliers')}${opt('entreprise','Entreprises')}${opt('partenaire','Partenaires')}</select></div>
+        <div class="form-group"><label class="form-label">Liste de destinataires</label>
+          <select class="form-control" onchange="mktCaptureDraft();_mktSeg=this.value;RENDERERS.marketing()">
+            <optgroup label="Listes automatiques">${MKT_SEGMENTS.map(sg=>`<option value="${sg.key}"${sg.key===_mktSeg?' selected':''}>${sg.label} (${segContacts(sg.key).length})</option>`).join('')}</optgroup>
+            ${DB.all('segments').length?`<optgroup label="Mes listes">${DB.all('segments').map(sg=>`<option value="seg:${sg.id}"${_mktSeg==='seg:'+sg.id?' selected':''}>📁 ${esc(sg.nom)} (${(sg.ids||[]).length})</option>`).join('')}</optgroup>`:''}
+          </select></div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
         <button class="btn btn-ghost btn-sm" onclick="mktSaveTemplate()">💾 Enregistrer le modèle</button>
@@ -3158,11 +3221,13 @@ RENDERERS.marketing=function(){
         <iframe id="mkt-pv-frame" sandbox="" style="width:100%;height:460px;border:1px solid var(--anthr);border-radius:12px;background:#fff"></iframe>
       </div>
 
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin:10px 0 4px;flex-wrap:wrap">
-        <div class="td-strong">Destinataires (<span id="mkt-count">${liste.length}</span>)</div>
-        <div style="display:flex;gap:8px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin:14px 0 4px;flex-wrap:wrap">
+        <div class="td-strong">${esc(segNom(_mktSeg))} — <span id="mkt-count">${liste.length}</span> destinataire(s)${desabos?` <span class="td-dim" style="font-weight:400">· ${desabos} désabonné(s) exclu(s)</span>`:''}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-ghost btn-sm" onclick="mktToggleAll(true)">Tout cocher</button>
           <button class="btn btn-ghost btn-sm" onclick="mktToggleAll(false)">Tout décocher</button>
+          <button class="btn btn-ghost btn-sm" onclick="segEnregistrer()">💾 Enregistrer la sélection</button>
+          ${_mktSeg.indexOf('seg:')===0?`<button class="btn btn-ghost btn-sm" onclick="segSupprimer()">🗑 Supprimer la liste</button>`:''}
         </div>
       </div>
       <input class="form-control" id="mkt-search" placeholder="🔍 Rechercher un contact (nom, email)…" oninput="mktSearchFilter(this.value)" style="margin-bottom:8px">
@@ -3171,7 +3236,9 @@ RENDERERS.marketing=function(){
       <div id="mkt-progress" class="td-dim" style="margin-top:10px"></div>
       <div class="form-grid" style="margin-top:10px;align-items:end">
         <div class="form-group"><label class="form-label">📅 Planifier (optionnel — vide = envoi immédiat)</label><input class="form-control" type="date" id="mkt-date" min="${todayISO()}"></div>
-        <div style="text-align:right"><button class="btn btn-or" onclick="envoyerCampagne()">📤 Envoyer / Planifier</button></div>
+        <div style="text-align:right;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+          <button class="btn btn-ghost" onclick="envoyerTest()">🧪 M'envoyer un test</button>
+          <button class="btn btn-or" onclick="envoyerCampagne()">📤 Envoyer / Planifier</button></div>
       </div>
       ${!auto?'<div class="td-dim" style="margin-top:6px">Planification + suivi des ouvertures = nécessitent l\'envoi auto Gmail.</div>':''}
     </div>
@@ -3184,18 +3251,38 @@ function marketingStatsHtml(){
   const sent=DB.all('mails').filter(m=>m.to);
   const opened=sent.filter(m=>isOpened(m.id));
   const taux=sent.length?Math.round(opened.length/sent.length*100):0;
-  const recent=sent.slice().sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,8);
+  const camps=DB.all('campagnes').slice().sort((a,b)=>(b.date||'').localeCompare(a.date||'')).slice(0,6);
+  const lignesCamp=camps.map(c=>{
+    const ouv=(c.mailIds||[]).filter(id=>isOpened(id)).length;
+    const tx=c.envoyes?Math.round(ouv/c.envoyes*100):0;
+    return `<div style="padding:9px 0;border-bottom:1px solid var(--anthr)">
+      <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+        <span style="flex:1;min-width:0"><span class="td-strong" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block">${esc(c.nom||'Campagne')}</span>
+          <span class="td-dim" style="font-size:11px">${fmtDateShort(c.date)} · ${esc(c.segment||'')} · ${c.envoyes||0} envoyé(s)${c.echecs?(' · '+c.echecs+' échec(s)'):''}</span></span>
+        <span class="td-strong" style="color:${tx>=30?'var(--ok)':tx>=15?'var(--warn)':'var(--gm)'}">${ouv} ouvert${ouv>1?'s':''} · ${tx} %</span></div>
+      <div style="height:5px;background:var(--anthr);border-radius:20px;overflow:hidden;margin-top:6px"><div style="height:100%;width:${Math.min(100,tx)}%;background:var(--or)"></div></div></div>`;
+  }).join('')||'<div class="td-dim">Aucune campagne envoyée pour l\'instant.</div>';
+  const recent=sent.slice().sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,6);
   const rows=recent.length?recent.map(m=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--anthr)">
       <div style="min-width:0"><div class="td-strong" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(m.subject||'(sans objet)')}</div><div class="td-dim">${esc(m.to)} · ${fmtDateShort(m.date)}</div></div>
       <span class="badge ${isOpened(m.id)?'accepte':'brouillon'}" style="align-self:center">${isOpened(m.id)?'👁 ouvert':'envoyé'}</span></div>`).join(''):'<div class="td-dim">Aucun email envoyé.</div>';
-  return `<div class="panel"><div class="panel-title">📈 Statistiques d'envoi</div>
-    <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
+  const desab=DB.all('clients').filter(c=>c.desabo);
+  return `<div class="panel"><div class="panel-title">📈 Résultats des campagnes</div>
+    <div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr));margin-bottom:12px">
       ${kpi('info','Emails envoyés',sent.length)}
       ${kpi('vert','Ouvertures',opened.length)}
       ${kpi('or','Taux d\'ouverture',taux+' %')}
+      ${kpi(desab.length?'warn':'vert','Désabonnés',desab.length)}
     </div>
-    <div class="td-dim" style="margin-bottom:6px">Derniers envois (le suivi d'ouverture peut être sous-estimé : certains clients mail bloquent le pixel).</div>
-    ${rows}</div>`;
+    ${lignesCamp}
+    <details style="margin-top:14px"><summary style="cursor:pointer;color:var(--gm);font-size:12px">Derniers emails envoyés</summary>
+      <div style="margin-top:8px">${rows}</div>
+      <div class="td-dim" style="font-size:11px;margin-top:8px">Le suivi d'ouverture est indicatif : certains clients mail bloquent le pixel.</div>
+    </details>
+    ${desab.length?`<details style="margin-top:8px"><summary style="cursor:pointer;color:var(--gm);font-size:12px">Contacts désabonnés (${desab.length})</summary>
+      <div class="td-dim" style="font-size:12px;margin-top:8px">${desab.map(c=>esc(((c.prenom?c.prenom+' ':'')+c.nom).trim())+' · '+esc(c.email)).join('<br>')}
+      <br><br>Ils sont exclus automatiquement des campagnes. Les emails de devis et factures leur parviennent toujours.</div></details>`:''}
+  </div>`;
 }
 function planifsHtml(){
   const all=DB.all('planifs').slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''));
@@ -3212,6 +3299,22 @@ function planifsHtml(){
 function mktToggleAll(v){ document.querySelectorAll('#view-marketing .mkt-row').forEach(l=>{ if(l.style.display!=='none') l.querySelector('.mkt-cb').checked=v; }); mktCount(); }
 function mktSearchFilter(q){ q=(q||'').toLowerCase().trim(); document.querySelectorAll('#view-marketing .mkt-row').forEach(l=>{ l.style.display=(!q||(l.dataset.s||'').includes(q))?'':'none'; }); }
 function mktCount(){ const n=document.querySelectorAll('#view-marketing .mkt-cb:checked').length; const el=document.getElementById('mkt-count'); if(el)el.textContent=n; }
+/* Test : s'envoyer l'email tel qu'il partira, variables résolues sur un vrai contact */
+async function envoyerTest(){
+  const cfg=DB.config();
+  if(!(cfg.gmailEnvoi&&cloudUrl())){ toast('Active l\'envoi automatique (Réglages) pour le test','err'); return; }
+  const moi=cfg.emailLouis||''; if(!moi){ toast('Renseigne ton email expéditeur dans les Réglages','err'); return; }
+  const subject=(document.getElementById('mkt-subject')||{}).value||'';
+  const html=(document.getElementById('mkt-editor')||{}).innerHTML||'';
+  if(!subject.trim()&&!stripHtml(html).trim()){ toast('Écris d\'abord ton message','err'); return; }
+  const ids=[...document.querySelectorAll('#view-marketing .mkt-cb:checked')].map(cb=>cb.value);
+  const modele=(ids.length?DB.get('clients',ids[0]):null)||{prenom:'Camille',nom:'Moreau'};
+  const corps=mktVars(html,modele);
+  const desabo=await lienDesabo(moi);
+  const j=await cloudPost({action:'sendEmail',to:moi,subject:'[TEST] '+mktVars(subject,modele),
+    body:stripHtml(corps),html:emailHtmlRich(corps,{desabo})});
+  toast(j&&j.ok?('🧪 Test envoyé à '+moi+' (variables : '+prenomDe(modele.prenom||modele.nom)+')'):'Échec : '+((j&&j.info)||'serveur injoignable'), j&&j.ok?'ok':'err');
+}
 async function envoyerCampagne(){
   const ids=[...document.querySelectorAll('#view-marketing .mkt-cb:checked')].map(cb=>cb.value);
   if(!ids.length){ toast('Aucun destinataire coché','err'); return; }
@@ -3225,26 +3328,40 @@ async function envoyerCampagne(){
   if(date && date>todayISO()){
     if(!auto){ toast('Planification = nécessite l\'envoi auto Gmail (Réglages)','err'); return; }
     let n=0;
-    ids.forEach(id=>{ const c=DB.get('clients',id); if(!c||!c.email)return;
+    ids.forEach(id=>{ const c=DB.get('clients',id); if(!c||!c.email||c.desabo)return;
       const htmlP=mktVars(bodyHtmlTpl,c);
-      DB.save('planifs',{id:uid('PLN'),date,to:c.email,subject:mktVars(subjectTpl,c),body:stripHtml(htmlP),html:emailHtmlRich(htmlP),trackId:uid('MAIL'),client:(c.prenom+' '+c.nom).trim(),statut:'prévu',createdAt:new Date().toISOString()}); n++; });
+      lienDesabo(c.email).then(desabo=>{
+        DB.save('planifs',{id:uid('PLN'),date,to:c.email,subject:mktVars(subjectTpl,c),body:stripHtml(htmlP),
+          html:emailHtmlRich(htmlP,{desabo}),trackId:uid('MAIL'),client:(c.prenom+' '+c.nom).trim(),statut:'prévu',createdAt:new Date().toISOString()});
+      }); n++; });
     logActivite('Campagne planifiée : '+n+' email(s) le '+fmtDateFr(date));
     toast('📅 '+n+' email(s) planifié(s) le '+fmtDateShort(date),'ok'); RENDERERS.marketing(); return;
   }
 
   // ENVOI IMMÉDIAT
   if(auto){
-    if(!confirm('Envoyer MAINTENANT cet email à '+ids.length+' contact(s) ?\n\nObjet : '+subjectTpl)) return;
+    const cibles=ids.map(i=>DB.get('clients',i)).filter(c=>c&&c.email&&!c.desabo);
+    const exclus=ids.length-cibles.length;
+    if(!cibles.length){ toast('Aucun destinataire valide (désabonnés ou sans email)','err'); return; }
+    if(!confirm('Envoyer MAINTENANT à '+cibles.length+' contact(s) ?'+(exclus?('\n('+exclus+' écarté(s) : désabonné ou sans email)'):'')
+      +'\n\nListe : '+segNom(_mktSeg)+'\nObjet : '+subjectTpl)) return;
+    const camp=DB.save('campagnes',{id:uid('CMP'),nom:subjectTpl||'Campagne',date:new Date().toISOString(),
+      segment:segNom(_mktSeg),cibles:cibles.length,envoyes:0,echecs:0,mailIds:[]});
     let ok=0,fail=0;
-    for(let i=0;i<ids.length;i++){ const c=DB.get('clients',ids[i]); if(!c||!c.email){fail++;continue;}
+    for(let i=0;i<cibles.length;i++){ const c=cibles[i];
       const mailId=uid('MAIL');
-      if(prog) prog.textContent='Envoi '+(i+1)+'/'+ids.length+' → '+c.email+'…';
+      if(prog) prog.textContent='Envoi '+(i+1)+'/'+cibles.length+' → '+c.email+'…';
       const htmlP=mktVars(bodyHtmlTpl,c);
-      const j=await cloudPost({action:'sendEmail',to:c.email,subject:mktVars(subjectTpl,c),body:stripHtml(htmlP),html:emailHtmlRich(htmlP),trackId:mailId});
-      if(j&&j.ok){ ok++; DB.save('mails',{id:mailId,date:new Date().toISOString(),kind:'campagne',ref:c.id,to:c.email,subject:mktVars(subjectTpl,c)}); } else fail++;
+      const desabo=await lienDesabo(c.email);
+      const j=await cloudPost({action:'sendEmail',to:c.email,subject:mktVars(subjectTpl,c),
+        body:stripHtml(htmlP),html:emailHtmlRich(htmlP,{desabo}),trackId:mailId});
+      if(j&&j.ok){ ok++; camp.mailIds.push(mailId);
+        DB.save('mails',{id:mailId,date:new Date().toISOString(),kind:'campagne',ref:c.id,idCampagne:camp.id,to:c.email,subject:mktVars(subjectTpl,c)});
+      } else fail++;
     }
+    camp.envoyes=ok; camp.echecs=fail; DB.save('campagnes',camp);
     if(prog) prog.textContent='';
-    logActivite('Campagne envoyée : '+ok+' email(s)'+(fail?', '+fail+' échec(s)':''));
+    logActivite('Campagne « '+(subjectTpl||'').slice(0,40)+' » : '+ok+' email(s)'+(fail?', '+fail+' échec(s)':''));
     toast('✅ '+ok+' envoyé(s)'+(fail?' · '+fail+' échec(s)':''),'ok'); RENDERERS.marketing();
   } else {
     const emails=ids.map(id=>(DB.get('clients',id)||{}).email).filter(Boolean).join(',');

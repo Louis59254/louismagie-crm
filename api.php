@@ -30,7 +30,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') { exit; }
 
 $ENTITIES = ['demandes','devis','prestations','factures','clients','relances',
              'activite','mails','catalogue','recettes','declarations','planifs','templates',
-             'projets','magiciens','effets'];
+             'projets','magiciens','effets','segments','campagnes'];
 
 function out($o){ echo json_encode($o, JSON_UNESCAPED_UNICODE); exit; }
 
@@ -674,6 +674,40 @@ if ($action === 'imagine') {
     .'<div class="foot">Réponse sous 24 h ouvrées · Aucun engagement<br>Une question ? <a href="mailto:'.$H($cfgI['emailLouis'] ?? 'contact@louismagie.fr').'">'.$H($cfgI['emailLouis'] ?? 'contact@louismagie.fr').'</a></div>'
     .'</form>';
   echo $shell($form);
+  exit;
+}
+
+/* ===== Désabonnement des emails marketing (public, obligation légale) ===== */
+if ($action === 'desabo') {
+  $em = strtolower(trim((string)($_GET['e'] ?? ($_POST['e'] ?? ''))));
+  $sig = (string)($_GET['s'] ?? ($_POST['s'] ?? ''));
+  $cfgD = readJson("$DATA_DIR/config.json"); if(!is_array($cfgD)) $cfgD=[];
+  $secret = (string)($cfgD['desaboKey'] ?? $cfgD['formKey'] ?? 'louismagie-desabo');
+  $attendu = substr(hash_hmac('sha256', $em, $secret), 0, 16);
+  header('Content-Type: text/html; charset=utf-8');
+  $H = function($x){ return htmlspecialchars((string)$x, ENT_QUOTES, 'UTF-8'); };
+  $page = function($titre,$txt,$ok=true) use ($H) {
+    return '<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+      .'<meta name="robots" content="noindex,nofollow"><title>'.$H($titre).' — LouisMagie</title>'
+      .'<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+      .'<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:opsz,wght@9..40,300;9..40,400&display=swap" rel="stylesheet">'
+      .'<style>body{margin:0;background:#0A0A08;font-family:"DM Sans",-apple-system,Arial,sans-serif;font-weight:300;color:#F5F2EE;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}'
+      .'.c{max-width:440px;background:#FDFCFB;color:#0A0A08;border-radius:14px;border-top:3px solid #FF7700;padding:40px 34px;text-align:center}'
+      .'.l{font-family:Syne,sans-serif;font-weight:800;font-size:22px;letter-spacing:-.4px;margin-bottom:20px}.l span{color:#FF7700}'
+      .'h1{font-family:Syne,sans-serif;font-weight:800;font-size:19px;margin-bottom:10px}'
+      .'p{font-size:14.5px;color:#5A5650;line-height:1.7}'
+      .'a{display:inline-block;margin-top:22px;background:#FF7700;color:#fff;text-decoration:none;font-family:Syne,sans-serif;font-weight:700;font-size:11px;letter-spacing:2px;text-transform:uppercase;padding:14px 28px;border-radius:4px}</style></head>'
+      .'<body><div class="c"><div class="l">Louis<span>Magie</span></div><h1>'.$H($titre).'</h1><p>'.$txt.'</p>'
+      .'<a href="mailto:'.$H($GLOBALS['__mailLouis'] ?? 'contact@louismagie.fr').'">Écrire à Louis</a></div></body></html>';
+  };
+  $GLOBALS['__mailLouis'] = $cfgD['emailLouis'] ?? 'contact@louismagie.fr';
+  if ($em === '' || !hash_equals($attendu, $sig)) { echo $page('Lien invalide','Ce lien de désabonnement n\'est pas valide.'); exit; }
+  $f = "$DATA_DIR/clients.json"; $cls = readJson($f); if(!is_array($cls)) $cls=[];
+  $trouve = false;
+  foreach ($cls as &$c) { if (strtolower(trim((string)($c['email'] ?? ''))) === $em) { $c['desabo'] = true; $c['desaboLe'] = date('c'); $trouve = true; } }
+  unset($c);
+  if ($trouve) writeJson($f, $cls);
+  echo $page('C\'est fait', 'L\'adresse <strong>'.$H($em).'</strong> ne recevra plus d\'email d\'actualité.<br><br>Les échanges liés à vos devis, factures et prestations continueront normalement.');
   exit;
 }
 
