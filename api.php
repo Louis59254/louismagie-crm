@@ -210,6 +210,20 @@ if ($action === 'brief') {
       .'.pr .k{font-family:Syne,sans-serif;font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--or);font-weight:700;margin-bottom:4px}'
       .'.pr .v{font-size:14.5px;color:var(--creme)}.pr .v b{color:#fff}'
       .'.pr a{color:var(--or);text-decoration:none}'
+      .'.tl{margin-top:10px;position:relative;padding-left:6px}'
+      .'.tl-i{display:flex;gap:16px;padding:9px 0;border-bottom:1px solid var(--anthr)}'
+      .'.tl-i:last-child{border-bottom:none}'
+      .'.tl-h{font-family:Syne,sans-serif;font-weight:700;font-size:15px;color:var(--or);min-width:74px;flex-shrink:0}'
+      .'.tl-v{color:var(--creme);font-size:15px}'
+      .'ul.chk{list-style:none;margin-top:8px}'
+      .'ul.chk li{position:relative;padding:7px 0 7px 30px;color:var(--creme);font-size:15px;border-bottom:1px solid var(--anthr)}'
+      .'ul.chk li:last-child{border-bottom:none}'
+      .'ul.chk li::before{content:"";position:absolute;left:0;top:11px;width:15px;height:15px;border:1.5px solid var(--or);border-radius:4px}'
+      .'.lu-f{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}'
+      .'.lu-f select,.lu-f input{flex:1;min-width:190px;padding:13px;border:1.5px solid var(--anthr);border-radius:8px;background:var(--noir2);color:var(--creme);font-size:16px;font-family:inherit;outline:none}'
+      .'.lu-f select:focus,.lu-f input:focus{border-color:var(--or)}'
+      .'.lu-f button{padding:13px 26px;background:var(--or);color:#fff;border:none;border-radius:4px;font-family:Syne,sans-serif;font-weight:700;font-size:11px;letter-spacing:2px;text-transform:uppercase;cursor:pointer}'
+      .'.ok-lu{background:var(--noir2);border:1px solid rgba(63,185,122,.5);border-left:3px solid #3FB97A;border-radius:12px;padding:18px;margin-top:14px;color:var(--creme)}'
       .'.note{background:var(--noir2);border:1px solid rgba(255,119,0,.4);border-radius:12px;padding:15px 17px;margin-top:20px;font-size:14px;color:var(--creme);line-height:1.65}'
       .'.close{font-family:Syne,sans-serif;font-weight:700;font-size:20px;color:var(--creme);text-align:center;padding:34px 0 8px;line-height:1.4}'
       .'.close b{color:var(--or)}'
@@ -307,8 +321,26 @@ if ($action === 'brief') {
   }
 
   $prat = is_array($b['pratique'] ?? null) ? $b['pratique'] : [];
+  $deroule = is_array($b['deroule'] ?? null) ? $b['deroule'] : [];
+  $zones = is_array($b['zones'] ?? null) ? $b['zones'] : [];
+  $check = is_array($b['checklist'] ?? null) ? $b['checklist'] : [];
+  $contacts = is_array($b['contacts'] ?? null) ? $b['contacts'] : [];
+
+  if($prat || $deroule || $zones || $check || $contacts)
+    $o .= '<div class="cat">'.$H($b['catPratique'] ?? 'Troisième partie · Le cadre pratique').'</div>';
+
+  // ── Déroulé de la soirée (frise horaire)
+  if($deroule){
+    $o .= '<section><h2>Le déroulé</h2><div class="tl">';
+    foreach($deroule as $d){
+      if(trim((string)($d['quoi'] ?? ''))==='') continue;
+      $o .= '<div class="tl-i"><div class="tl-h">'.$H($d['h'] ?? '').'</div><div class="tl-v">'.$md($d['quoi']).'</div></div>';
+    }
+    $o .= '</div></section>';
+  }
+
   if($prat){
-    $o .= '<div class="cat">'.$H($b['catPratique'] ?? 'Troisième partie · Le cadre pratique').'</div><section><div class="prat">';
+    $o .= '<section><div class="prat">';
     foreach($prat as $it){
       if(trim((string)($it['v'] ?? ''))==='') continue;
       $o .= '<div class="pr"><div class="k">'.$H($it['k'] ?? '').'</div><div class="v">'.$md($it['v']).'</div></div>';
@@ -316,10 +348,70 @@ if ($action === 'brief') {
     $o .= '</div></section>';
   }
 
+  // ── Répartition des zones
+  if($zones){
+    $o .= '<section><h2>Qui couvre quoi</h2>';
+    if(!empty($b['zonesIntro'])) $o .= '<p class="menu-intro">'.$md($b['zonesIntro']).'</p>';
+    $o .= '<div class="prat">';
+    foreach($zones as $z){
+      if(trim((string)($z['nom'] ?? ''))==='') continue;
+      $o .= '<div class="pr"><div class="k">'.$H($z['nom']).'</div><div class="v">'.$md($z['qui'] ?? '—').'</div></div>';
+    }
+    $o .= '</div></section>';
+  }
+
+  // ── Contacts sur place
+  if($contacts){
+    $o .= '<section><h2>Contacts sur place</h2><div class="prat">';
+    foreach($contacts as $c){
+      if(trim((string)($c['nom'] ?? ''))==='') continue;
+      $tel = trim((string)($c['tel'] ?? ''));
+      $v = '<b>'.$H($c['nom']).'</b>';
+      if($tel !== '') $v .= '<br><a href="tel:'.$H(preg_replace('/[^0-9+]/','',$tel)).'">'.$H($tel).'</a>';
+      $o .= '<div class="pr"><div class="k">'.$H($c['role'] ?? 'Contact').'</div><div class="v">'.$v.'</div></div>';
+    }
+    $o .= '</div></section>';
+  }
+
+  // ── Checklist avant de partir
+  if($check){
+    $o .= '<section><h2>Avant de partir</h2><ul class="chk">';
+    foreach($check as $c){ if(trim((string)$c)!=='') $o .= '<li>'.$H($c).'</li>'; }
+    $o .= '</ul></section>';
+  }
+
   if(!empty($b['equipe']) && is_array($b['equipe'])){
     $o .= '<section><h2>L\'équipe</h2><div class="mag">';
     foreach($b['equipe'] as $m){ $o .= '<span>'.$H($m).'</span>'; }
     $o .= '</div></section>';
+  }
+
+  // ── Accusé de lecture
+  if(!empty($b['accuse'])){
+    $noms = [];
+    foreach((array)($b['equipe'] ?? []) as $m){ $n = trim(explode('·', (string)$m)[0]); if($n!=='') $noms[] = $n; }
+    $lus = array_map(function($x){ return mb_strtolower(trim((string)($x['nom'] ?? ''))); }, (array)($b['lus'] ?? []));
+    $o .= '<section id="lu"><h2>Tu as tout lu ?</h2>'
+      .'<p>Signale-le-moi pour que je sache que tout le monde est à jour — ça m\'évite de relancer.</p>'
+      .'<form class="lu-f" method="post" action="?action=briefLu&id='.$H($id).'&k='.$H($k).'">';
+    if($noms){
+      $o .= '<select name="nom" required><option value="">— Choisis ton nom —</option>';
+      foreach($noms as $n){
+        $dejaLu = in_array(mb_strtolower($n), $lus, true);
+        $o .= '<option value="'.$H($n).'"'.($dejaLu?' disabled':'').'>'.$H($n).($dejaLu?' ✓ (déjà signalé)':'').'</option>';
+      }
+      $o .= '</select>';
+    } else {
+      $o .= '<input name="nom" placeholder="Ton prénom" required>';
+    }
+    $o .= '<button type="submit">J\'ai lu le brief</button></form>';
+    if(($_GET['lu'] ?? '')==='1') $o .= '<div class="ok-lu"><strong>C\'est noté, merci !</strong><br>Louis sait que tu es à jour. À très vite.</div>';
+    if(!empty($b['lus'])){
+      $o .= '<div class="mag" style="margin-top:14px">';
+      foreach((array)$b['lus'] as $l){ $o .= '<span>✓ '.$H($l['nom'] ?? '').'</span>'; }
+      $o .= '</div>';
+    }
+    $o .= '</section>';
   }
 
   if(!empty($b['cloture'])) $o .= '<div class="close">'.$md($b['cloture']).'</div>';
@@ -329,6 +421,35 @@ if ($action === 'brief') {
   $o .= '<footer>LouisMagie · '.$H($b['titre'] ?? '').($p['date'] ? ' · '.$H(date('d/m/Y', strtotime($p['date']))) : '').' — document confidentiel</footer></div>';
   echo $page($o, ($b['titre'] ?? 'Brief').' — Brief équipe');
   exit;
+}
+
+/* ===== Accusé de lecture d'un brief (public, protégé par le jeton du brief) ===== */
+if ($action === 'briefLu') {
+  $id = $_GET['id'] ?? ''; $k = $_GET['k'] ?? '';
+  $nom = trim((string)($_POST['nom'] ?? ''));
+  $nom = mb_substr(preg_replace('/[\x00-\x1F\x7F<>]/u',' ',$nom), 0, 60);
+  $f = "$DATA_DIR/projets.json"; $projets = readJson($f); if(!is_array($projets)) $projets=[];
+  $idx=-1; foreach($projets as $i=>$x){ if(($x['id']??'')===$id){ $idx=$i; break; } }
+  $b = $idx>=0 ? ($projets[$idx]['brief'] ?? null) : null;
+  $ok = $b && !empty($b['token']) && hash_equals((string)$b['token'], (string)$k) && !empty($b['publie']) && $nom!=='';
+  if($ok){
+    $lus = is_array($b['lus'] ?? null) ? $b['lus'] : [];
+    $existe = false;
+    foreach($lus as $l){ if(mb_strtolower(trim((string)($l['nom'] ?? ''))) === mb_strtolower($nom)) { $existe=true; break; } }
+    if(!$existe){
+      $lus[] = ['nom'=>$nom, 'at'=>date('c')];
+      $projets[$idx]['brief']['lus'] = $lus;
+      $projets[$idx]['updatedAt'] = date('c');
+      writeJson($f, $projets);
+      $notif = getenv('SMTP_FROM') ?: getenv('SMTP_USER');
+      if($notif) @smtpSend($notif, '✅ Brief lu — '.$nom,
+        $nom." vient de confirmer la lecture du brief « ".($b['titre'] ?? '')." ».\n\n"
+        .count($lus)." magicien(s) ont confirmé pour l'instant.\n\nLouisMagie CRM");
+    }
+  }
+  // retour sur la page du brief, avec confirmation
+  $url = '?action=brief&id='.rawurlencode($id).'&k='.rawurlencode($k).(!empty($b['code'])?('&c='.rawurlencode($b['code'])):'').'&lu='.($ok?'1':'0').'#lu';
+  header('Location: '.$url); exit;
 }
 
 /* ===== Réception publique d'une demande depuis le site louismagie.fr =====
