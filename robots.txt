@@ -1,0 +1,4 @@
+# CRM privé LouisMagie — aucun contenu ne doit être indexé.
+# Les briefs d'équipe et les pages de signature sont privés (lien secret + code).
+User-agent: *
+Disallow: /

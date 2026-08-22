@@ -23,6 +23,7 @@ if ($__origin === '' || parse_url($__origin, PHP_URL_HOST) === $__host || in_arr
   if ($__origin !== '') header('Vary: Origin');
 }
 header('Access-Control-Allow-Headers: Content-Type');
+header('X-Robots-Tag: noindex, nofollow, noarchive, nosnippet');   // rien de ce CRM ne doit être indexé
 header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
 header('Content-Type: application/json; charset=utf-8');
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') { exit; }

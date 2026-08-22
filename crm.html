@@ -3750,11 +3750,30 @@ function editBrief(pid){
     <div class="form-group"><label class="form-label">Contact</label>${ta('br-contact',b.contact,50)}</div>
     <div class="form-group"><label class="form-label">Mon numéro WhatsApp <span class="td-dim">(bouton en bas du brief)</span></label><input class="form-control" id="br-waLouis" value="${esc(b.waLouis||'')}"></div>
     <label style="display:flex;align-items:center;gap:9px;margin-top:10px;font-size:14px;cursor:pointer"><input type="checkbox" id="br-publie" ${b.publie?'checked':''} style="width:18px;height:18px">Publier le brief <span class="td-dim">(accessible via le lien privé)</span></label>`;
-  const foot=`<button class="btn btn-ghost" onclick="RENDERERS.projet({id:'${pid}'});closeModal()">Fermer</button>
+  const foot=`<button class="btn btn-danger" onclick="supprimerBrief('${pid}')">🗑 Supprimer</button>
+    ${b.publie?`<button class="btn btn-warn" onclick="depublierBrief('${pid}')">🔒 Dépublier</button>`:''}
+    <button class="btn btn-ghost" onclick="RENDERERS.projet({id:'${pid}'});closeModal()">Fermer</button>
     ${url&&b.publie?`<button class="btn btn-ghost" onclick="partagerBrief('${pid}')">📤 Partager</button>`:''}
     <button class="btn btn-ghost" onclick="apercuBrief('${pid}')">👁 Aperçu</button>
     <button class="btn btn-or" onclick="saveBrief('${pid}')">💾 Enregistrer</button>`;
   openModal('📋 Brief · '+esc(p.nom||''),body,foot);
+}
+/* Retire la page du web : le lien cesse immédiatement de fonctionner, le contenu est conservé */
+function depublierBrief(pid){
+  const p=getP(pid); if(!p||!p.brief)return;
+  if(!confirm('Retirer le brief du web ?\n\nLe lien déjà partagé cessera de fonctionner immédiatement.\nLe contenu est conservé : tu pourras le republier quand tu veux.')) return;
+  collecteBrief(pid); p.brief.publie=false; saveP(p);
+  if(cloudUrl()) cloudPost({action:'putEntity',entity:'projets',rows:DB.all('projets')});
+  logActivite('Brief dépublié · '+(p.nom||pid)); toast('🔒 Brief retiré du web','ok'); editBrief(pid);
+}
+/* Supprime complètement le brief (contenu + lien) */
+function supprimerBrief(pid){
+  const p=getP(pid); if(!p||!p.brief)return;
+  if(!confirm('Supprimer définitivement ce brief ?\n\nLe contenu rédigé sera perdu et le lien ne fonctionnera plus.\nTu pourras en régénérer un nouveau depuis le projet.')) return;
+  delete p.brief; saveP(p);
+  if(cloudUrl()) cloudPost({action:'putEntity',entity:'projets',rows:DB.all('projets')});
+  logActivite('Brief supprimé · '+(p.nom||pid));
+  closeModal(); RENDERERS.projet({id:pid}); toast('🗑 Brief supprimé','ok');
 }
 function collecteBrief(pid){
   const p=getP(pid); const b=p.brief||{}; const g=id=>((document.getElementById(id)||{}).value||'');
@@ -3848,6 +3867,14 @@ RENDERERS.projets=function(){
       </div></div>`;
   }).join('')||'<div class="empty"><div class="empty-icon">🎭</div><div class="empty-text">Aucun projet</div><div class="empty-sub">Crée ton premier événement Imagine the Impossible.</div></div>';
   document.getElementById('view-projets').innerHTML=`
+    ${(()=>{ const pub=DB.all('projets').filter(x=>x.brief&&x.brief.publie);
+      if(!pub.length) return '';
+      return `<div class="panel" style="margin-bottom:14px"><div class="panel-title">🌐 Briefs en ligne (${pub.length})</div>
+        <div class="td-dim" style="font-size:12px;margin-bottom:8px">Pages privées actuellement accessibles par lien. Retire celles des événements passés.</div>
+        ${pub.map(x=>`<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--anthr);flex-wrap:wrap">
+          <span style="flex:1;min-width:140px"><span class="td-strong">${esc(x.nom||'Projet')}</span><div class="td-dim" style="font-size:11px">${x.date?fmtDateFr(x.date):'sans date'}${x.brief.code?(' · code '+esc(x.brief.code)):' · sans code'}${(x.date&&x.date<todayISO())?' · <span style="color:var(--warn)">événement passé</span>':''}</div></span>
+          <button class="btn btn-ghost btn-sm" onclick="editBrief('${x.id}')">✎</button>
+          <button class="btn btn-warn btn-sm" onclick="depublierBrief('${x.id}')">🔒 Retirer</button></div>`).join('')}</div>`; })()}
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
       <button class="btn btn-or" onclick="nouveauProjet()">✦ Nouveau projet</button>
       <button class="btn btn-ghost" onclick="gererMagiciens()">🎩 Banque de magiciens (${DB.all('magiciens').length})</button>
