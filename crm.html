@@ -3749,6 +3749,7 @@ function genererBrief(pid,silencieux){
     {k:'Contact',v:'**Louis** — ton interlocuteur unique · WhatsApp · '+(cfg.emailLouis||'contact@louismagie.fr')},
   ].filter(x=>x.v);
   // Déroulé : déduit des horaires du projet quand ils sont au format « 21h45-23h45 »
+  const planAg=(p.planningAgence||'').trim();
   const hm=(p.dureePresta||'').match(/(\d{1,2})\s*h\s*(\d{2})?\s*[-–àa>]+\s*(\d{1,2})\s*h\s*(\d{2})?/i);
   const fmtH=(h,m)=>String(h).padStart(2,'0')+'h'+(m||'00');
   let deroule;
@@ -3759,6 +3760,11 @@ function genererBrief(pid,silencieux){
              {h:fmtH(debut-2,hm[2]),quoi:'**Brief d\'équipe** + dîner ensemble'},
              {h:fmtH(debut,hm[2]),quoi:'**Début de la déambulation**'},
              {h:fmtH(fin,hm[4]),quoi:'**Fin de prestation** — on se retrouve avant de partir'}];
+  } else if(planAg){
+    // reprend le déroulé transmis par l'agence (une ligne = « 19h00 accueil des invités »)
+    deroule=planAg.split('\n').map(l=>{ const t=l.trim(); if(!t) return null;
+      const m2=t.match(/^(\d{1,2}\s*h\s*\d{0,2})\s*[-–:]?\s*(.+)$/i);
+      return m2?{h:m2[1].replace(/\s+/g,''),quoi:m2[2]}:{h:'—',quoi:t}; }).filter(Boolean);
   } else {
     deroule=[{h:'—',quoi:'**Arrivée sur place** — on se retrouve tous ensemble (horaire à confirmer)'},
              {h:'—',quoi:'**Brief d\'équipe** + dîner ensemble'},
@@ -4211,6 +4217,18 @@ RENDERERS.projet=function(params){
       ${projEquipeHtml(p)}
     </div>
 
+    ${(()=>{ const eff=(p.effetsSouhaites||[]).map(id=>(DB.get('effets',id)||{}).nom).filter(Boolean);
+      const rol=p.rolesSouhaites||[];
+      if(!eff.length&&!rol.length&&!p.planningAgence&&!p.zonesAgence&&!p.contraintes) return '';
+      return `<div class="panel"><div class="panel-title">💡 Souhaits de ${esc(p.agence||'l\'agence')}</div>
+        <div class="td-dim" style="font-size:12px;margin-bottom:10px">Transmis via le formulaire de demande. À reprendre lors du casting et du brief.</div>
+        ${rol.length?`<div style="margin-bottom:10px"><span class="td-dim" style="font-size:11px">Rôles demandés</span><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:5px">${rol.map(r=>`<span class="badge envoye">${esc(r)}</span>`).join('')}</div></div>`:''}
+        ${eff.length?`<div style="margin-bottom:10px"><span class="td-dim" style="font-size:11px">Effets souhaités (${eff.length})</span><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:5px">${eff.map(n=>`<span class="badge accepte">${esc(n)}</span>`).join('')}</div></div>`:''}
+        ${p.zonesAgence?`<div class="td-dim" style="font-size:12px"><strong style="color:var(--creme)">Zones :</strong> ${esc(p.zonesAgence)}</div>`:''}
+        ${p.contraintes?`<div class="td-dim" style="font-size:12px;margin-top:4px"><strong style="color:var(--creme)">Contraintes :</strong> ${esc(p.contraintes)}</div>`:''}
+        ${p.langues?`<div class="td-dim" style="font-size:12px;margin-top:4px"><strong style="color:var(--creme)">Langues :</strong> ${esc(p.langues)}</div>`:''}
+        ${p.planningAgence?`<div style="margin-top:10px"><span class="td-dim" style="font-size:11px">Déroulé annoncé</span><pre style="white-space:pre-wrap;font-family:inherit;font-size:13px;color:var(--gc);margin-top:4px;background:var(--noir3);padding:10px;border-radius:var(--rsm)">${esc(p.planningAgence)}</pre></div>`:''}
+      </div>`; })()}
     <div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><div class="panel-title" style="margin:0">📋 Brief d'équipe</div>
       ${(()=>{ const b=p.brief; const u=briefUrlPub(p);
         if(!b) return `<button class="btn btn-or btn-sm" onclick="genererBrief('${id}')">✦ Générer le brief</button>`;
@@ -4370,7 +4388,8 @@ function membreEffets(pid,mid){
   if(!effs.length){ if(confirm('Banque d\'effets vide. En ajouter maintenant ?')) gererEffets(); return; }
   const cats={}; effs.forEach(e=>{ (cats[e.categorie||'Autres']=cats[e.categorie||'Autres']||[]).push(e); });
   const list=Object.keys(cats).sort().map(cat=>`<div style="padding:6px 10px;background:var(--anthr);font-size:11px;font-weight:600;color:var(--gm)">${esc(cat)}</div>`+
-    cats[cat].map(e=>`<label style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border-bottom:1px solid var(--anthr);cursor:pointer"><input type="checkbox" class="me-cb" value="${e.id}" ${(m.effets||[]).includes(e.id)?'checked':''} style="margin-top:3px"><span><span class="td-strong" style="font-size:13px">${esc(e.nom)}</span>${e.description?`<div class="td-dim" style="font-size:11px">${esc(e.description)}</div>`:''}</span></label>`).join('')).join('');
+    cats[cat].map(e=>{ const voulu=(p.effetsSouhaites||[]).includes(e.id);
+      return `<label style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border-bottom:1px solid var(--anthr);cursor:pointer${voulu?';background:var(--or-soft)':''}"><input type="checkbox" class="me-cb" value="${e.id}" ${(m.effets||[]).includes(e.id)?'checked':''} style="margin-top:3px"><span><span class="td-strong" style="font-size:13px">${esc(e.nom)}</span>${voulu?' <span class="badge accepte" style="font-size:9px">demandé</span>':''}${e.description?`<div class="td-dim" style="font-size:11px">${esc(e.description)}</div>`:''}</span></label>`; }).join('')).join('');
   openModal('Effets de '+esc(magNom(m.magicienId)),`<div style="max-height:400px;overflow:auto;border:1px solid var(--anthr);border-radius:var(--rsm)">${list}</div>`,
     `<button class="btn btn-ghost" onclick="closeModal()">Annuler</button><button class="btn btn-or" onclick="membreEffetsOk('${pid}','${mid}')">💾 Enregistrer</button>`);
 }

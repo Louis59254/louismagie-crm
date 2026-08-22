@@ -459,6 +459,21 @@ if ($action === 'imagine') {
       .'input:focus,select:focus,textarea:focus{border-color:var(--or)}'
       .'textarea{min-height:96px;resize:vertical}'
       .'.hint{font-size:12px;color:var(--gm);margin-top:6px}'
+      .'details.plus{background:var(--noir2);border:1px solid var(--anthr);border-radius:14px;margin-bottom:14px;overflow:hidden}'
+      .'details.plus summary{list-style:none;cursor:pointer;padding:18px 22px;display:flex;flex-direction:column;gap:3px;position:relative}'
+      .'details.plus summary::-webkit-details-marker{display:none}'
+      .'details.plus summary::after{content:"+";position:absolute;right:22px;top:16px;font-family:Syne,sans-serif;font-size:22px;color:var(--or);line-height:1}'
+      .'details.plus[open] summary::after{content:"–"}'
+      .'.sum-t{font-family:Syne,sans-serif;font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:var(--or);font-weight:700}'
+      .'.sum-s{font-size:13px;color:var(--gm)}'
+      .'.plus-in{padding:4px 22px 22px}'
+      .'.cat-e{font-family:Syne,sans-serif;font-size:9px;letter-spacing:2px;text-transform:uppercase;color:var(--gm);font-weight:700;margin:14px 0 8px}'
+      .'.chips{display:flex;flex-wrap:wrap;gap:8px}'
+      .'.chip{display:inline-flex;align-items:center;margin:0}'
+      .'.chip input{position:absolute;opacity:0;width:0;height:0}'
+      .'.chip span{display:inline-block;padding:9px 15px;border:1.5px solid var(--anthr);border-radius:100px;background:var(--noir3);color:var(--gc);font-size:13.5px;cursor:pointer;transition:all .18s;user-select:none}'
+      .'.chip input:checked+span{background:var(--or);border-color:var(--or);color:#fff}'
+      .'.chip input:focus-visible+span{border-color:var(--or)}'
       .'.agence-fixe{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--noir3);border:1px solid var(--anthr);border-left:3px solid var(--or);border-radius:8px;padding:12px 14px;margin-bottom:16px}'
       .'.agence-fixe span{font-size:12px;color:var(--gm)}'
       .'.agence-fixe strong{font-family:Syne,sans-serif;font-weight:700;font-size:15px;color:#fff}'
@@ -511,10 +526,27 @@ if ($action === 'imagine') {
       .($c('magiciens',40)?("Magiciens souhaités : ".$c('magiciens',40)."\n"):'')
       .($c('budget',60)?("Budget indiqué : ".$c('budget',60)."\n"):'')
       .($c('reponse',40)?("Réponse souhaitée avant : ".$c('reponse',40)."\n"):'')
+      .($c('langues',80)?("Langues du public : ".$c('langues',80)."\n"):'')
+      .($roles?("Rôles souhaités : ".implode(', ',$roles)."\n"):'')
+      .($effNoms?("Effets souhaités : ".implode(', ',$effNoms)."\n"):'')
+      .($c('zones',200)?("Zones à couvrir : ".$c('zones',200)."\n"):'')
+      .($c('contraintes',300)?("Contraintes du lieu : ".$c('contraintes',300)."\n"):'')
+      .($c('planning',1200)?("\nDéroulé annoncé :\n".$c('planning',1200)."\n"):'')
       .($c('message',2000)?("\nLeur message :\n".$c('message',2000)."\n"):'');
 
-    // nombre de magiciens : extrait le premier nombre de la réponse (« 4-6 » → 4)
-    $nbMag = 0; if(preg_match('/(\d+)/', $c('magiciens',40), $mm)) $nbMag = (int)$mm[1];
+    // nombre de magiciens : le chiffre exact prime sur la fourchette (« 4 à 6 » → 4)
+    $nbMag = 0;
+    $exact = (int)preg_replace('/\D/','', $c('magiciensExact',6));
+    if($exact>0 && $exact<200) $nbMag = $exact;
+    elseif(preg_match('/(\d+)/', $c('magiciens',40), $mm)) $nbMag = (int)$mm[1];
+    // souhaits détaillés
+    $roles = array_values(array_filter(array_map(function($x){ return mb_substr(trim((string)$x),0,40); }, (array)($_POST['roles'] ?? []))));
+    $effIds = array_values(array_filter(array_map(function($x){ return mb_substr(trim((string)$x),0,40); }, (array)($_POST['effets'] ?? []))));
+    $effNoms = [];
+    if($effIds){
+      $bq = readJson("$DATA_DIR/effets.json"); if(!is_array($bq)) $bq=[];
+      foreach($effIds as $eid){ foreach($bq as $e){ if(($e['id'] ?? '')===$eid){ $effNoms[]=(string)($e['nom'] ?? ''); break; } } }
+    }
     $budget = 0; if(preg_match('/(\d[\d\s]*)/', str_replace([' ',' '],'',$c('budget',60)), $bm)) $budget = (int)preg_replace('/\D/','',$bm[1]);
 
     $prj = [
@@ -529,6 +561,9 @@ if ($action === 'imagine') {
       'equipe'=>[], 'consommables'=>[], 'equipement'=>[],
       'logistique'=>['transport'=>'','hebergement'=>'','repas'=>''], 'checklist'=>[],
       'demandeAgence'=>true, 'recuLe'=>date('c'), 'createdAt'=>date('c'),
+      'effetsSouhaites'=>$effIds, 'rolesSouhaites'=>$roles,
+      'planningAgence'=>$c('planning',1200), 'zonesAgence'=>$c('zones',200),
+      'contraintes'=>$c('contraintes',300), 'langues'=>$c('langues',80),
     ];
     $f = "$DATA_DIR/projets.json"; $arr = readJson($f); if(!is_array($arr)) $arr=[];
     $arr[] = $prj; writeJson($f, $arr);
@@ -563,6 +598,24 @@ if ($action === 'imagine') {
       .'<input type="'.$H($type).'" name="'.$H($nom).'" placeholder="'.$H($ph).'"'.($req?' required':'').' value="'.$H($val).'"></div>';
   };
   $agenceNom = trim((string)($cfgI['imagineAgence'] ?? 'Inspiration'));
+  // Banque d'effets proposée à la sélection (regroupée par catégorie)
+  $effetsHtml = '';
+  $banque = readJson("$DATA_DIR/effets.json");
+  if(is_array($banque) && count($banque)){
+    $cats=[];
+    foreach($banque as $e){ $c=trim((string)($e['categorie'] ?? '')) ?: 'Autres'; $cats[$c][]=$e; }
+    ksort($cats);
+    $effetsHtml = '<div style="margin-top:18px"><label>Effets qui vous font envie</label>';
+    foreach($cats as $cat=>$liste){
+      $effetsHtml .= '<div class="cat-e">'.$H($cat).'</div><div class="chips">';
+      foreach($liste as $e){
+        $nom = (string)($e['nom'] ?? ''); if($nom==='') continue;
+        $effetsHtml .= '<label class="chip"><input type="checkbox" name="effets[]" value="'.$H($e['id'] ?? $nom).'"><span>'.$H($nom).'</span></label>';
+      }
+      $effetsHtml .= '</div>';
+    }
+    $effetsHtml .= '<div class="hint">Cochez ce qui vous plaît — nous adaptons ensuite selon les magiciens et le lieu.</div></div>';
+  }
   $form = '<header><div class="eyebrow">LouisMagie × '.$H($agenceNom).'</div>'
     .'<h1>Parlez-nous de <span class="g">votre événement</span></h1>'
     .'<p class="lede">Magie immersive en déambulation : des magiciens infiltrés parmi vos invités, des « glitchs dans la réalité » de quelques secondes. Décrivez votre événement, Louis revient vers vous sous 24 h avec une proposition.</p></header>'
@@ -595,6 +648,28 @@ if ($action === 'imagine') {
     .'<div class="hint">Plus vous en dites, plus la proposition sera juste — mais l\'essentiel suffit.</div></div>'
     .'<div style="margin-top:14px">'.$txt('reponse','Réponse souhaitée avant le',' ',false,'date').'</div>'
     .'</fieldset>'
+    // ── Mode détaillé (replié par défaut : le formulaire reste court pour ceux qui sont pressés)
+    .'<details class="plus"><summary><span class="sum-t">Aller plus loin</span>'
+    .'<span class="sum-s">Rôles, effets souhaités, déroulé de la soirée — facultatif</span></summary>'
+    .'<div class="plus-in">'
+    .'<div class="row c2">'
+    .$txt('magiciensExact','Nombre exact de magiciens','8',false,'number')
+    .$txt('langues','Langues du public','Français, anglais…')
+    .'</div>'
+    .'<div style="margin-top:16px"><label>Rôles souhaités</label><div class="chips">'
+    .implode('', array_map(function($r) use ($H){
+        return '<label class="chip"><input type="checkbox" name="roles[]" value="'.$H($r).'"><span>'.$H($r).'</span></label>';
+      }, ['Serveur','Hôte d\'accueil','Invité','Barman','Vestiaire','Photographe']))
+    .'</div><div class="hint">Nos magiciens s\'infiltrent dans ces personnages. Laissez vide si vous nous faites confiance.</div></div>'
+    .$effetsHtml
+    .'<div style="margin-top:16px"><label>Déroulé de la soirée</label>'
+    .'<textarea name="planning" placeholder="19h00 accueil des invités&#10;20h30 dîner assis&#10;21h45 cocktail — c\'est là qu\'on intervient&#10;23h30 fin"></textarea>'
+    .'<div class="hint">Même approximatif, ça nous aide à placer les interventions au bon moment.</div></div>'
+    .'<div class="row c2" style="margin-top:16px">'
+    .$txt('zones','Zones à couvrir','Terrasse, bar, salle, entrée…')
+    .$txt('contraintes','Contraintes du lieu','Feu interdit, plafond bas, extérieur…')
+    .'</div>'
+    .'</div></details>'
     .'<button class="go" type="submit">Envoyer la demande</button>'
     .'<div class="foot">Réponse sous 24 h ouvrées · Aucun engagement<br>Une question ? <a href="mailto:'.$H($cfgI['emailLouis'] ?? 'contact@louismagie.fr').'">'.$H($cfgI['emailLouis'] ?? 'contact@louismagie.fr').'</a></div>'
     .'</form>';
