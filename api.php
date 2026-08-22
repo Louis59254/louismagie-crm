@@ -459,6 +459,9 @@ if ($action === 'imagine') {
       .'input:focus,select:focus,textarea:focus{border-color:var(--or)}'
       .'textarea{min-height:96px;resize:vertical}'
       .'.hint{font-size:12px;color:var(--gm);margin-top:6px}'
+      .'.agence-fixe{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--noir3);border:1px solid var(--anthr);border-left:3px solid var(--or);border-radius:8px;padding:12px 14px;margin-bottom:16px}'
+      .'.agence-fixe span{font-size:12px;color:var(--gm)}'
+      .'.agence-fixe strong{font-family:Syne,sans-serif;font-weight:700;font-size:15px;color:#fff}'
       .'button.go{width:100%;padding:18px;background:var(--or);color:#fff;border:none;border-radius:4px;font-family:Syne,sans-serif;font-weight:700;font-size:12px;letter-spacing:2.5px;text-transform:uppercase;cursor:pointer;box-shadow:0 4px 20px rgba(255,119,0,.28);transition:all .22s}'
       .'button.go:hover{background:var(--or-deep);transform:translateY(-1px)}'
       .'.foot{text-align:center;color:var(--gm);font-size:12px;margin-top:22px;line-height:1.8}'
@@ -491,9 +494,11 @@ if ($action === 'imagine') {
     $rl[] = ['ip'=>$ip,'t'=>$now]; writeJson($rf,$rl);
 
     $c = function($n,$max=300){ $v=trim((string)($_POST[$n] ?? '')); $v=preg_replace('/[\x00-\x1F\x7F]/u',' ',$v); return mb_substr($v,0,$max); };
-    $agence=$c('agence',120); $contact=$c('contact',120); $mail=$c('email',160);
-    if($agence==='' || $contact==='' || !filter_var($mail, FILTER_VALIDATE_EMAIL)){
-      echo $shell('<div class="msg"><h2>Formulaire incomplet</h2><p>Agence, contact et email valide sont nécessaires.</p><p style="margin-top:14px"><a href="?action=imagine&k='.$H($k).'" style="color:#FF7700">← Revenir au formulaire</a></p></div>'); exit;
+    // Imagine the Impossible est dédié à une seule agence partenaire : elle est fixée en configuration
+    $agence = trim((string)($cfgI['imagineAgence'] ?? 'Inspiration'));
+    $contact=$c('contact',120); $mail=$c('email',160);
+    if($contact==='' || !filter_var($mail, FILTER_VALIDATE_EMAIL)){
+      echo $shell('<div class="msg"><h2>Formulaire incomplet</h2><p>Votre nom et un email valide sont nécessaires.</p><p style="margin-top:14px"><a href="?action=imagine&k='.$H($k).'" style="color:#FF7700">← Revenir au formulaire</a></p></div>'); exit;
     }
     $date=$c('date',10); if($date!=='' && !preg_match('/^\d{4}-\d{2}-\d{2}$/',$date)) $date='';
     $nomEvt = $c('evenement',140);
@@ -516,7 +521,7 @@ if ($action === 'imagine') {
       'id'=>'PRJ-'.date('ymd').'-'.substr(bin2hex(random_bytes(3)),0,5),
       'nom'=>($nomEvt !== '' ? $nomEvt : ('Demande '.$agence)),
       'date'=>$date, 'lieu'=>$lieu, 'agence'=>$agence, 'agenceEmail'=>$mail, 'agenceTel'=>$c('tel',40),
-      'idAgence'=>'', 'budgetTotal'=>$budget, 'theme'=>$c('theme',160), 'typeEvenement'=>$c('type',80),
+      'idAgence'=>(string)($cfgI['imagineIdAgence'] ?? ''), 'budgetTotal'=>$budget, 'theme'=>$c('theme',160), 'typeEvenement'=>$c('type',80),
       'nbInvites'=>$c('invites',40), 'ambiance'=>$c('ambiance',200), 'dureePresta'=>$c('horaires',60),
       'nbMagiciensCible'=>$nbMag, 'tarifMode'=>'TTC', 'whatsappGroupe'=>'', 'idDevis'=>'', 'lignesSupp'=>[],
       'statut'=>'Prospect', 'briefUrl'=>'', 'notesBrief'=>'', 'feedback'=>'', 'notes'=>$notes,
@@ -557,17 +562,20 @@ if ($action === 'imagine') {
     return '<div><label>'.$H($label).($req?' <span class="req">*</span>':'').'</label>'
       .'<input type="'.$H($type).'" name="'.$H($nom).'" placeholder="'.$H($ph).'"'.($req?' required':'').' value="'.$H($val).'"></div>';
   };
-  $form = '<header><div class="eyebrow">LouisMagie · Imagine the Impossible</div>'
+  $agenceNom = trim((string)($cfgI['imagineAgence'] ?? 'Inspiration'));
+  $form = '<header><div class="eyebrow">LouisMagie × '.$H($agenceNom).'</div>'
     .'<h1>Parlez-nous de <span class="g">votre événement</span></h1>'
-    .'<p class="lede">Magie immersive en déambulation : des magiciens infiltrés parmi vos invités. Quelques informations et Louis revient vers vous avec une proposition.</p></header>'
+    .'<p class="lede">Magie immersive en déambulation : des magiciens infiltrés parmi vos invités, des « glitchs dans la réalité » de quelques secondes. Décrivez votre événement, Louis revient vers vous sous 24 h avec une proposition.</p></header>'
     .'<form method="post"><input type="text" name="website" class="hp" tabindex="-1" autocomplete="off">'
     .'<input type="hidden" name="k" value="'.$H($k).'">'
-    .'<fieldset><legend>Vous</legend><div class="row c2">'
-    .$txt('agence','Agence','Nom de votre agence',true,'text',$agencePre)
+    .'<fieldset><legend>Votre contact</legend>'
+    .'<div class="agence-fixe"><span>Demande pour le compte de</span><strong>'.$H($agenceNom).'</strong></div>'
+    .'<div class="row c2">'
     .$txt('contact','Votre nom','Prénom Nom',true)
-    .$txt('email','Email','vous@agence.com',true,'email')
-    .$txt('tel','Téléphone','06 12 34 56 78',false,'tel')
-    .'</div></fieldset>'
+    .$txt('email','Email','vous@'.strtolower(preg_replace('/[^A-Za-z0-9]/','',$agenceNom)).'.com',true,'email')
+    .'</div>'
+    .'<div style="margin-top:14px">'.$txt('tel','Téléphone','06 12 34 56 78',false,'tel').'</div>'
+    .'</fieldset>'
     .'<fieldset><legend>L\'événement</legend><div class="row c2">'
     .$txt('evenement','Nom de l\'événement / client final','Soirée de gala, lancement…')
     .$txt('date','Date',' ',false,'date')

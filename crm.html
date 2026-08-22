@@ -3480,6 +3480,8 @@ const FACT_MODE=['Globale (via moi)','Directe agence'];   // le magicien facture
 const FOURNI_PAR=['Agence','Magiciens','Moi'];
 const COSTUME_PAR=['Fourni par l\'agence','Apporté par les magiciens','Fourni par moi','À définir'];
 const TARIF_MODE=['TTC','HT'];
+/* Imagine the Impossible est un format dédié à une agence partenaire (Inspiration) */
+function agenceImagine(){ const c=DB.config(); return {nom:c.imagineAgence||'Inspiration', id:c.imagineIdAgence||'', email:c.imagineAgenceEmail||'', tel:c.imagineAgenceTel||''}; }
 function getP(id){ return DB.get('projets',id); }
 /* ----- WhatsApp : lien wa.me avec message pré-rempli (normalise les numéros FR) ----- */
 function waNum(tel){ let n=String(tel||'').replace(/[^0-9+]/g,'');
@@ -3954,7 +3956,24 @@ function activerFormulaireImagine(renouveler){
   if(cloudUrl()) cloudPost({action:'putConfig',config:DB.config()});
   toast(renouveler?'🔄 Nouveau lien généré':'✦ Formulaire activé — copie le lien','ok'); RENDERERS.projets();
 }
-/* Lien pré-rempli au nom d'une agence (le champ Agence est déjà renseigné pour elle) */
+function majNomAgenceImagine(v){ const c=DB.config(); c.imagineAgence=(v||'').trim()||'Inspiration'; DB.saveConfig(c);
+  if(cloudUrl()) cloudPost({action:'putConfig',config:DB.config()}); toast('Agence partenaire mise à jour','ok'); RENDERERS.projets(); }
+function majAgenceImagine(idClient){
+  const c=DB.config(); c.imagineIdAgence=idClient||'';
+  if(idClient){ const cl=DB.get('clients',idClient);
+    if(cl){ c.imagineAgence=((cl.prenom?cl.prenom+' ':'')+cl.nom).trim(); if(cl.email)c.imagineAgenceEmail=cl.email; if(cl.tel)c.imagineAgenceTel=cl.tel; } }
+  DB.saveConfig(c); if(cloudUrl()) cloudPost({action:'putConfig',config:DB.config()});
+  toast('Agence reliée à sa fiche client','ok'); RENDERERS.projets();
+}
+/* Message d'invitation prêt à envoyer à l'agence partenaire */
+function copierMessageAgence(){
+  const c=DB.config(), ag=agenceImagine(), base=cloudUrl();
+  if(!c.imagineKey||!base){ toast('Active d\'abord le formulaire','err'); return; }
+  const url=base+'?action=imagine&k='+encodeURIComponent(c.imagineKey);
+  copierTexte(`Bonjour,\n\nPour vos prochaines demandes « Imagine the Impossible », voici votre lien direct :\n${url}\n\nVous décrivez l'événement en 2 minutes (date, lieu, nombre d'invités, budget) et je reviens vers vous sous 24 h avec une proposition et une équipe adaptée.\n\nÀ très vite,\nLouis`,
+    'Message copié — envoie-le à '+ag.nom);
+}
+/* Ancien lien pré-rempli par agence — conservé si tu travailles ponctuellement avec une autre structure */
 function lienAgencePerso(){
   const c=DB.config(); const base=cloudUrl();
   if(!c.imagineKey||!base){ toast('Active d\'abord le formulaire','err'); return; }
@@ -4001,20 +4020,28 @@ RENDERERS.projets=function(){
     ${(()=>{ const nouvelles=DB.all('projets').filter(x=>x.demandeAgence&&x.statut==='Prospect'&&!x.vue);
       if(!nouvelles.length) return '';
       return `<div class="alert success" style="margin-top:0"><span class="alert-icon">🎭</span><div><strong>${nouvelles.length} nouvelle(s) demande(s) d'agence</strong> — ${nouvelles.map(x=>esc(x.agence||'?')).join(', ')}. Ouvre-la pour la traiter.</div></div>`; })()}
-    ${(()=>{ const cfg=DB.config(); const k=cfg.imagineKey||''; const base=cloudUrl();
-      if(!k) return `<div class="panel" style="margin-bottom:14px"><div class="panel-title">🔗 Formulaire de demande pour tes agences</div>
-        <div class="td-dim" style="font-size:12px;margin-bottom:10px">Une page à leur envoyer : elles décrivent leur événement en 2 minutes, et le projet arrive directement ici.</div>
-        <button class="btn btn-or" onclick="activerFormulaireImagine()">✦ Activer le formulaire agence</button></div>`;
+    ${(()=>{ const cfg=DB.config(); const k=cfg.imagineKey||''; const base=cloudUrl(); const ag=agenceImagine();
+      const cls=DB.all('clients').slice().sort((a,b)=>((a.prenom||'')+a.nom).localeCompare((b.prenom||'')+b.nom));
+      const selAg=`<select class="form-control" onchange="majAgenceImagine(this.value)">
+          <option value="">— ${esc(ag.nom)} (non relié à une fiche client) —</option>
+          ${cls.map(c=>{const n=((c.prenom?c.prenom+' ':'')+c.nom).trim(); return `<option value="${c.id}"${c.id===ag.id?' selected':''}>${esc(n)}</option>`;}).join('')}</select>`;
+      const bloc=`<div class="panel" style="margin-bottom:14px"><div class="panel-title">🤝 Agence partenaire · ${esc(ag.nom)}</div>
+        <div class="td-dim" style="font-size:12px;margin-bottom:10px">Imagine the Impossible est un format dédié à cette agence : elle est pré-remplie sur chaque projet, devis et facture.</div>
+        <div class="form-grid">
+          <div class="form-group"><label class="form-label">Nom de l'agence</label><input class="form-control" value="${esc(ag.nom)}" onchange="majNomAgenceImagine(this.value)"></div>
+          <div class="form-group"><label class="form-label">Fiche client liée</label>${selAg}</div>
+        </div>`;
+      if(!k) return bloc+`<div class="td-dim" style="font-size:12px;margin:10px 0">Donne-leur une page où décrire leur événement en 2 minutes : le projet arrive directement ici.</div>
+        <button class="btn btn-or" onclick="activerFormulaireImagine()">✦ Activer le formulaire de demande</button></div>`;
       const url=base?(base+'?action=imagine&k='+encodeURIComponent(k)):'';
-      return `<div class="panel" style="margin-bottom:14px"><div class="panel-title">🔗 Formulaire de demande pour tes agences</div>
-        <div class="form-group"><label class="form-label">Lien à partager</label><input class="form-control" readonly value="${esc(url)}" onclick="this.select()"></div>
+      return bloc+`<div class="form-group" style="margin-top:6px"><label class="form-label">Lien du formulaire de demande <span class="td-dim">(à envoyer à ${esc(ag.nom)})</span></label><input class="form-control" readonly value="${esc(url)}" onclick="this.select()"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-or" onclick="copierTexte('${esc(url)}','Lien copié — envoie-le à tes agences')">📋 Copier le lien</button>
+          <button class="btn btn-or" onclick="copierMessageAgence()">📋 Copier le message d'invitation</button>
+          <button class="btn btn-ghost" onclick="copierTexte('${esc(url)}','Lien copié')">🔗 Lien seul</button>
           <a class="btn btn-ghost" href="${esc(url)}" target="_blank" rel="noopener">👁 Voir la page</a>
-          <button class="btn btn-ghost" onclick="lienAgencePerso()">✉ Lien personnalisé pour une agence</button>
           <button class="btn btn-ghost" onclick="activerFormulaireImagine(1)">🔄 Changer le lien</button>
         </div>
-        <div class="td-dim" style="font-size:11px;margin-top:8px">Le même lien fonctionne pour toutes tes agences, autant de fois que nécessaire.</div></div>`; })()}
+        <div class="td-dim" style="font-size:11px;margin-top:8px">Un seul lien, réutilisable pour toutes leurs demandes. Chaque interlocuteur de l'agence peut s'en servir.</div></div>`; })()}
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
       <button class="btn btn-or" onclick="nouveauProjet()">✦ Nouveau projet</button>
       <button class="btn btn-ghost" onclick="gererMagiciens()">🎩 Banque de magiciens (${DB.all('magiciens').length})</button>
@@ -4023,8 +4050,9 @@ RENDERERS.projets=function(){
     <div class="panel"><div class="panel-title">Projets (${projets.length})</div>${cards}</div>`;
 };
 function nouveauProjet(){
-  const p={id:uid('PRJ'),nom:'',date:'',lieu:'',agence:'',agenceEmail:'',agenceTel:'',budgetTotal:0,theme:'',typeEvenement:'',nbInvites:'',ambiance:'',
-    nbMagiciensCible:0,tarifMode:'TTC',whatsappGroupe:'',idDevis:'',idAgence:'',lignesSupp:[],horaire:'',creneau:'Soirée',dureePresta:'',
+  const ag=agenceImagine();
+  const p={id:uid('PRJ'),nom:'',date:'',lieu:'',agence:ag.nom,idAgence:ag.id,agenceEmail:ag.email,agenceTel:ag.tel,budgetTotal:0,theme:'',typeEvenement:'',nbInvites:'',ambiance:'',
+    nbMagiciensCible:0,tarifMode:'TTC',whatsappGroupe:'',idDevis:'',lignesSupp:[],horaire:'',creneau:'Soirée',dureePresta:'',
     statut:'Prospect',briefUrl:'',notesBrief:'',feedback:'',notes:'',maGestionMontant:0,statutAgence:'En attente',
     equipe:[],consommables:[],equipement:[],logistique:{transport:'',hebergement:'',repas:''},checklist:[],createdAt:new Date().toISOString()};
   saveP(p); logActivite('Projet Imagine créé'); nav('projet',{id:p.id});
