@@ -123,10 +123,14 @@ function smtpDiag($to){
   return ['ok'=>true,'steps'=>$T,'info'=>'ok'];
 }
 function readJson($path){ if(!is_file($path)) return null; $c=file_get_contents($path); $v=json_decode($c,true); return $v; }
-function writeJson($path,$val){ // écriture atomique (tmp + rename) → jamais de fichier JSON tronqué en cas d'écritures concurrentes
-  $tmp=$path.'.tmp'.getmypid();
-  if(file_put_contents($tmp, json_encode($val, JSON_UNESCAPED_UNICODE), LOCK_EX)!==false) @rename($tmp,$path);
-  else @file_put_contents($path, json_encode($val, JSON_UNESCAPED_UNICODE)); }
+function writeJson($path,$val){ // écriture atomique (tmp + rename), jamais de fichier vide ni tronqué
+  $json = json_encode($val, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+  if ($json === false || $json === '') return false;          // encodage impossible → on ne touche à rien
+  $tmp = $path.'.tmp'.getmypid();
+  $n = @file_put_contents($tmp, $json, LOCK_EX);
+  if ($n !== strlen($json)) { @unlink($tmp); return false; }   // écriture partielle (disque plein) → abandon
+  if (!@rename($tmp, $path)) { @unlink($tmp); return false; }
+  return true; }
 
 $raw = file_get_contents('php://input');
 $req = $raw ? json_decode($raw, true) : [];
@@ -135,7 +139,13 @@ $action = $_GET['action'] ?? ($req['action'] ?? '');
 $auth   = $_GET['auth']   ?? ($req['auth']   ?? '');   // sha256(mot de passe) envoyé par le CRM
 $token  = $_GET['token']  ?? ($req['token']  ?? '');   // legacy / Apps Script
 
-if ($action === '' || $action === 'ping') out(['ok'=>true, 'msg'=>'CRM LouisMagie API (PHP) en ligne']);
+// Un corps illisible (POST tronqué, JSON invalide) ne doit JAMAIS passer pour un succès
+if ($raw !== '' && json_decode($raw, true) === null && json_last_error() !== JSON_ERROR_NONE) {
+  out(['ok'=>false, 'error'=>'corps de requête illisible (tronqué ou trop volumineux)']);
+}
+if ($action === '' && $raw === '' && empty($_GET)) out(['ok'=>true, 'msg'=>'CRM LouisMagie API (PHP) en ligne']);
+if ($action === 'ping') out(['ok'=>true, 'msg'=>'CRM LouisMagie API (PHP) en ligne']);
+if ($action === '') out(['ok'=>false, 'error'=>'action manquante']);
 
 if (!is_dir($DATA_DIR)) @mkdir($DATA_DIR, 0775, true);
 if (!is_dir($DATA_DIR)) out(['ok'=>false, 'error'=>'dossier data non créable']);
@@ -143,6 +153,7 @@ if (!is_dir($DATA_DIR)) out(['ok'=>false, 'error'=>'dossier data non créable'])
 /* ===== Pixel de suivi d'ouverture (public, pas d'auth) ===== */
 if ($action === 'track') {
   $m = $_GET['m'] ?? '';
+  if (!preg_match('/^[A-Za-z0-9_-]{1,64}$/', (string)$m)) $m = '';   // identifiant de suivi invalide → ignoré
   if ($m !== '') { $f=$DATA_DIR.'/_opens.json'; $arr=readJson($f); if(!is_array($arr))$arr=[];
     if(!array_filter($arr, function($o) use($m){ return ($o['m']??'')===$m; })) $arr[]=['m'=>$m,'at'=>date('c')];
     writeJson($f,$arr); }
@@ -972,18 +983,33 @@ if ($action === 'sign' || $action === 'signSubmit') {
 /* ===== Envoi planifié (déclenché par cron Coolify, protégé par CRON_KEY) ===== */
 if ($action === 'runScheduled') {
   $__ck=getenv('CRON_KEY'); if (!$__ck || !hash_equals($__ck, (string)($_GET['key'] ?? ''))) out(['ok'=>false,'error'=>'cron key invalide']);
+  @set_time_limit(0);
+  // Verrou : deux exécutions simultanées du cron enverraient les emails en double
+  $lockF = $DATA_DIR.'/_cron.lock'; $lock = @fopen($lockF,'c');
+  if ($lock && !@flock($lock, LOCK_EX | LOCK_NB)) out(['ok'=>false,'error'=>'envoi déjà en cours']);
   $f=$DATA_DIR.'/planifs.json'; $arr=readJson($f); if(!is_array($arr))$arr=[];
-  $today=date('Y-m-d'); $sent=0; $fail=0;
-  foreach ($arr as &$p) {
+  // Adresses désabonnées : à ne jamais servir, même si la planification est antérieure
+  $desab=[]; $cl=readJson($DATA_DIR.'/clients.json');
+  if(is_array($cl)) foreach($cl as $c){ if(!empty($c['desabo']) && !empty($c['email'])) $desab[strtolower(trim($c['email']))]=1; }
+  $today=date('Y-m-d'); $sent=0; $fail=0; $skip=0;
+  foreach ($arr as $i => &$p) {
     if (($p['statut']??'')==='prévu' && ($p['date']??'9999') <= $today) {
+      if (isset($desab[strtolower(trim((string)($p['to'] ?? '')))])) {
+        $p['statut']='annulé'; $p['info']='destinataire désabonné'; $skip++;
+        writeJson($f,$arr); continue;
+      }
       $tu='';
       if(!empty($p['trackId'])){ $base=(isset($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off'?'https':'http').'://'.$_SERVER['HTTP_HOST'].$_SERVER['SCRIPT_NAME']; $tu=$base.'?action=track&m='.rawurlencode($p['trackId']); }
       list($ok,$info)=smtpSend($p['to']??'',$p['subject']??'',$p['body']??'','','',$tu,$p['html']??'');
       $p['statut']=$ok?'envoyé':'échec'; $p['sentAt']=date('c'); $p['info']=$info; $ok?$sent++:$fail++;
+      writeJson($f,$arr);          // persistance immédiate : une coupure ne fait pas réexpédier le lot
+      usleep(350000);              // cadence douce, pour ne pas se faire limiter par le serveur SMTP
     }
   }
-  unset($p); writeJson($f,$arr);
-  out(['ok'=>true,'sent'=>$sent,'fail'=>$fail,'total'=>count($arr)]);
+  unset($p);
+  writeJson($f,$arr);
+  if ($lock) { @flock($lock, LOCK_UN); @fclose($lock); }
+  out(['ok'=>true,'sent'=>$sent,'fail'=>$fail,'desabonnes'=>$skip,'total'=>count($arr)]);
 }
 
 /* ===== Diagnostic SMTP (clé requise) ===== */
@@ -1034,12 +1060,12 @@ switch ($action) {
   case 'putEntity': {
     $e = $req['entity'] ?? '';
     if (!in_array($e, $ENTITIES)) out(['ok'=>false,'error'=>'entité inconnue']);
-    writeJson("$DATA_DIR/$e.json", $req['rows'] ?? []);
-    out(['ok'=>true]);
+    if (!writeJson("$DATA_DIR/$e.json", $req['rows'] ?? [])) out(['ok'=>false,'error'=>'écriture impossible']);
+    out(['ok'=>true, 'entity'=>$e, 'n'=>count((array)($req['rows'] ?? []))]);
   }
 
   case 'putConfig': {
-    writeJson("$DATA_DIR/config.json", $req['config'] ?? []);
+    if (!writeJson("$DATA_DIR/config.json", $req['config'] ?? [])) out(['ok'=>false,'error'=>'écriture impossible']);
     out(['ok'=>true]);
   }
 

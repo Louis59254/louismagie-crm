@@ -459,7 +459,9 @@ const ENTITIES = ['demandes','devis','prestations','factures','clients','relance
 const LS_PREFIX = 'lm_crm_';
 const DB = {
   all(e){ try{ return JSON.parse(localStorage.getItem(LS_PREFIX+e)) || []; }catch(_){ return []; } },
-  _writeLocal(e,arr){ localStorage.setItem(LS_PREFIX+e, JSON.stringify(arr)); },     // local seul (utilisé par la sync descendante)
+  _writeLocal(e,arr){ try{ localStorage.setItem(LS_PREFIX+e, JSON.stringify(arr)); }
+    catch(err){ try{ toast('⚠️ Stockage local saturé — exporte tes données (Réglages) et allège les pièces jointes','err'); }catch(_){}
+      console.error('localStorage plein',e,err); throw err; } },     // local seul (utilisé par la sync descendante)
   _write(e,arr){ DB._writeLocal(e,arr); if(typeof cloudQueueEntity==='function') cloudQueueEntity(e); }, // local + push cloud
   get(e,id){ return DB.all(e).find(x=>x.id===id) || null; },
   save(e,obj){ const arr=DB.all(e); const i=arr.findIndex(x=>x.id===obj.id);
@@ -522,6 +524,7 @@ function shadeHex(hex,pct){ hex=String(hex||'#FF7700').replace('#',''); if(hex.l
   let r=(n>>16)&255,g=(n>>8)&255,b=n&255; r=Math.round(r+(255-r)*pct); g=Math.round(g+(255-g)*pct); b=Math.round(b+(255-b)*pct);
   return '#'+((1<<24)+(r<<16)+(g<<8)+b).toString(16).slice(1); }
 /* Coquille HTML brandée — header (logo + tagline + couleur) et footer paramétrables (Réglages) */
+const FONT_MAIL="font-family:'Helvetica Neue',Arial,Helvetica,sans-serif;";   // Outlook ignore la police posée sur <table>
 function emailShell(innerHtml,opts){
   const cfg=DB.config(), logo=(cfg.logo&&emailLogoUrl())?emailLogoUrl():'';
   const e=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -530,18 +533,18 @@ function emailShell(innerHtml,opts){
   const hColor=cfg.emailHeaderColor||'#FF7700';
   const footerTpl=cfg.emailFooter!=null&&cfg.emailFooter!==''?cfg.emailFooter:'LouisMagie — Louis Slosse · Magicien\n{email} · {tel}\nDunkerque & Hauts-de-France';
   const footerHtml=footerTpl.replace(/{email}/g,mail).replace(/{tel}/g,tel).split('\n')
-    .map((l,i)=> i===0 ? `<strong style="color:${hColor};letter-spacing:.5px">${e(l)}</strong>` : `<span style="color:rgba(255,255,255,.42)">${e(l)}</span>`).join('<br>');
+    .map((l,i)=> i===0 ? `<strong style="color:${hColor};letter-spacing:.5px">${e(l)}</strong>` : `<span style="color:#8A8580">${e(l)}</span>`).join('<br>');
   // Charte LouisMagie : noir dominant, crème de respiration, orange en accent rare (règle 70/25/5)
   return `<!doctype html><html><body style="margin:0;background:#F5F2EE"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F5F2EE;padding:28px 12px"><tr><td align="center">`
-    +`<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#FDFCFB;border-radius:14px;overflow:hidden;border:1px solid #EDEAE5;font-family:'Helvetica Neue',Arial,Helvetica,sans-serif">`
+    +`<table role="presentation" width="600" cellpadding="0" cellspacing="0" width="600" style="max-width:600px;width:100%;background:#FDFCFB;border-radius:14px;overflow:hidden;border:1px solid #EDEAE5;border-collapse:collapse;${FONT_MAIL}">`
     // En-tête noir profond, filet orange en signature
     +`<tr><td style="height:3px;background:${hColor};font-size:0;line-height:0">&nbsp;</td></tr>`
-    +`<tr><td align="center" style="background:#0A0A08;padding:${logo?'30px 28px 26px':'26px 28px'}">`
+    +`<tr><td align="center" style="${FONT_MAIL}background:#0A0A08;padding:${logo?'30px 28px 26px':'26px 28px'}">`
     +(logo?`<img src="${logo}" alt="LouisMagie" height="${logoH}" style="max-height:${logoH}px;display:block;margin:0 auto 14px">`:'')
     +(tagline?`<div style="color:#FDFCFB;font-size:15px;font-weight:bold;letter-spacing:2.5px;text-transform:uppercase">${e(tagline)}</div>`:'')
     +`</td></tr>`
-    +`<tr><td style="padding:32px 30px;color:#5A5650;font-size:15px;line-height:1.75">${innerHtml}</td></tr>`
-    +`<tr><td align="center" style="padding:22px 28px;background:#0A0A08;font-size:12px;line-height:1.8">${footerHtml}</td></tr>`
+    +`<tr><td style="${FONT_MAIL}padding:32px 30px;color:#5A5650;font-size:15px;line-height:1.75">${innerHtml}</td></tr>`
+    +`<tr><td align="center" style="${FONT_MAIL}padding:22px 28px;background:#0A0A08;font-size:12px;line-height:1.8">${footerHtml}</td></tr>`
     +((opts&&opts.desabo)?`<tr><td align="center" style="padding:14px 28px;background:#0A0A08;border-top:1px solid #2C2C28"><a href="${opts.desabo}" style="color:#8A8580;font-size:11px;text-decoration:underline">Ne plus recevoir mes actualités</a></td></tr>`:'')
     +`</table>`
     +`<div style="max-width:600px;margin:14px auto 0;color:#8A8580;font-size:11px;text-align:center;font-family:'Helvetica Neue',Arial,sans-serif">louismagie.fr</div>`
@@ -2669,7 +2672,7 @@ RENDERERS['devis-create']=function(params){
 
     <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-bottom:30px">
       <button class="btn btn-ghost" onclick="nav('devis')">Annuler</button>
-      <button class="btn btn-ghost" onclick="dvSave(false);apercuPdf('Devis',DV.id)">👁 Aperçu PDF</button>
+      <button class="btn btn-ghost" onclick="if(dvSave(false))apercuPdf('Devis',DV.id)">👁 Aperçu PDF</button>
       <button class="btn btn-or" onclick="dvSave(true)">${d.id?'Enregistrer':'Enregistrer le brouillon'}</button>
     </div></div>`;
   dvRenderLines(); dvRecalc();
@@ -2823,6 +2826,7 @@ function openMailComposer(opts){
       <div class="form-group"><label class="form-label">Objet</label><input class="form-control" id="mc-subject" value="${esc(opts.subject||'')}"></div>
       <div class="form-group"><label class="form-label">Message</label><textarea class="form-control" id="mc-body" style="min-height:220px">${esc(opts.body||'')}</textarea></div>
     </div>
+    <div id="mc-echec"></div>
     <div id="mc-preview" style="display:none;margin-top:14px">
       <div class="form-label" style="display:flex;align-items:center;gap:8px">Aperçu du rendu — ce que reçoit le client${opts.pdfId?' <span class="badge accepte" style="font-size:11px">📎 '+esc(opts.pdfId)+'.pdf joint</span>':''}</div>
       <iframe id="mc-pv-frame" sandbox="" style="width:100%;height:460px;border:1px solid var(--bd);border-radius:12px;background:#fff"></iframe>
@@ -2846,6 +2850,11 @@ function mcPreview(){
 }
 async function mcSend(kind,ref){
   const to=document.getElementById('mc-to').value.trim();
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(to)){
+    toast('Destinataire manquant ou invalide — corrige l\'adresse avant d\'envoyer','err');
+    const el=document.getElementById('mc-to'); if(el){ el.style.borderColor='var(--er)'; el.focus(); }
+    return;
+  }
   const subject=document.getElementById('mc-subject').value;
   const bodyTxt=document.getElementById('mc-body').value;
   const mailId=uid('MAIL');
@@ -2857,7 +2866,18 @@ async function mcSend(kind,ref){
     if(window._mcPdf&&window._mcPdf.id){ attachB64=pdfBase64(window._mcPdf.type,window._mcPdf.id); attachName=window._mcPdf.id+'.pdf'; }
     const j=await cloudPost({action:'sendEmail',to,subject,body:bodyTxt,html:emailHtml(bodyTxt),attachB64,attachName,trackId:mailId});
     if(j&&j.ok){ logActivite('Email envoyé ('+kind+') → '+to); done(); toast('✅ Email envoyé à '+to,'ok'); }
-    else { if(btn){btn.disabled=false;btn.textContent='📤 Envoyer maintenant';} const why=(j&&(j.info||j.error))||'serveur injoignable'; toast('Échec envoi : '+why,'err'); logActivite('Échec envoi → '+to+' : '+why); mailtoOpen(to,subject,bodyTxt); done(); }
+    else {
+      // Échec : on ne marque SURTOUT pas l'email comme envoyé (sinon devis « Envoyé », relance « faite »,
+      // avis « demandé » alors que rien n'est parti, et l'alerte d'impayé disparaît)
+      if(btn){ btn.disabled=false; btn.textContent='📤 Réessayer l\'envoi'; }
+      const why=(j&&(j.info||j.error))||'serveur injoignable';
+      logActivite('ÉCHEC envoi → '+to+' : '+why);
+      const zone=document.getElementById('mc-echec');
+      if(zone) zone.innerHTML=alertHtml('danger','⚠','<strong>L\'email n\'est pas parti.</strong> '+esc(why)
+        +'<br>Rien n\'a été enregistré : le document garde son statut actuel. Réessaie, ou ouvre ta messagerie pour l\'envoyer à la main.'
+        +'<div style="margin-top:8px"><button class="btn btn-ghost btn-sm" onclick="mailtoOpen(document.getElementById(\'mc-to\').value,document.getElementById(\'mc-subject\').value,document.getElementById(\'mc-body\').value)">✉ Ouvrir ma messagerie</button></div>');
+      toast('Échec : '+why,'err');
+    }
     return;
   }
   mailtoOpen(to,subject,bodyTxt);
@@ -3079,6 +3099,7 @@ function segNom(key){
   return (MKT_SEGMENTS.find(x=>x.key===key)||MKT_SEGMENTS[0]).label;
 }
 function segEnregistrer(){
+  mktCaptureDraft();
   const ids=[...document.querySelectorAll('#view-marketing .mkt-cb:checked')].map(cb=>cb.value);
   if(!ids.length){ toast('Coche d\'abord des contacts','err'); return; }
   const nom=prompt('Nom de cette liste (ex : « Agences Paris », « Mariages 2026 ») :',''); if(!nom) return;
@@ -3087,6 +3108,7 @@ function segEnregistrer(){
   toast('💾 Liste « '+nom.trim()+' » enregistrée','ok'); RENDERERS.marketing();
 }
 function segSupprimer(){
+  mktCaptureDraft();
   if(_mktSeg.indexOf('seg:')!==0) return;
   const sg=DB.get('segments',_mktSeg.slice(4)); if(!sg) return;
   if(!confirm('Supprimer la liste « '+sg.nom+' » ?\n\nLes contacts ne sont pas supprimés.')) return;
@@ -3142,9 +3164,9 @@ function mktRappels(){ // {c, raison, info, key}
   const add=(c,raison,info)=>{ const key='mkt-'+raison+'-'+c.id; if(isSnoozed(key))return; out.push({c,raison,info,key}); };
   // anniversaires ce mois (prestation/devis passé, même mois, >=1 an)
   DB.all('devis').forEach(d=>{ if(!d.idClient||!d.dateEvenement)return; if(!['Accepté','Acompte reçu'].includes(d.statut))return; const dt=new Date(d.dateEvenement); if(isNaN(dt))return;
-    const ya=an-dt.getFullYear(); if(dt.getMonth()===mois&&ya>=1){ const c=DB.get('clients',d.idClient); if(c&&c.email&&!vus.has('a'+c.id)){ vus.add('a'+c.id); add(c,'anniv','Prestation il y a '+ya+' an'+(ya>1?'s':'')+' ('+fmtDateShort(d.dateEvenement)+')'); } } });
+    const ya=an-dt.getFullYear(); if(dt.getMonth()===mois&&ya>=1){ const c=DB.get('clients',d.idClient); if(c&&c.email&&!c.desabo&&!vus.has('a'+c.id)){ vus.add('a'+c.id); add(c,'anniv','Prestation il y a '+ya+' an'+(ya>1?'s':'')+' ('+fmtDateShort(d.dateEvenement)+')'); } } });
   // dormants : dernier devis > 8 mois
-  DB.all('clients').filter(c=>c.email).forEach(c=>{ const last=clientDernierEvt(c.id); if(last&&daysSince(last)>240&&!vus.has('a'+c.id)&&!vus.has('d'+c.id)){ vus.add('d'+c.id); add(c,'dormant','Pas de prestation depuis '+Math.round(daysSince(last)/30)+' mois'); } });
+  DB.all('clients').filter(c=>c.email&&!c.desabo).forEach(c=>{ const last=clientDernierEvt(c.id); if(last&&daysSince(last)>240&&!vus.has('a'+c.id)&&!vus.has('d'+c.id)){ vus.add('d'+c.id); add(c,'dormant','Pas de prestation depuis '+Math.round(daysSince(last)/30)+' mois'); } });
   return out;
 }
 function dismissRappel(key){ mktCaptureDraft(); const c=DB.config(); c.dismissed=c.dismissed||{}; const u=new Date(); u.setDate(u.getDate()+90); c.dismissed[key]=u.toISOString(); DB.saveConfig(c); RENDERERS.marketing(); updateBadges(); toast('Suggestion masquée','ok'); }
@@ -3238,7 +3260,7 @@ RENDERERS.marketing=function(){
         <div class="form-group"><label class="form-label">📅 Planifier (optionnel — vide = envoi immédiat)</label><input class="form-control" type="date" id="mkt-date" min="${todayISO()}"></div>
         <div style="text-align:right;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
           <button class="btn btn-ghost" onclick="envoyerTest()">🧪 M'envoyer un test</button>
-          <button class="btn btn-or" onclick="envoyerCampagne()">📤 Envoyer / Planifier</button></div>
+          <button class="btn btn-or" id="mkt-send" onclick="envoyerCampagne()">📤 Envoyer / Planifier</button></div>
       </div>
       ${!auto?'<div class="td-dim" style="margin-top:6px">Planification + suivi des ouvertures = nécessitent l\'envoi auto Gmail.</div>':''}
     </div>
@@ -3248,7 +3270,7 @@ RENDERERS.marketing=function(){
   const _ed=document.getElementById('mkt-editor'); if(_ed)_ed.innerHTML=cur.html||'<br>';   // contenu injecté après rendu (pas d'injection template-literal)
 };
 function marketingStatsHtml(){
-  const sent=DB.all('mails').filter(m=>m.to);
+  const sent=DB.all('mails').filter(m=>m.to&&(m.kind==='campagne'||m.kind==='marketing'));
   const opened=sent.filter(m=>isOpened(m.id));
   const taux=sent.length?Math.round(opened.length/sent.length*100):0;
   const camps=DB.all('campagnes').slice().sort((a,b)=>(b.date||'').localeCompare(a.date||'')).slice(0,6);
@@ -3301,13 +3323,14 @@ function mktSearchFilter(q){ q=(q||'').toLowerCase().trim(); document.querySelec
 function mktCount(){ const n=document.querySelectorAll('#view-marketing .mkt-cb:checked').length; const el=document.getElementById('mkt-count'); if(el)el.textContent=n; }
 /* Test : s'envoyer l'email tel qu'il partira, variables résolues sur un vrai contact */
 async function envoyerTest(){
+  mktCaptureDraft();
   const cfg=DB.config();
   if(!(cfg.gmailEnvoi&&cloudUrl())){ toast('Active l\'envoi automatique (Réglages) pour le test','err'); return; }
   const moi=cfg.emailLouis||''; if(!moi){ toast('Renseigne ton email expéditeur dans les Réglages','err'); return; }
   const subject=(document.getElementById('mkt-subject')||{}).value||'';
   const html=(document.getElementById('mkt-editor')||{}).innerHTML||'';
   if(!subject.trim()&&!stripHtml(html).trim()){ toast('Écris d\'abord ton message','err'); return; }
-  const ids=[...document.querySelectorAll('#view-marketing .mkt-cb:checked')].map(cb=>cb.value);
+  const ids=mktSelection().ids;
   const modele=(ids.length?DB.get('clients',ids[0]):null)||{prenom:'Camille',nom:'Moreau'};
   const corps=mktVars(html,modele);
   const desabo=await lienDesabo(moi);
@@ -3315,36 +3338,67 @@ async function envoyerTest(){
     body:stripHtml(corps),html:emailHtmlRich(corps,{desabo})});
   toast(j&&j.ok?('🧪 Test envoyé à '+moi+' (variables : '+prenomDe(modele.prenom||modele.nom)+')'):'Échec : '+((j&&j.info)||'serveur injoignable'), j&&j.ok?'ok':'err');
 }
+/* Destinataires réellement sélectionnés : on ignore les lignes masquées par la recherche */
+function mktSelection(){
+  const vis=[...document.querySelectorAll('#view-marketing .mkt-row')].filter(l=>l.style.display!=='none');
+  const coches=vis.map(l=>l.querySelector('.mkt-cb')).filter(cb=>cb&&cb.checked).map(cb=>cb.value);
+  const masquesCoches=[...document.querySelectorAll('#view-marketing .mkt-row')].filter(l=>l.style.display==='none')
+    .map(l=>l.querySelector('.mkt-cb')).filter(cb=>cb&&cb.checked).length;
+  return {ids:coches, masques:masquesCoches};
+}
+let _mktEnvoiEnCours=false;
 async function envoyerCampagne(){
-  const ids=[...document.querySelectorAll('#view-marketing .mkt-cb:checked')].map(cb=>cb.value);
-  if(!ids.length){ toast('Aucun destinataire coché','err'); return; }
+  if(_mktEnvoiEnCours){ toast('Envoi déjà en cours…','err'); return; }
+  mktCaptureDraft();                                   // A7 : ne pas perdre le message en cours
+  const sel=mktSelection(); const ids=sel.ids;
+  if(!ids.length){ toast(sel.masques?('Aucun destinataire visible coché ('+sel.masques+' masqué(s) par la recherche)'):'Aucun destinataire coché','err'); return; }
   const subjectTpl=document.getElementById('mkt-subject').value;
   const bodyHtmlTpl=(document.getElementById('mkt-editor')||{}).innerHTML||'';
   const date=(document.getElementById('mkt-date')||{}).value||'';
   const auto=DB.config().gmailEnvoi&&cloudUrl();
   const prog=document.getElementById('mkt-progress');
 
-  // PLANIFICATION
-  if(date && date>todayISO()){
-    if(!auto){ toast('Planification = nécessite l\'envoi auto Gmail (Réglages)','err'); return; }
-    let n=0;
-    ids.forEach(id=>{ const c=DB.get('clients',id); if(!c||!c.email||c.desabo)return;
-      const htmlP=mktVars(bodyHtmlTpl,c);
-      lienDesabo(c.email).then(desabo=>{
-        DB.save('planifs',{id:uid('PLN'),date,to:c.email,subject:mktVars(subjectTpl,c),body:stripHtml(htmlP),
-          html:emailHtmlRich(htmlP,{desabo}),trackId:uid('MAIL'),client:(c.prenom+' '+c.nom).trim(),statut:'prévu',createdAt:new Date().toISOString()});
-      }); n++; });
-    logActivite('Campagne planifiée : '+n+' email(s) le '+fmtDateFr(date));
-    toast('📅 '+n+' email(s) planifié(s) le '+fmtDateShort(date),'ok'); RENDERERS.marketing(); return;
+  // PLANIFICATION (aujourd'hui inclus : le serveur traite date <= aujourd'hui)
+  if(date && date>=todayISO()){
+    if(!auto){ toast('Planification = nécessite l\'envoi automatique (Réglages)','err'); return; }
+    let cib=ids.map(i=>DB.get('clients',i)).filter(c=>c&&c.email&&!c.desabo);
+    const vus2=new Set(); cib=cib.filter(c=>{ const k=c.email.toLowerCase().trim(); if(vus2.has(k))return false; vus2.add(k); return true; });
+    if(!cib.length){ toast('Aucun destinataire valide','err'); return; }
+    if(!confirm('Planifier l\'envoi à '+cib.length+' contact(s) le '+fmtDateFr(date)+' ?'
+      +(sel.masques?('\n('+sel.masques+' coché(s) masqué(s) par la recherche : NON inclus)'):''))) return;
+    _mktEnvoiEnCours=true;
+    try{
+      const lignes=await Promise.all(cib.map(async c=>{           // A4 : on attend l'écriture avant d'annoncer
+        const htmlP=mktVars(bodyHtmlTpl,c);
+        return {id:uid('PLN'),date,to:c.email,subject:mktVars(subjectTpl,c),body:stripHtml(htmlP),
+          html:emailHtmlRich(htmlP,{desabo:await lienDesabo(c.email)}),trackId:uid('MAIL'),
+          idClient:c.id,client:((c.prenom?c.prenom+' ':'')+c.nom).trim(),statut:'prévu',createdAt:new Date().toISOString()};
+      }));
+      DB._write('planifs',DB.all('planifs').concat(lignes));      // une seule écriture
+      DB.save('campagnes',{id:uid('CMP'),nom:subjectTpl||'Campagne',date:new Date().toISOString(),dateEnvoiPrevue:date,
+        segment:segNom(_mktSeg),cibles:lignes.length,envoyes:0,echecs:0,statut:'planifiée',mailIds:lignes.map(l=>l.trackId)});
+      logActivite('Campagne planifiée : '+lignes.length+' email(s) le '+fmtDateFr(date));
+      toast('📅 '+lignes.length+' email(s) planifié(s) le '+fmtDateShort(date),'ok');
+    } finally { _mktEnvoiEnCours=false; RENDERERS.marketing(); }
+    return;
   }
 
   // ENVOI IMMÉDIAT
   if(auto){
-    const cibles=ids.map(i=>DB.get('clients',i)).filter(c=>c&&c.email&&!c.desabo);
-    const exclus=ids.length-cibles.length;
+    let cibles=ids.map(i=>DB.get('clients',i)).filter(c=>c&&c.email&&!c.desabo);
+    // A5 : une même adresse ne reçoit qu'une fois (deux fiches peuvent partager un email)
+    const vus=new Set(); let doublons=0;
+    cibles=cibles.filter(c=>{ const k=c.email.toLowerCase().trim(); if(vus.has(k)){ doublons++; return false; } vus.add(k); return true; });
+    const exclus=ids.length-cibles.length-doublons;
     if(!cibles.length){ toast('Aucun destinataire valide (désabonnés ou sans email)','err'); return; }
-    if(!confirm('Envoyer MAINTENANT à '+cibles.length+' contact(s) ?'+(exclus?('\n('+exclus+' écarté(s) : désabonné ou sans email)'):'')
+    if(!confirm('Envoyer MAINTENANT à '+cibles.length+' contact(s) ?'
+      +(exclus?('\n· '+exclus+' écarté(s) : désabonné ou sans email'):'')
+      +(doublons?('\n· '+doublons+' doublon(s) d\'adresse écarté(s)'):'')
+      +(sel.masques?('\n· '+sel.masques+' coché(s) mais masqué(s) par la recherche : NON inclus'):'')
       +'\n\nListe : '+segNom(_mktSeg)+'\nObjet : '+subjectTpl)) return;
+    _mktEnvoiEnCours=true;
+    const btnEnvoi=document.getElementById('mkt-send'); if(btnEnvoi) btnEnvoi.disabled=true;
+    try{
     const camp=DB.save('campagnes',{id:uid('CMP'),nom:subjectTpl||'Campagne',date:new Date().toISOString(),
       segment:segNom(_mktSeg),cibles:cibles.length,envoyes:0,echecs:0,mailIds:[]});
     let ok=0,fail=0;
@@ -3353,6 +3407,8 @@ async function envoyerCampagne(){
       if(prog) prog.textContent='Envoi '+(i+1)+'/'+cibles.length+' → '+c.email+'…';
       const htmlP=mktVars(bodyHtmlTpl,c);
       const desabo=await lienDesabo(c.email);
+      if(!desabo){ fail++; if(prog) prog.textContent=''; 
+        toast('Envoi interrompu : lien de désabonnement indisponible (obligatoire). Vérifie la connexion au serveur.','err'); break; }
       const j=await cloudPost({action:'sendEmail',to:c.email,subject:mktVars(subjectTpl,c),
         body:stripHtml(htmlP),html:emailHtmlRich(htmlP,{desabo}),trackId:mailId});
       if(j&&j.ok){ ok++; camp.mailIds.push(mailId);
@@ -3362,7 +3418,8 @@ async function envoyerCampagne(){
     camp.envoyes=ok; camp.echecs=fail; DB.save('campagnes',camp);
     if(prog) prog.textContent='';
     logActivite('Campagne « '+(subjectTpl||'').slice(0,40)+' » : '+ok+' email(s)'+(fail?', '+fail+' échec(s)':''));
-    toast('✅ '+ok+' envoyé(s)'+(fail?' · '+fail+' échec(s)':''),'ok'); RENDERERS.marketing();
+    toast('✅ '+ok+' envoyé(s)'+(fail?' · '+fail+' échec(s)':''),'ok');
+    } finally { _mktEnvoiEnCours=false; const b=document.getElementById('mkt-send'); if(b) b.disabled=false; RENDERERS.marketing(); }
   } else {
     const emails=ids.map(id=>(DB.get('clients',id)||{}).email).filter(Boolean).join(',');
     window.open('mailto:?bcc='+encodeURIComponent(emails)+'&subject='+encodeURIComponent(subjectTpl.replace(/\s*{prenom}\s*/g,' ').replace(/\s*{nom}\s*/g,' ').trim())+'&body='+encodeURIComponent(stripHtml(bodyHtmlTpl).replace(/Bonjour\s*{prenom}\s*,?/gi,'Bonjour,').replace(/\s*{prenom}\s*/g,' ').replace(/\s*{nom}\s*/g,' ')),'_blank');
@@ -3823,10 +3880,13 @@ function facturerProjet(pid){
   if(!confirm('Créer une facture de '+fmtEur(montant)+' à « '+(p.agence||'l\'agence')+' » ?\n\n(magiciens facturés via moi + ma gestion de projet)\nElle apparaîtra dans tes Factures LouisMagie.')) return;
   const cfg=DB.config(); const ech=new Date(); ech.setDate(ech.getDate()+(cfg.delaiRelance1||30));
   const fid=nextId('FAC','factures');
-  DB.save('factures',{id:fid,type:'complete',dateEmission:todayISO(),idDevis:'',idProjet:pid,idClient:'',
+  const cAg=clientAgence(p);                                   // rattache la facture à la fiche de l'agence
+  if(cAg&&!p.idAgence){ p.idAgence=cAg.id; }
+  DB.save('factures',{id:fid,type:'complete',dateEmission:todayISO(),idDevis:'',idProjet:pid,idClient:cAg?cAg.id:'',
     montantTTC:montant,montantFacture:montant,acompteVerse:0,soldeDu:montant,dateEcheance:ech.toISOString().slice(0,10),
     statut:'Émise',datePaiement:'',dateEnvoi:'',dateRelance1:'',dateRelance2:'',
-    billingName:p.agence||'',designation:'Imagine the Impossible — '+(p.nom||'projet')+(p.date?(' ('+fmtDateFr(p.date)+')'):'')});
+    billingName:p.agence||'',billingEmail:p.agenceEmail||(cAg&&cAg.email)||'',
+    designation:'Imagine the Impossible — '+(p.nom||'projet')+(p.date?(' ('+fmtDateFr(p.date)+')'):'')});
   p.factureId=fid; if(p.statut!=='Annulé'&&p.statut!=='Facturé') p.statut='Facturé'; saveP(p);
   logActivite('Facture projet Imagine émise ('+fmtEur(montant)+') → '+(p.agence||'')); updateBadges();
   toast('🧾 Facture '+fid+' créée ('+fmtEur(montant)+')','ok'); RENDERERS.projet({id:pid});
@@ -4417,7 +4477,8 @@ function dupliquerProjet(id){
   ['consommables','equipement','checklist'].forEach(k=>(np[k]||[]).forEach(it=>{ it.id=uid('IT'); it.fait=false; }));
   (np.lignesSupp||[]).forEach(l=>l.id=uid('SUP'));
   np.idDevis='';
-  if(np.brief){ np.brief.token=genToken(); np.brief.publie=false; }   // nouveau lien privé, non publié
+  if(np.brief){ np.brief.token=genToken(); np.brief.publie=false; np.brief.lus=[]; delete np.brief.code; }   // nouveau lien privé, sans accusés ni code hérités
+  np.demandeAgence=false; np.vue=true; np.recuLe='';
   saveP(np); logActivite('Projet dupliqué depuis '+(p.nom||id));
   toast('📋 Projet dupliqué — mets à jour la date et le lieu','ok'); nav('projet',{id:np.id});
 }
