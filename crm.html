@@ -1027,9 +1027,7 @@ function demandeVersClient(id,typeForce){
   const d=DB.get('demandes',id); if(!d)return;
   const nomComplet=(d.nom||'').trim(); if(!nomComplet){ toast('Demande sans nom','err'); return; }
   // évite les doublons : même email, sinon même nom
-  const em=(d.email||'').trim().toLowerCase();
-  let c = (em?DB.all('clients').find(x=>(x.email||'').toLowerCase()===em):null)
-       || DB.all('clients').find(x=>((x.prenom||'')+' '+(x.nom||'')).trim().toLowerCase()===nomComplet.toLowerCase());
+  let c = trouverClient({nom:nomComplet,email:d.email});
   if(c){ d.idClient=c.id; DB.save('demandes',d); toast('Contact déjà existant — demande reliée à sa fiche','ok'); voirDemande(id); return; }
   const mots=nomComplet.split(/\s+/);
   const prenom=mots.length>1?mots[0]:'', nom=mots.length>1?mots.slice(1).join(' '):nomComplet;
@@ -2059,6 +2057,20 @@ function marquerPayee(id){
   if(f.idProjet){ const p=DB.get('projets',f.idProjet); if(p){ p.statutAgence='Payé'; DB.save('projets',p); } }   // sync statut agence du projet
   logActivite('Facture '+id+' payée'); updateBadges(); RENDERERS.factures(); toast('✓ Facture payée — recette ajoutée au livre','ok');
 }
+/* Clé de comparaison d'un nom : sans casse, sans accents, sans ponctuation, espaces normalisés */
+function normNom(x){ return String(x||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+  .toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(); }
+/* Retrouve un client existant : SIREN, puis email, puis nom normalisé (évite les doublons) */
+function trouverClient({nom,email,siren}={}){
+  const cls=DB.all('clients');
+  const si=String(siren||'').replace(/\D/g,'');
+  if(si) { const c=cls.find(x=>String(x.siren||'').replace(/\D/g,'')===si); if(c) return c; }
+  const em=String(email||'').trim().toLowerCase();
+  if(em) { const c=cls.find(x=>(x.email||'').trim().toLowerCase()===em); if(c) return c; }
+  const n=normNom(nom);
+  if(n) { const c=cls.find(x=>normNom(((x.prenom?x.prenom+' ':'')+(x.nom||''))) === n); if(c) return c; }
+  return null;
+}
 function clientNomFacture(f){ if(f&&f.billingName) return f.billingName; const c=DB.get('clients',f.idClient); return c?(c.prenom+' '+c.nom).trim():((DB.get('devis',f.idDevis)||{}).nomClient||''); }
 /* Email destinataire d'une facture : override billing → fiche client → devis lié */
 function factEmailTo(f){ if(!f) return ''; return f.billingEmail||(DB.get('clients',f.idClient)||{}).email||(DB.get('devis',f.idDevis)||{}).email||''; }
@@ -2342,7 +2354,8 @@ function recalcClient(c){
   return c;
 }
 RENDERERS.clients=function(){
-  document.getElementById('topbar-actions').innerHTML=`<button class="btn btn-ghost btn-sm" onclick="exportClientsCSV()">⬇ Exporter CSV</button><button class="btn btn-or btn-sm" onclick="editClient()">+ Nouveau client</button>`;
+  const nbDbl=(()=>{ try{ return groupesDoublons().length; }catch(_){ return 0; } })();
+  document.getElementById('topbar-actions').innerHTML=`${nbDbl?`<button class="btn btn-warn btn-sm" onclick="voirDoublons()">🔗 ${nbDbl} doublon(s)</button>`:''}<button class="btn btn-ghost btn-sm" onclick="exportClientsCSV()">⬇ Exporter CSV</button><button class="btn btn-or btn-sm" onclick="editClient()">+ Nouveau client</button>`;
   let all=DB.all('clients').map(recalcClient);
   const top=all.slice().sort((a,b)=>b.caTotal-a.caTotal).slice(0,5);
   if(_fCli) all=all.filter(c=>c.type===_fCli);
@@ -2373,6 +2386,78 @@ RENDERERS.clients=function(){
       <div class="panel"><div class="panel-title">Top 5 · CA</div>${topHtml}</div>
     </div>`;
 };
+/* ── Détection et fusion des fiches clients en double ── */
+function groupesDoublons(){
+  const cls=DB.all('clients');
+  const cle=c=>({ si:String(c.siren||'').replace(/\D/g,''), em:(c.email||'').trim().toLowerCase(),
+                  no:normNom(((c.prenom?c.prenom+' ':'')+(c.nom||''))) });
+  const k=cls.map(cle);
+  // union-find : deux fiches sont liées par un SIREN, un email OU un nom identiques (ou l'un contenu dans l'autre)
+  const parent=cls.map((_,i)=>i);
+  const find=i=>{ while(parent[i]!==i){ parent[i]=parent[parent[i]]; i=parent[i]; } return i; };
+  const union=(a,b)=>{ const ra=find(a), rb=find(b); if(ra!==rb) parent[rb]=ra; };
+  for(let i=0;i<cls.length;i++) for(let j=i+1;j<cls.length;j++){
+    const a=k[i], b=k[j];
+    const memeSiren = a.si && a.si===b.si;
+    const memeMail  = a.em && a.em===b.em;
+    const memeNom   = a.no && a.no===b.no;
+    // même société saisie différemment : « inspiration » vs « inspiration events & seminars… »
+    const nomInclus = a.no && b.no && a.no!==b.no && Math.min(a.no.length,b.no.length)>=6
+      && (a.no.startsWith(b.no+' ') || b.no.startsWith(a.no+' '));
+    if(memeSiren||memeMail||memeNom||nomInclus) union(i,j);
+  }
+  const par={};
+  cls.forEach((c,i)=>{ const r=find(i); (par[r]=par[r]||[]).push(c); });
+  return Object.values(par).filter(g=>g.length>1);
+}
+function nbLiens(id){
+  return DB.all('devis').filter(d=>d.idClient===id).length
+       + DB.all('factures').filter(f=>f.idClient===id).length
+       + DB.all('demandes').filter(d=>d.idClient===id).length
+       + DB.all('projets').filter(p=>p.idAgence===id).length;
+}
+function voirDoublons(){
+  const groupes=groupesDoublons();
+  if(!groupes.length){ toast('✓ Aucun doublon détecté','ok'); return; }
+  const body=groupes.map((g,i)=>{
+    const lignes=g.map(c=>`<div style="display:flex;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid var(--anthr)">
+        <span style="flex:1;min-width:0"><span class="td-strong">${esc(((c.prenom?c.prenom+' ':'')+c.nom).trim())}</span>
+          <div class="td-dim" style="font-size:11px">${esc(c.email||'sans email')}${c.siren?(' · SIREN '+esc(c.siren)):''} · ${nbLiens(c.id)} document(s) · ${fmtEur(c.caTotal||0)}</div></span></div>`).join('');
+    return `<div style="border:1px solid var(--anthr);border-radius:var(--rsm);padding:12px;margin-bottom:10px">
+      <div class="td-strong" style="margin-bottom:6px">${g.length} fiches identiques</div>${lignes}
+      <button class="btn btn-or btn-sm" style="margin-top:10px" onclick="fusionnerGroupe(${i})">🔗 Fusionner en une seule fiche</button></div>`;
+  }).join('');
+  window._grpDoublons=groupes;
+  openModal('🔗 Doublons détectés ('+groupes.length+')',
+    `<div class="alert info" style="margin-top:0"><span class="alert-icon">ℹ️</span><div>La fusion conserve la fiche la plus complète et lui rattache <strong>tous les devis, factures, demandes et projets</strong> des autres. Rien n'est perdu.</div></div>${body}`,
+    '<button class="btn btn-ghost" onclick="closeModal()">Fermer</button>');
+}
+function fusionnerGroupe(i){
+  const g=(window._grpDoublons||[])[i]; if(!g||g.length<2) return;
+  // fiche maître = celle qui a le plus de documents, puis la plus renseignée
+  const score=c=>nbLiens(c.id)*100 + ['email','tel','adresse','siren','naf','sourceInitiale'].filter(k=>c[k]).length;
+  const tri=g.slice().sort((a,b)=>score(b)-score(a));
+  const maitre=tri[0], autres=tri.slice(1);
+  const total=autres.reduce((n,c)=>n+nbLiens(c.id),0);
+  if(!confirm('Fusionner '+g.length+' fiches en une seule ?\n\nFiche conservée : '+((maitre.prenom?maitre.prenom+' ':'')+maitre.nom).trim()
+    +'\n'+total+' document(s) des autres fiches lui seront rattachés.\nLes fiches en double seront supprimées.')) return;
+  autres.forEach(c=>{
+    // complète les champs manquants de la fiche maître
+    ['email','tel','adresse','siren','naf','sourceInitiale','notes'].forEach(k=>{ if(!maitre[k]&&c[k]) maitre[k]=c[k]; });
+    if(c.date1erDevis&&(!maitre.date1erDevis||c.date1erDevis<maitre.date1erDevis)) maitre.date1erDevis=c.date1erDevis;
+    // réassigne tout ce qui pointait vers la fiche supprimée
+    DB.all('devis').filter(d=>d.idClient===c.id).forEach(d=>{ d.idClient=maitre.id; DB.save('devis',d); });
+    DB.all('factures').filter(f=>f.idClient===c.id).forEach(f=>{ f.idClient=maitre.id; DB.save('factures',f); });
+    DB.all('demandes').filter(d=>d.idClient===c.id).forEach(d=>{ d.idClient=maitre.id; DB.save('demandes',d); });
+    DB.all('projets').filter(p=>p.idAgence===c.id).forEach(p=>{ p.idAgence=maitre.id; saveP(p); });
+    DB.remove('clients',c.id);
+  });
+  const cfg=DB.config(); if(autres.some(c=>c.id===cfg.imagineIdAgence)){ cfg.imagineIdAgence=maitre.id; DB.saveConfig(cfg); }
+  DB.save('clients',recalcClient(maitre));
+  logActivite('Fusion de '+g.length+' fiches clients · '+maitre.nom);
+  toast('🔗 '+g.length+' fiches fusionnées','ok');
+  RENDERERS.clients(); voirDoublons();
+}
 function cliSearchFilter(q){ q=(q||'').toLowerCase().trim(); document.querySelectorAll('#view-clients .cli-row').forEach(l=>{ l.style.display=(!q||(l.dataset.s||'').includes(q))?'':'none'; }); }
 function voirClient(id){
   const c=recalcClient(DB.get('clients',id)); if(!c)return;
@@ -2583,8 +2668,7 @@ function pickEntrepriseDevis(i){
 function dvPickClient(name){
   const n=(name||'').trim().toLowerCase();
   const em=((document.getElementById('dv-email')||{}).value||'').trim().toLowerCase();
-  const c=DB.all('clients').find(x=>((x.prenom||'')+' '+(x.nom||'')).trim().toLowerCase()===n)
-        ||(em?DB.all('clients').find(x=>(x.email||'').toLowerCase()===em):null);
+  const c=trouverClient({nom:n,email:em,siren:DV&&DV.siren});
   if(c){ DV.idClient=c.id; document.getElementById('dv-email').value=c.email||''; document.getElementById('dv-tel').value=c.tel||''; if(!document.getElementById('dv-lieu').value)document.getElementById('dv-lieu').value=c.adresse||''; }
   else DV.idClient='';
 }
@@ -2643,7 +2727,15 @@ function dvSave(go){
   if(!DV.id) DV.id=nextId('DEV','devis');
   // lier/créer client
   if(!DV.idClient && DV.nomClient){
-    let c;
+    let c=trouverClient({nom:DV.nomClient,email:DV.email,siren:DV.siren});   // pas de doublon si la fiche existe déjà
+    if(c){
+      DV.idClient=c.id; let maj=false;
+      if(!c.email&&DV.email){ c.email=DV.email; maj=true; }
+      if(!c.tel&&DV.tel){ c.tel=DV.tel; maj=true; }
+      if(!c.siren&&DV.siren){ c.siren=DV.siren; maj=true; }
+      if(maj) DB.save('clients',c);
+    }
+    if(!c){
     if(DV.entreprise||DV.siren){
       c={id:uid('CLI'),nom:DV.nomClient,prenom:'',email:DV.email,tel:DV.tel,adresse:DV.lieu,type:'entreprise',siren:DV.siren||'',naf:DV.naf||'',date1erDevis:todayISO(),nbDevis:0,nbPrestations:0,caTotal:0,sourceInitiale:(DB.get('demandes',DV.idDemandeOrigine)||{}).source||''};
     } else {
@@ -2651,6 +2743,7 @@ function dvSave(go){
       c={id:uid('CLI'),nom,prenom,email:DV.email,tel:DV.tel,adresse:DV.lieu,type:'particulier',date1erDevis:todayISO(),nbDevis:0,nbPrestations:0,caTotal:0,sourceInitiale:(DB.get('demandes',DV.idDemandeOrigine)||{}).source||''};
     }
     DB.save('clients',c); DV.idClient=c.id;
+    }
   }
   const {_calc,siren,naf,entreprise,...clean}=DV;
   DB.save('devis',clean);
@@ -3568,7 +3661,7 @@ function projSetAgence(pid,val){
 function clientAgence(p){
   if(p.idAgence){ const c=DB.get('clients',p.idAgence); if(c) return c; }   // client déjà référencé
   const nom=(p.agence||'').trim(); if(!nom) return null;
-  let c=DB.all('clients').find(x=>((x.prenom||'')+' '+(x.nom||'')).trim().toLowerCase()===nom.toLowerCase());
+  let c=trouverClient({nom,email:p.agenceEmail});
   if(!c){ c={id:uid('CLI'),nom,prenom:'',email:p.agenceEmail||'',tel:p.agenceTel||'',adresse:p.lieu||'',type:'entreprise',
     sourceInitiale:'Imagine the Impossible',siren:'',naf:'',date1erDevis:todayISO(),nbDevis:0,nbPrestations:0,caTotal:0};
     DB.save('clients',c); logActivite('Client agence créé · '+nom); }
