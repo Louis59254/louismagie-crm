@@ -149,6 +149,187 @@ if ($action === 'track') {
   echo base64_decode('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'); exit;
 }
 
+/* ===== Brief d'équipe : page privée par projet (lien secret + code d'accès optionnel) ===== */
+if ($action === 'brief') {
+  $id = $_GET['id'] ?? ''; $k = $_GET['k'] ?? '';
+  $projets = readJson("$DATA_DIR/projets.json"); if(!is_array($projets)) $projets=[];
+  $p = null; foreach($projets as $x){ if(($x['id']??'')===$id){ $p=$x; break; } }
+  $b = $p['brief'] ?? null;
+  $ok = $p && is_array($b) && !empty($b['token']) && hash_equals((string)$b['token'], (string)$k) && !empty($b['publie']);
+  header('Content-Type: text/html; charset=utf-8');
+  $H = function($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); };
+  // ── Coquille commune à la charte
+  $page = function($corps, $titre='Brief équipe') use ($H) {
+    return '<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+      .'<meta name="color-scheme" content="dark"><meta name="robots" content="noindex,nofollow">'
+      .'<title>'.$H($titre).' — LouisMagie</title>'
+      .'<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+      .'<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">'
+      .'<style>'
+      .'*{margin:0;padding:0;box-sizing:border-box}'
+      .':root{--or:#FF7700;--or-deep:#E56200;--noir:#0A0A08;--noir2:#141410;--noir3:#1E1E1A;--anthr:#2C2C28;--creme:#F5F2EE;--gc:#C8C3BB;--gm:#8A8580}'
+      .'html,body{background:var(--noir)}'
+      .'body{font-family:"DM Sans",-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Arial,sans-serif;font-weight:300;color:var(--creme);line-height:1.65;font-size:16px;padding:0 16px 70px;-webkit-text-size-adjust:100%}'
+      .'.wrap{max-width:760px;margin:0 auto}'
+      .'.eyebrow{font-family:Syne,sans-serif;font-size:10px;letter-spacing:3.5px;text-transform:uppercase;color:var(--or);font-weight:700;text-align:center}'
+      .'header{padding:54px 0 30px;text-align:center;border-bottom:1px solid var(--anthr);position:relative}'
+      .'header::before{content:"";position:absolute;top:-40px;left:50%;transform:translateX(-50%);width:420px;height:260px;border-radius:50%;background:radial-gradient(circle,rgba(255,119,0,.12) 0%,transparent 68%);pointer-events:none}'
+      .'header .eyebrow{margin-bottom:16px;position:relative}'
+      .'h1{font-family:Syne,sans-serif;font-weight:800;font-size:clamp(32px,7vw,52px);line-height:1;letter-spacing:-1.5px;color:#fff;position:relative}'
+      .'h1 .g{color:var(--or)}'
+      .'.lede{color:var(--gm);font-size:14px;max-width:38em;margin:16px auto 0;position:relative}'
+      .'section{padding:30px 0;border-bottom:1px solid var(--anthr)}'
+      .'.cat{font-family:Syne,sans-serif;font-size:10px;font-weight:700;letter-spacing:3.5px;text-transform:uppercase;color:var(--or);text-align:center;margin:38px 0 2px}'
+      .'h2{font-family:Syne,sans-serif;font-weight:800;font-size:23px;color:#fff;margin-bottom:12px;letter-spacing:-.3px}'
+      .'h2 .n{color:var(--or);font-size:12px;vertical-align:super;margin-right:9px;font-family:"DM Sans",sans-serif;font-weight:700}'
+      .'p{margin-bottom:13px;color:var(--gc)}'
+      .'strong,b{color:#fff;font-weight:500}'
+      .'.quote{font-style:italic;color:var(--or);font-size:18px;line-height:1.55;border-left:2px solid var(--or);padding-left:18px;margin:10px 0 6px}'
+      .'.callout{background:linear-gradient(160deg,var(--noir3),var(--noir2));border:1px solid rgba(255,119,0,.4);border-radius:14px;padding:24px;text-align:center;margin:12px 0}'
+      .'.callout .big{font-family:Syne,sans-serif;font-weight:800;font-size:34px;color:var(--or);line-height:1}'
+      .'.callout .small{color:var(--gc);font-size:14px;margin-top:9px}'
+      .'.cols{display:grid;grid-template-columns:1fr;gap:12px;margin-top:8px}'
+      .'.col{background:var(--noir2);border:1px solid var(--anthr);border-radius:14px;padding:16px 18px}'
+      .'.col .h{font-family:Syne,sans-serif;font-size:10px;letter-spacing:2px;text-transform:uppercase;font-weight:700;margin-bottom:10px}'
+      .'.col.do .h{color:#3FB97A}.col.dont .h{color:#E5564B}'
+      .'.col ul{list-style:none}.col li{position:relative;padding:5px 0 5px 20px;font-size:14px;color:var(--creme)}'
+      .'.col.do li::before{content:"\\2713";position:absolute;left:0;color:#3FB97A;font-size:12px;top:7px}'
+      .'.col.dont li::before{content:"\\2715";position:absolute;left:0;color:#E5564B;font-size:12px;top:7px}'
+      .'.menu-intro{color:var(--gm);font-size:14px;margin-bottom:10px}'
+      .'.role{margin:18px 0}'
+      .'.role h3{font-family:Syne,sans-serif;font-size:11px;letter-spacing:2.5px;text-transform:uppercase;color:var(--or);margin-bottom:10px;font-weight:700}'
+      .'.role ul{list-style:none}'
+      .'.role li{position:relative;padding:6px 0 6px 20px;color:var(--creme);font-size:15px}'
+      .'.role li::before{content:"";position:absolute;left:0;top:14px;width:6px;height:6px;border-radius:50%;background:var(--or)}'
+      .'.role .ref{color:var(--or);font-size:.84em;font-style:italic;opacity:.9}'
+      .'.mag{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}'
+      .'.mag span{background:var(--noir2);border:1px solid var(--anthr);border-radius:100px;padding:6px 14px;font-size:13px;color:var(--gc)}'
+      .'.prat{display:grid;grid-template-columns:1fr;gap:10px;margin-top:8px}'
+      .'.pr{background:var(--noir2);border:1px solid var(--anthr);border-radius:12px;padding:14px 17px}'
+      .'.pr .k{font-family:Syne,sans-serif;font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--or);font-weight:700;margin-bottom:4px}'
+      .'.pr .v{font-size:14.5px;color:var(--creme)}.pr .v b{color:#fff}'
+      .'.pr a{color:var(--or);text-decoration:none}'
+      .'.note{background:var(--noir2);border:1px solid rgba(255,119,0,.4);border-radius:12px;padding:15px 17px;margin-top:20px;font-size:14px;color:var(--creme);line-height:1.65}'
+      .'.close{font-family:Syne,sans-serif;font-weight:700;font-size:20px;color:var(--creme);text-align:center;padding:34px 0 8px;line-height:1.4}'
+      .'.close b{color:var(--or)}'
+      .'.contact{text-align:center;color:var(--gm);font-size:13.5px;padding-bottom:12px}.contact b{color:var(--creme)}'
+      .'.wa{display:inline-block;margin-top:14px;background:var(--or);color:#fff;text-decoration:none;font-family:Syne,sans-serif;font-weight:700;font-size:11px;letter-spacing:2px;text-transform:uppercase;padding:14px 28px;border-radius:4px;box-shadow:0 4px 20px rgba(255,119,0,.28)}'
+      .'footer{text-align:center;color:var(--gm);font-size:11px;margin-top:10px;border-top:1px solid var(--anthr);padding-top:18px;letter-spacing:.5px}'
+      .'.gate{max-width:420px;margin:14vh auto;background:var(--noir2);border:1px solid var(--anthr);border-top:3px solid var(--or);border-radius:14px;padding:40px 32px;text-align:center}'
+      .'.gate h1{font-size:24px;margin-bottom:10px}.gate p{font-size:14px;margin-bottom:22px}'
+      .'.gate input{width:100%;padding:14px;border:1.5px solid var(--anthr);border-radius:8px;background:var(--noir3);color:var(--creme);font-size:16px;font-family:inherit;outline:none;text-align:center;letter-spacing:2px}'
+      .'.gate input:focus{border-color:var(--or)}'
+      .'.gate button{width:100%;margin-top:14px;padding:15px;background:var(--or);color:#fff;border:none;border-radius:4px;font-family:Syne,sans-serif;font-weight:700;font-size:12px;letter-spacing:2px;text-transform:uppercase;cursor:pointer}'
+      .'.err{color:#E5564B;font-size:13px;margin-top:12px}'
+      .'@media(min-width:620px){.cols{grid-template-columns:1fr 1fr}.prat{grid-template-columns:1fr 1fr}}'
+      .'</style></head><body>'.$corps.'</body></html>';
+  };
+
+  if(!$ok){
+    echo $page('<div class="gate"><div class="eyebrow" style="margin-bottom:18px">Louis<span style="color:#fff">Magie</span></div>'
+      .'<h1>Brief indisponible</h1><p>Ce lien n\'est pas valide, ou le brief n\'est pas encore publié.<br>Contacte Louis pour recevoir le bon lien.</p>'
+      .'<a class="wa" href="mailto:contact@louismagie.fr">Écrire à Louis</a></div>','Brief indisponible');
+    exit;
+  }
+
+  // ── Code d'accès équipe (optionnel)
+  $code = trim((string)($b['code'] ?? ''));
+  if($code !== ''){
+    $saisi = (string)($_POST['code'] ?? $_GET['c'] ?? '');
+    if(!hash_equals(mb_strtoupper($code), mb_strtoupper(trim($saisi)))){
+      $err = $saisi!=='' ? '<div class="err">Code incorrect.</div>' : '';
+      echo $page('<form class="gate" method="post">'
+        .'<div class="eyebrow" style="margin-bottom:18px">Louis<span style="color:#fff">Magie</span></div>'
+        .'<h1>Brief équipe</h1><p>'.$H($b['titre'] ?? 'Imagine the Impossible').'<br>Entre le code transmis par Louis.</p>'
+        .'<input name="code" placeholder="CODE" autocapitalize="characters" autofocus>'
+        .'<button type="submit">Accéder au brief</button>'.$err.'</form>','Accès au brief');
+      exit;
+    }
+  }
+
+  // ── Rendu du brief
+  $md = function($t) use ($H) {   // gras **texte** + retours à la ligne
+    $t = $H($t);
+    $t = preg_replace('/\*\*(.+?)\*\*/u', '<strong>$1</strong>', $t);
+    return nl2br($t);
+  };
+  $o = '<div class="wrap"><header><div class="eyebrow">'.$H($b['eyebrow'] ?? 'LouisMagie · Brief équipe').'</div>';
+  $titre = $b['titre'] ?? 'Imagine the Impossible';
+  // met en accent orange les derniers mots du titre
+  $mots = preg_split('/\s+/u', $titre);
+  if(count($mots) > 1){ $prem = array_shift($mots); $o .= '<h1>'.$H($prem).' <span class="g">'.$H(implode(' ',$mots)).'</span></h1>'; }
+  else $o .= '<h1>'.$H($titre).'</h1>';
+  if(!empty($b['sousTitre'])) $o .= '<p class="lede">'.$H($b['sousTitre']).'</p>';
+  $o .= '</header>';
+
+  if(!empty($b['concept'])) $o .= '<section><h2>Le concept</h2><p>'.$md($b['concept']).'</p></section>';
+
+  $secs = is_array($b['sections'] ?? null) ? $b['sections'] : [];
+  if($secs){
+    $o .= '<div class="cat">'.$H($b['catEsprit'] ?? 'Première partie · L\'état d\'esprit').'</div>';
+    $n=0;
+    foreach($secs as $sec){
+      $n++;
+      $o .= '<section><h2><span class="n">'.$n.'</span>'.$H($sec['titre'] ?? '').'</h2>';
+      if(!empty($sec['texte'])) $o .= '<p>'.$md($sec['texte']).'</p>';
+      if(!empty($sec['quote'])) $o .= '<div class="quote">'.$H($sec['quote']).'</div>';
+      if(!empty($sec['texte2'])) $o .= '<p>'.$md($sec['texte2']).'</p>';
+      if(!empty($sec['calloutBig'])) $o .= '<div class="callout"><div class="big">'.$H($sec['calloutBig']).'</div><div class="small">'.$H($sec['calloutSmall'] ?? '').'</div></div>';
+      // À faire / À éviter sur la dernière section qui les porte
+      if(!empty($sec['do']) || !empty($sec['dont'])){
+        $li = function($arr){ $h=''; foreach((array)$arr as $x){ if(trim((string)$x)!=='') $h.='<li>'.htmlspecialchars($x,ENT_QUOTES,'UTF-8').'</li>'; } return $h; };
+        $o .= '<div class="cols">'
+          .'<div class="col do"><div class="h">À faire</div><ul>'.$li($sec['do'] ?? []).'</ul></div>'
+          .'<div class="col dont"><div class="h">À éviter</div><ul>'.$li($sec['dont'] ?? []).'</ul></div></div>';
+      }
+      $o .= '</section>';
+    }
+  }
+
+  $roles = is_array($b['roles'] ?? null) ? $b['roles'] : [];
+  if($roles){
+    $o .= '<div class="cat">'.$H($b['catMenu'] ?? 'Deuxième partie · Le menu d\'illusions').'</div><section>';
+    if(!empty($b['menuIntro'])) $o .= '<p class="menu-intro">'.$md($b['menuIntro']).'</p>';
+    foreach($roles as $r){
+      $o .= '<div class="role"><h3>'.$H($r['nom'] ?? '').'</h3><ul>';
+      foreach((array)($r['effets'] ?? []) as $ef){
+        if(trim((string)$ef)==='') continue;
+        // « Effet (référence) » → la référence passe en italique orange
+        if(preg_match('/^(.*?)\s*\((.+)\)\s*$/u', $ef, $mm))
+          $o .= '<li>'.$H($mm[1]).' <span class="ref">('.$H($mm[2]).')</span></li>';
+        else $o .= '<li>'.$H($ef).'</li>';
+      }
+      $o .= '</ul></div>';
+    }
+    if(!empty($b['menuNote'])) $o .= '<div class="note">'.$md($b['menuNote']).'</div>';
+    $o .= '</section>';
+  }
+
+  $prat = is_array($b['pratique'] ?? null) ? $b['pratique'] : [];
+  if($prat){
+    $o .= '<div class="cat">'.$H($b['catPratique'] ?? 'Troisième partie · Le cadre pratique').'</div><section><div class="prat">';
+    foreach($prat as $it){
+      if(trim((string)($it['v'] ?? ''))==='') continue;
+      $o .= '<div class="pr"><div class="k">'.$H($it['k'] ?? '').'</div><div class="v">'.$md($it['v']).'</div></div>';
+    }
+    $o .= '</div></section>';
+  }
+
+  if(!empty($b['equipe']) && is_array($b['equipe'])){
+    $o .= '<section><h2>L\'équipe</h2><div class="mag">';
+    foreach($b['equipe'] as $m){ $o .= '<span>'.$H($m).'</span>'; }
+    $o .= '</div></section>';
+  }
+
+  if(!empty($b['cloture'])) $o .= '<div class="close">'.$md($b['cloture']).'</div>';
+  $o .= '<div class="contact">'.$md($b['contact'] ?? 'La moindre question, écris-moi directement sur WhatsApp.');
+  if(!empty($b['waLouis'])) $o .= '<br><a class="wa" href="https://wa.me/'.$H(preg_replace('/[^0-9]/','',$b['waLouis'])).'">Écrire à Louis</a>';
+  $o .= '</div>';
+  $o .= '<footer>LouisMagie · '.$H($b['titre'] ?? '').($p['date'] ? ' · '.$H(date('d/m/Y', strtotime($p['date']))) : '').' — document confidentiel</footer></div>';
+  echo $page($o, ($b['titre'] ?? 'Brief').' — Brief équipe');
+  exit;
+}
+
 /* ===== Réception publique d'une demande depuis le site louismagie.fr =====
    Le formulaire du site poste ici : la demande atterrit directement dans le CRM.
    Protections : clé de formulaire, origine autorisée, pot de miel, limite par IP, validation. */
