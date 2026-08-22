@@ -160,6 +160,7 @@ tbody tr:hover td{background:var(--noir3)}
 .badge.refuse,.badge.relance2,.badge.impaye,.badge.annulee{background:var(--erl);color:var(--er)}
 .badge.contentieux,.badge.encontentieux{background:#3a0d0a;color:#FF8B7E}
 .badge.facture,.badge.solde,.badge.avoir,.badge.complete{background:var(--infol);color:var(--info)}
+.badge.prospect{background:rgba(138,133,128,.16);color:var(--gm)}
 
 /* ── BUTTONS ── */
 .btn{display:inline-flex;align-items:center;gap:7px;padding:10px 16px;border:none;border-radius:var(--rbtn);font-family:'Syne','Trebuchet MS','Gill Sans',sans-serif;font-size:11px;font-weight:700;letter-spacing:1.2px;cursor:pointer;transition:all .22s ease;white-space:nowrap}
@@ -1011,12 +1012,42 @@ function voirDemande(id){
   ${d.notes?'<div style="margin-top:10px">'+infoItem('Notes',esc(d.notes))+'</div>':''}
   <div class="form-group" style="margin-top:16px"><label class="form-label">Changer le statut</label>
     <select class="form-control" id="dem-statut">${['Nouveau','En cours','Converti','Ignoré'].map(s=>`<option${s===d.statut?' selected':''}>${s}</option>`).join('')}</select></div>`;
-  const footer=`<button class="btn btn-ghost" onclick="closeModal()">Fermer</button>
+  const cli=d.idClient?DB.get('clients',d.idClient):null;
+  const lienCli=cli?`<div class="alert success" style="margin-top:12px"><span class="alert-icon">👤</span><div>Fiche client créée : <strong>${esc(((cli.prenom?cli.prenom+' ':'')+cli.nom).trim())}</strong> (${esc(cli.type)}). <a href="#" onclick="closeModal();voirClient('${cli.id}');return false" style="color:inherit;text-decoration:underline">Ouvrir la fiche</a></div></div>`:'';
+  const footer=`<button class="btn btn-danger" onclick="supprimerDemande('${id}')">🗑 Supprimer</button>
+    <button class="btn btn-ghost" onclick="closeModal()">Fermer</button>
+    ${cli?'':`<button class="btn btn-ghost" onclick="demandeVersClient('${id}')">👤 Ajouter aux contacts</button>`}
     <button class="btn btn-success" onclick="majStatutDemande('${id}')">Enregistrer statut</button>
     ${d.statut!=='Converti'?`<button class="btn btn-or" onclick="closeModal();nav('devis-create',{demandeId:'${id}'})">→ Créer le devis</button>`:''}`;
-  openModal('Demande · '+esc(d.nom),body,footer);
+  openModal('Demande · '+esc(d.nom),body+lienCli,footer);
 }
 function infoItem(label,val){ return '<div class="info-item"><span class="info-label">'+label+'</span>'+val+'</div>'; }
+/* Ajoute la demande au fichier contacts — en PROSPECT tant qu'elle n'a pas abouti */
+function demandeVersClient(id,typeForce){
+  const d=DB.get('demandes',id); if(!d)return;
+  const nomComplet=(d.nom||'').trim(); if(!nomComplet){ toast('Demande sans nom','err'); return; }
+  // évite les doublons : même email, sinon même nom
+  const em=(d.email||'').trim().toLowerCase();
+  let c = (em?DB.all('clients').find(x=>(x.email||'').toLowerCase()===em):null)
+       || DB.all('clients').find(x=>((x.prenom||'')+' '+(x.nom||'')).trim().toLowerCase()===nomComplet.toLowerCase());
+  if(c){ d.idClient=c.id; DB.save('demandes',d); toast('Contact déjà existant — demande reliée à sa fiche','ok'); voirDemande(id); return; }
+  const mots=nomComplet.split(/\s+/);
+  const prenom=mots.length>1?mots[0]:'', nom=mots.length>1?mots.slice(1).join(' '):nomComplet;
+  c={id:uid('CLI'),nom,prenom,email:d.email||'',tel:d.tel||'',adresse:d.lieu||'',
+     type:typeForce||'prospect',sourceInitiale:d.source||'',siren:'',naf:'',
+     date1erDevis:'',nbDevis:0,nbPrestations:0,caTotal:0,notes:'Issu de la demande du '+fmtDateShort(d.date)+(d.typeEvenement?(' · '+d.typeEvenement):'')};
+  DB.save('clients',c); d.idClient=c.id; DB.save('demandes',d);
+  logActivite('Prospect créé depuis une demande · '+nomComplet);
+  toast('👤 Ajouté aux contacts en prospect','ok'); voirDemande(id);
+}
+function supprimerDemande(id){
+  const d=DB.get('demandes',id); if(!d)return;
+  const dv=DB.all('devis').filter(x=>x.idDemandeOrigine===id);
+  if(dv.length){ toast('Impossible : un devis ('+dv[0].id+') vient de cette demande.','err'); return; }
+  if(!confirm('Supprimer définitivement la demande de « '+(d.nom||'')+' » ?\n\nLa fiche contact éventuellement créée est conservée.')) return;
+  DB.remove('demandes',id); logActivite('Demande supprimée · '+(d.nom||''));
+  closeModal(); updateBadges(); RENDERERS.demandes(); toast('Demande supprimée','ok');
+}
 function majStatutDemande(id){
   const d=DB.get('demandes',id); const ns=document.getElementById('dem-statut').value;
   d.statut=ns; DB.save('demandes',d); logActivite('Demande '+d.nom+' → '+ns);
@@ -1138,7 +1169,7 @@ function envoyerDevisMail(id){
 function applySignatures(sigs){
   sigs.forEach(s=>{ const d=DB.get('devis',s.id); if(!d||d.signataire) return;   // déjà appliqué → on ne touche pas
     d.signataire=s.signataire||''; d.signatureImg=s.signatureImg||''; d.signedAt=s.signedAt||'';
-    if(d.statut==='Brouillon'||d.statut==='Envoyé'){ d.statut='Accepté'; if(!d.dateAcceptation)d.dateAcceptation=(s.signedAt||'').slice(0,10); }
+    if(d.statut==='Brouillon'||d.statut==='Envoyé'){ d.statut='Accepté'; if(!d.dateAcceptation)d.dateAcceptation=(s.signedAt||'').slice(0,10); promouvoirProspect(d); }
     DB.save('devis',d); syncPrestationDevis(d); logActivite('Devis '+d.id+' signé en ligne par '+(s.signataire||'client'));
   });
 }
@@ -1316,6 +1347,7 @@ function majStatutDossier(id,statut){ const d=DB.get('devis',id); if(!d)return;
   const old=d.statut; d.statut=statut;
   if(statut==='Envoyé'&&!d.dateEnvoi) d.dateEnvoi=todayISO();
   if(statut==='Accepté'&&!d.dateAcceptation) d.dateAcceptation=todayISO();
+  if(statut==='Accepté'||statut==='Acompte reçu') promouvoirProspect(d);
   if(statut==='Acompte reçu'){ if(!d.acompteRecu) d.acompteRecu=Math.round((+d.montantTTC||0)*(d.acomptePct||0)/100); }
   else if(old==='Acompte reçu'||d.acompteRecu>0){ d.acompteRecu=0; removeRecetteAcompte(id); }
   DB.save('devis',d); syncPrestationDevis(d);
@@ -1461,6 +1493,7 @@ function changerStatutDevis(id){
   d.statut=ns;
   if(ns==='Envoyé'&&!d.dateEnvoi) d.dateEnvoi=todayISO();
   if(ns==='Accepté'&&!d.dateAcceptation) d.dateAcceptation=todayISO();
+  if(ns==='Accepté'||ns==='Acompte reçu') promouvoirProspect(d);
   if(ns==='Acompte reçu') d.acompteRecu=Math.round((+d.montantTTC||0)*(d.acomptePct||0)/100);
   if(ns!=='Acompte reçu') d.acompteRecu=0;   // pas d'acompte encaissé sur les autres statuts
   DB.save('devis',d);
@@ -1491,8 +1524,17 @@ function confirmSupprimerDevis(id){
   logActivite('Devis '+id+' supprimé');
   closeModal(); updateBadges(); RENDERERS.devis(); toast('Devis supprimé','ok');
 }
+/* Un prospect devient un vrai client dès qu'un devis est accepté */
+function promouvoirProspect(d){
+  if(!d||!d.idClient) return;
+  const c=DB.get('clients',d.idClient); if(!c||c.type!=='prospect') return;
+  c.type=c.siren?'entreprise':'particulier';
+  if(!c.date1erDevis) c.date1erDevis=d.dateCreation||todayISO();
+  DB.save('clients',c); logActivite('Prospect converti en client · '+((c.prenom?c.prenom+' ':'')+c.nom).trim());
+}
 function majDevis(id,statut){
   const d=DB.get('devis',id); const old=d.statut; d.statut=statut;
+  if(statut==='Accepté'||statut==='Acompte reçu') promouvoirProspect(d);
   if(statut==='Envoyé'&&!d.dateEnvoi) d.dateEnvoi=todayISO();
   if(statut==='Accepté'&&!d.dateAcceptation) d.dateAcceptation=todayISO();
   if(statut!=='Acompte reçu'&&(old==='Acompte reçu'||d.acompteRecu>0)){ d.acompteRecu=0; removeRecetteAcompte(id); }   // pas d'acompte orphelin
@@ -2308,7 +2350,7 @@ RENDERERS.clients=function(){
 
   const body=all.length?all.map(c=>`<tr class="cli-row" data-s="${esc((c.prenom+' '+c.nom+' '+(c.email||'')+' '+(c.adresse||'')+' '+c.type).toLowerCase())}">
     <td class="td-strong" data-label="Nom">${esc((c.prenom+' '+c.nom).trim())}<div class="td-dim">${esc(c.email||'')}</div></td>
-    <td data-label="Type">${badge(c.type==='partenaire'?'accepte':c.type==='entreprise'?'envoye-info':'brouillon')} ${esc(c.type)}</td>
+    <td data-label="Type">${badge(c.type||'particulier')}</td>
     <td data-label="Ville">${esc(c.adresse||'—')}</td>
     <td data-label="Activité">${c.nbDevis||0} devis · ${c.nbPrestations||0} presta.</td>
     <td class="td-strong" data-label="CA payé">${fmtEur(c.caTotal)}</td>
@@ -2324,7 +2366,7 @@ RENDERERS.clients=function(){
       <div class="table-wrap"><div class="table-header" style="flex-wrap:wrap">
         <div class="table-title">Clients & partenaires <span class="td-dim" style="font-weight:400">(${all.length})</span></div>
         <select class="filter-input" onchange="_fCli=this.value;RENDERERS.clients()">
-          ${opt('','Tous les types')}${opt('particulier','Particuliers')}${opt('entreprise','Entreprises')}${opt('partenaire','Partenaires')}
+          ${opt('','Tous les contacts')}${opt('prospect','Prospects')}${opt('particulier','Particuliers')}${opt('entreprise','Entreprises')}${opt('partenaire','Partenaires')}
         </select></div>
         <div style="padding:0 16px 12px"><input class="form-control" id="cli-search" placeholder="🔍 Rechercher (nom, email, ville…)" oninput="cliSearchFilter(this.value)"></div>
         <div class="table-scroll"><table><thead><tr><th>Nom</th><th>Type</th><th>Ville</th><th>Activité</th><th>CA payé</th><th></th></tr></thead><tbody>${body}</tbody></table></div></div>
@@ -2390,7 +2432,7 @@ function editClient(id){
     </details>
     <div class="form-grid">${f('Nom / Raison sociale','nom')}${f('Prénom (si particulier)','prenom')}${f('Email','email','email')}${f('Téléphone','tel')}${f('Ville / Adresse','adresse')}
     <div class="form-group"><label class="form-label">Type</label><select class="form-control" id="cli-type">
-      ${['particulier','entreprise','partenaire'].map(t=>`<option${t===c.type?' selected':''}>${t}</option>`).join('')}</select></div>
+      ${['prospect','particulier','entreprise','partenaire'].map(t=>`<option${t===c.type?' selected':''}>${t}</option>`).join('')}</select></div>
     ${f('SIREN','siren')}${f('Code NAF / activité','naf')}${f('Source initiale','sourceInitiale')}</div>`;
   openModal(id?'Modifier client':'Nouveau client',body,
     `<button class="btn btn-ghost" onclick="closeModal()">Annuler</button><button class="btn btn-or" onclick="saveClient('${id||''}')">Enregistrer</button>`);
