@@ -423,6 +423,177 @@ if ($action === 'brief') {
   exit;
 }
 
+/* ===== Formulaire agence : demande de projet Imagine the Impossible ===== */
+if ($action === 'imagine') {
+  $cfgI = readJson("$DATA_DIR/config.json"); if(!is_array($cfgI)) $cfgI=[];
+  $key  = getenv('IMAGINE_KEY') ?: ($cfgI['imagineKey'] ?? '');
+  $k    = $_GET['k'] ?? ($_POST['k'] ?? '');
+  $agencePre = trim((string)($_GET['a'] ?? ''));   // pré-remplissage éventuel du nom de l'agence
+  header('Content-Type: text/html; charset=utf-8');
+  $H = function($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); };
+
+  $shell = function($corps,$titre='Imagine the Impossible') use ($H) {
+    return '<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+      .'<meta name="color-scheme" content="dark"><meta name="robots" content="noindex,nofollow">'
+      .'<title>'.$H($titre).'</title>'
+      .'<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+      .'<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&display=swap" rel="stylesheet">'
+      .'<style>*{margin:0;padding:0;box-sizing:border-box}'
+      .':root{--or:#FF7700;--or-deep:#E56200;--noir:#0A0A08;--noir2:#141410;--noir3:#1E1E1A;--anthr:#2C2C28;--creme:#F5F2EE;--gc:#C8C3BB;--gm:#8A8580}'
+      .'html,body{background:var(--noir)}'
+      .'body{font-family:"DM Sans",-apple-system,Segoe UI,Roboto,Arial,sans-serif;font-weight:300;color:var(--creme);line-height:1.6;padding:0 16px 60px}'
+      .'.wrap{max-width:660px;margin:0 auto}'
+      .'header{padding:52px 0 28px;text-align:center;position:relative}'
+      .'header::before{content:"";position:absolute;top:-30px;left:50%;transform:translateX(-50%);width:400px;height:240px;border-radius:50%;background:radial-gradient(circle,rgba(255,119,0,.12) 0%,transparent 68%);pointer-events:none}'
+      .'.eyebrow{font-family:Syne,sans-serif;font-size:10px;letter-spacing:3.5px;text-transform:uppercase;color:var(--or);font-weight:700;position:relative}'
+      .'h1{font-family:Syne,sans-serif;font-weight:800;font-size:clamp(30px,6vw,44px);line-height:1.02;letter-spacing:-1.2px;color:#fff;margin:14px 0 12px;position:relative}'
+      .'h1 .g{color:var(--or)}'
+      .'.lede{color:var(--gm);font-size:15px;max-width:34em;margin:0 auto;position:relative}'
+      .'form{margin-top:8px}'
+      .'fieldset{border:none;background:var(--noir2);border:1px solid var(--anthr);border-radius:14px;padding:20px 22px 22px;margin-bottom:14px;overflow:hidden}'
+      .'legend{display:block;width:100%;font-family:Syne,sans-serif;font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:var(--or);font-weight:700;margin:0 0 16px;padding:0}'
+      .'.row{display:grid;grid-template-columns:1fr;gap:14px}'
+      .'label{display:block;font-size:12px;font-weight:400;color:var(--gc);margin-bottom:6px;letter-spacing:.3px}'
+      .'label .req{color:var(--or)}'
+      .'input,select,textarea{width:100%;padding:13px 14px;border:1.5px solid var(--anthr);border-radius:8px;background:var(--noir3);color:var(--creme);font-size:16px;font-family:inherit;font-weight:300;outline:none;transition:border-color .2s}'
+      .'input:focus,select:focus,textarea:focus{border-color:var(--or)}'
+      .'textarea{min-height:96px;resize:vertical}'
+      .'.hint{font-size:12px;color:var(--gm);margin-top:6px}'
+      .'button.go{width:100%;padding:18px;background:var(--or);color:#fff;border:none;border-radius:4px;font-family:Syne,sans-serif;font-weight:700;font-size:12px;letter-spacing:2.5px;text-transform:uppercase;cursor:pointer;box-shadow:0 4px 20px rgba(255,119,0,.28);transition:all .22s}'
+      .'button.go:hover{background:var(--or-deep);transform:translateY(-1px)}'
+      .'.foot{text-align:center;color:var(--gm);font-size:12px;margin-top:22px;line-height:1.8}'
+      .'.foot a{color:var(--or);text-decoration:none}'
+      .'.hp{position:absolute;left:-9999px;opacity:0;height:0;width:0}'
+      .'.msg{background:var(--noir2);border:1px solid var(--anthr);border-left:3px solid var(--or);border-radius:12px;padding:26px;text-align:center}'
+      .'.msg h2{font-family:Syne,sans-serif;font-weight:800;font-size:22px;color:#fff;margin-bottom:10px}'
+      .'.msg p{color:var(--gc);font-size:15px}'
+      .'.err{color:#E5564B;font-size:13px;margin-top:10px}'
+      .'@media(min-width:620px){.row.c2{grid-template-columns:1fr 1fr}}'
+      .'</style></head><body><div class="wrap">'.$corps.'</div></body></html>';
+  };
+
+  if ($key === '' || !hash_equals($key, (string)$k)) {
+    echo $shell('<header><div class="eyebrow">LouisMagie</div><h1>Lien <span class="g">invalide</span></h1></header>'
+      .'<div class="msg"><p>Ce formulaire n\'est pas accessible avec ce lien.<br>Contacte Louis pour en recevoir un nouveau.</p></div>','Lien invalide');
+    exit;
+  }
+
+  // ── Enregistrement
+  if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (trim((string)($_POST['website'] ?? '')) !== '') { echo $shell('<div class="msg"><h2>Merci !</h2></div>'); exit; }
+    $ip = $_SERVER['REMOTE_ADDR'] ?? '?';
+    $rf = $DATA_DIR.'/_ratelimit.json'; $rl = readJson($rf); if(!is_array($rl)) $rl=[];
+    $now = time();
+    $rl = array_values(array_filter($rl, function($x) use($now){ return ($x['t'] ?? 0) > $now-3600; }));
+    if (count(array_filter($rl, function($x) use($ip){ return ($x['ip'] ?? '')===$ip; })) >= 8) {
+      echo $shell('<div class="msg"><h2>Trop de demandes</h2><p>Réessaie dans un moment, ou écris directement à Louis.</p></div>'); exit;
+    }
+    $rl[] = ['ip'=>$ip,'t'=>$now]; writeJson($rf,$rl);
+
+    $c = function($n,$max=300){ $v=trim((string)($_POST[$n] ?? '')); $v=preg_replace('/[\x00-\x1F\x7F]/u',' ',$v); return mb_substr($v,0,$max); };
+    $agence=$c('agence',120); $contact=$c('contact',120); $mail=$c('email',160);
+    if($agence==='' || $contact==='' || !filter_var($mail, FILTER_VALIDATE_EMAIL)){
+      echo $shell('<div class="msg"><h2>Formulaire incomplet</h2><p>Agence, contact et email valide sont nécessaires.</p><p style="margin-top:14px"><a href="?action=imagine&k='.$H($k).'" style="color:#FF7700">← Revenir au formulaire</a></p></div>'); exit;
+    }
+    $date=$c('date',10); if($date!=='' && !preg_match('/^\d{4}-\d{2}-\d{2}$/',$date)) $date='';
+    $nomEvt = $c('evenement',140);
+    $lieu   = $c('lieu',180);
+
+    $notes = "— Demande reçue via le formulaire agence le ".date('d/m/Y à H:i')." —\n"
+      ."Contact : $contact · $mail".($c('tel',40)?(' · '.$c('tel',40)):'')."\n"
+      .($c('horaires',60)?("Horaires souhaités : ".$c('horaires',60)."\n"):'')
+      .($c('duree',60)?("Durée : ".$c('duree',60)."\n"):'')
+      .($c('magiciens',40)?("Magiciens souhaités : ".$c('magiciens',40)."\n"):'')
+      .($c('budget',60)?("Budget indiqué : ".$c('budget',60)."\n"):'')
+      .($c('reponse',40)?("Réponse souhaitée avant : ".$c('reponse',40)."\n"):'')
+      .($c('message',2000)?("\nLeur message :\n".$c('message',2000)."\n"):'');
+
+    // nombre de magiciens : extrait le premier nombre de la réponse (« 4-6 » → 4)
+    $nbMag = 0; if(preg_match('/(\d+)/', $c('magiciens',40), $mm)) $nbMag = (int)$mm[1];
+    $budget = 0; if(preg_match('/(\d[\d\s]*)/', str_replace([' ',' '],'',$c('budget',60)), $bm)) $budget = (int)preg_replace('/\D/','',$bm[1]);
+
+    $prj = [
+      'id'=>'PRJ-'.date('ymd').'-'.substr(bin2hex(random_bytes(3)),0,5),
+      'nom'=>($nomEvt !== '' ? $nomEvt : ('Demande '.$agence)),
+      'date'=>$date, 'lieu'=>$lieu, 'agence'=>$agence, 'agenceEmail'=>$mail, 'agenceTel'=>$c('tel',40),
+      'idAgence'=>'', 'budgetTotal'=>$budget, 'theme'=>$c('theme',160), 'typeEvenement'=>$c('type',80),
+      'nbInvites'=>$c('invites',40), 'ambiance'=>$c('ambiance',200), 'dureePresta'=>$c('horaires',60),
+      'nbMagiciensCible'=>$nbMag, 'tarifMode'=>'TTC', 'whatsappGroupe'=>'', 'idDevis'=>'', 'lignesSupp'=>[],
+      'statut'=>'Prospect', 'briefUrl'=>'', 'notesBrief'=>'', 'feedback'=>'', 'notes'=>$notes,
+      'maGestionMontant'=>0, 'statutAgence'=>'En attente', 'costume'=>$c('costume',120),
+      'equipe'=>[], 'consommables'=>[], 'equipement'=>[],
+      'logistique'=>['transport'=>'','hebergement'=>'','repas'=>''], 'checklist'=>[],
+      'demandeAgence'=>true, 'recuLe'=>date('c'), 'createdAt'=>date('c'),
+    ];
+    $f = "$DATA_DIR/projets.json"; $arr = readJson($f); if(!is_array($arr)) $arr=[];
+    $arr[] = $prj; writeJson($f, $arr);
+
+    $notif = getenv('SMTP_FROM') ?: getenv('SMTP_USER');
+    if ($notif) {
+      @smtpSend($notif, '🎭 Nouvelle demande Imagine — '.$agence,
+        "Nouvelle demande de projet reçue via le formulaire agence.\n\n"
+        ."Agence : $agence\nContact : $contact · $mail\n"
+        .($nomEvt?("Événement : $nomEvt\n"):'').($date?("Date : ".date('d/m/Y',strtotime($date))."\n"):'')
+        .($lieu?("Lieu : $lieu\n"):'').($c('invites',40)?("Invités : ".$c('invites',40)."\n"):'')
+        .($c('magiciens',40)?("Magiciens souhaités : ".$c('magiciens',40)."\n"):'')
+        .($c('budget',60)?("Budget : ".$c('budget',60)."\n"):'')
+        .($c('message',2000)?("\nMessage :\n".$c('message',2000)."\n"):'')
+        ."\nElle est déjà dans ton CRM, section Imagine.");
+    }
+    echo $shell('<header><div class="eyebrow">LouisMagie · Imagine the Impossible</div><h1>Demande <span class="g">bien reçue</span></h1></header>'
+      .'<div class="msg"><h2>Merci '.$H($contact).' !</h2><p>Louis a reçu votre demande pour <strong style="color:#fff">'.$H($prj['nom']).'</strong>'
+      .($date?(' du '.$H(date('d/m/Y',strtotime($date)))):'').'.<br><br>Il revient vers vous rapidement avec une proposition adaptée.</p></div>'
+      .'<div class="foot">Une précision à ajouter ? <a href="mailto:'.$H($cfgI['emailLouis'] ?? 'contact@louismagie.fr').'">Écrire à Louis</a></div>','Demande envoyée');
+    exit;
+  }
+
+  // ── Formulaire
+  $sel = function($nom,$label,$opts,$req=false) use ($H) {
+    $h = '<div><label>'.$H($label).($req?' <span class="req">*</span>':'').'</label><select name="'.$H($nom).'"'.($req?' required':'').'>';
+    foreach($opts as $o){ $h .= '<option'.($o===''?' value="" disabled selected':'').'>'.$H($o===''?'Choisir…':$o).'</option>'; }
+    return $h.'</select></div>';
+  };
+  $txt = function($nom,$label,$ph='',$req=false,$type='text',$val='') use ($H) {
+    return '<div><label>'.$H($label).($req?' <span class="req">*</span>':'').'</label>'
+      .'<input type="'.$H($type).'" name="'.$H($nom).'" placeholder="'.$H($ph).'"'.($req?' required':'').' value="'.$H($val).'"></div>';
+  };
+  $form = '<header><div class="eyebrow">LouisMagie · Imagine the Impossible</div>'
+    .'<h1>Parlez-nous de <span class="g">votre événement</span></h1>'
+    .'<p class="lede">Magie immersive en déambulation : des magiciens infiltrés parmi vos invités. Quelques informations et Louis revient vers vous avec une proposition.</p></header>'
+    .'<form method="post"><input type="text" name="website" class="hp" tabindex="-1" autocomplete="off">'
+    .'<input type="hidden" name="k" value="'.$H($k).'">'
+    .'<fieldset><legend>Vous</legend><div class="row c2">'
+    .$txt('agence','Agence','Nom de votre agence',true,'text',$agencePre)
+    .$txt('contact','Votre nom','Prénom Nom',true)
+    .$txt('email','Email','vous@agence.com',true,'email')
+    .$txt('tel','Téléphone','06 12 34 56 78',false,'tel')
+    .'</div></fieldset>'
+    .'<fieldset><legend>L\'événement</legend><div class="row c2">'
+    .$txt('evenement','Nom de l\'événement / client final','Soirée de gala, lancement…')
+    .$txt('date','Date',' ',false,'date')
+    .$txt('lieu','Lieu','Hôtel, ville, pays')
+    .$sel('type','Type d\'événement',['','Cocktail / soirée VIP','Gala','Lancement de produit','Séminaire / convention','Mariage','Inauguration','Autre'])
+    .$sel('invites','Nombre d\'invités',['','Moins de 100','100 à 300','300 à 600','600 à 1 000','Plus de 1 000'])
+    .$txt('horaires','Horaires souhaités','21h45 - 23h45')
+    .'</div></fieldset>'
+    .'<fieldset><legend>La prestation</legend><div class="row c2">'
+    .$sel('magiciens','Nombre de magiciens',['','À me conseiller','2 à 3','4 à 6','7 à 10','Plus de 10'])
+    .$sel('budget','Budget envisagé',['','À discuter','Moins de 3 000 €','3 000 à 6 000 €','6 000 à 12 000 €','Plus de 12 000 €'])
+    .$txt('theme','Thème / univers','Nuit orientale, années 20…')
+    .$txt('costume','Dress code imposé','Costume blanc, noir, libre…')
+    .'</div>'
+    .'<div style="margin-top:14px"><label>Contexte, contraintes, attentes</label>'
+    .'<textarea name="message" placeholder="Ambiance recherchée, public international, zones à couvrir, contraintes du lieu, ce que vous imaginez…"></textarea>'
+    .'<div class="hint">Plus vous en dites, plus la proposition sera juste — mais l\'essentiel suffit.</div></div>'
+    .'<div style="margin-top:14px">'.$txt('reponse','Réponse souhaitée avant le',' ',false,'date').'</div>'
+    .'</fieldset>'
+    .'<button class="go" type="submit">Envoyer la demande</button>'
+    .'<div class="foot">Réponse sous 24 h ouvrées · Aucun engagement<br>Une question ? <a href="mailto:'.$H($cfgI['emailLouis'] ?? 'contact@louismagie.fr').'">'.$H($cfgI['emailLouis'] ?? 'contact@louismagie.fr').'</a></div>'
+    .'</form>';
+  echo $shell($form);
+  exit;
+}
+
 /* ===== Accusé de lecture d'un brief (public, protégé par le jeton du brief) ===== */
 if ($action === 'briefLu') {
   $id = $_GET['id'] ?? ''; $k = $_GET['k'] ?? '';

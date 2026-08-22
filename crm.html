@@ -3947,6 +3947,28 @@ function partagerBrief(pid){
 function copierTexte(t,msg){ const fin=()=>toast(msg||'Copié','ok');
   if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(fin,()=>prompt('Copie :',t)); else prompt('Copie :',t); }
 
+/* Active (ou renouvelle) le lien du formulaire de demande destiné aux agences */
+function activerFormulaireImagine(renouveler){
+  if(renouveler&&!confirm('Changer le lien ?\n\nL\'ancien cessera de fonctionner : les agences qui l\'ont enregistré devront recevoir le nouveau.')) return;
+  const c=DB.config(); c.imagineKey=genToken()+genToken().slice(0,6); DB.saveConfig(c);
+  if(cloudUrl()) cloudPost({action:'putConfig',config:DB.config()});
+  toast(renouveler?'🔄 Nouveau lien généré':'✦ Formulaire activé — copie le lien','ok'); RENDERERS.projets();
+}
+/* Lien pré-rempli au nom d'une agence (le champ Agence est déjà renseigné pour elle) */
+function lienAgencePerso(){
+  const c=DB.config(); const base=cloudUrl();
+  if(!c.imagineKey||!base){ toast('Active d\'abord le formulaire','err'); return; }
+  const nom=prompt('Nom de l\'agence (le champ sera pré-rempli pour elle) :',''); if(!nom) return;
+  const url=base+'?action=imagine&k='+encodeURIComponent(c.imagineKey)+'&a='+encodeURIComponent(nom.trim());
+  const msg=`Bonjour,\n\nPour vos demandes de magie immersive « Imagine the Impossible », voici un lien direct :\n${url}\n\nVous décrivez votre événement en 2 minutes, je reviens vers vous sous 24 h avec une proposition.\n\nÀ bientôt,\nLouis`;
+  window._lienAg=url; window._msgAg=msg;
+  openModal('Lien pour '+esc(nom),
+    `<div class="form-group"><label class="form-label">Lien pré-rempli</label><input class="form-control" readonly value="${esc(url)}" onclick="this.select()"></div>
+     <div class="form-group"><label class="form-label">Message prêt à envoyer</label><textarea class="form-control" style="min-height:150px" onclick="this.select()">${esc(msg)}</textarea></div>`,
+    `<button class="btn btn-ghost" onclick="closeModal()">Fermer</button>
+     <button class="btn btn-ghost" onclick="copierTexte(window._lienAg,'Lien copié')">📋 Lien</button>
+     <button class="btn btn-or" onclick="copierTexte(window._msgAg,'Message copié')">📋 Message complet</button>`);
+}
 /* ---------- LISTE DES PROJETS ---------- */
 RENDERERS.projets=function(){
   const projets=DB.all('projets').slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));
@@ -3956,7 +3978,7 @@ RENDERERS.projets=function(){
     const past=(p.date||'')<today && p.date;
     return `<div onclick="nav('projet',{id:'${p.id}'})" style="border:1px solid var(--anthr);border-radius:var(--rsm);padding:14px;margin-bottom:10px;cursor:pointer;background:var(--noir2)${past?';opacity:.7':''}">
       <div style="display:flex;justify-content:space-between;gap:10px;align-items:start">
-        <div style="min-width:0"><div class="td-strong" style="font-size:15px">${esc(p.nom||'Projet sans nom')}</div>
+        <div style="min-width:0"><div class="td-strong" style="font-size:15px">${esc(p.nom||'Projet sans nom')} ${(p.demandeAgence&&!p.vue)?'<span class="badge accepte" style="font-size:10px">nouvelle demande</span>':''}</div>
           <div class="td-dim" style="font-size:12px;margin-top:2px">${p.date?fmtDateFr(p.date):'date ?'} · ${esc(p.lieu||'—')}${p.agence?' · '+esc(p.agence):''}</div></div>
         ${projBadge(p.statut||'Prospect')}
       </div>
@@ -3976,6 +3998,23 @@ RENDERERS.projets=function(){
           <span style="flex:1;min-width:140px"><span class="td-strong">${esc(x.nom||'Projet')}</span><div class="td-dim" style="font-size:11px">${x.date?fmtDateFr(x.date):'sans date'}${x.brief.code?(' · code '+esc(x.brief.code)):' · sans code'}${(x.date&&x.date<todayISO())?' · <span style="color:var(--warn)">événement passé</span>':''}</div></span>
           <button class="btn btn-ghost btn-sm" onclick="editBrief('${x.id}')">✎</button>
           <button class="btn btn-warn btn-sm" onclick="depublierBrief('${x.id}')">🔒 Retirer</button></div>`).join('')}</div>`; })()}
+    ${(()=>{ const nouvelles=DB.all('projets').filter(x=>x.demandeAgence&&x.statut==='Prospect'&&!x.vue);
+      if(!nouvelles.length) return '';
+      return `<div class="alert success" style="margin-top:0"><span class="alert-icon">🎭</span><div><strong>${nouvelles.length} nouvelle(s) demande(s) d'agence</strong> — ${nouvelles.map(x=>esc(x.agence||'?')).join(', ')}. Ouvre-la pour la traiter.</div></div>`; })()}
+    ${(()=>{ const cfg=DB.config(); const k=cfg.imagineKey||''; const base=cloudUrl();
+      if(!k) return `<div class="panel" style="margin-bottom:14px"><div class="panel-title">🔗 Formulaire de demande pour tes agences</div>
+        <div class="td-dim" style="font-size:12px;margin-bottom:10px">Une page à leur envoyer : elles décrivent leur événement en 2 minutes, et le projet arrive directement ici.</div>
+        <button class="btn btn-or" onclick="activerFormulaireImagine()">✦ Activer le formulaire agence</button></div>`;
+      const url=base?(base+'?action=imagine&k='+encodeURIComponent(k)):'';
+      return `<div class="panel" style="margin-bottom:14px"><div class="panel-title">🔗 Formulaire de demande pour tes agences</div>
+        <div class="form-group"><label class="form-label">Lien à partager</label><input class="form-control" readonly value="${esc(url)}" onclick="this.select()"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-or" onclick="copierTexte('${esc(url)}','Lien copié — envoie-le à tes agences')">📋 Copier le lien</button>
+          <a class="btn btn-ghost" href="${esc(url)}" target="_blank" rel="noopener">👁 Voir la page</a>
+          <button class="btn btn-ghost" onclick="lienAgencePerso()">✉ Lien personnalisé pour une agence</button>
+          <button class="btn btn-ghost" onclick="activerFormulaireImagine(1)">🔄 Changer le lien</button>
+        </div>
+        <div class="td-dim" style="font-size:11px;margin-top:8px">Le même lien fonctionne pour toutes tes agences, autant de fois que nécessaire.</div></div>`; })()}
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
       <button class="btn btn-or" onclick="nouveauProjet()">✦ Nouveau projet</button>
       <button class="btn btn-ghost" onclick="gererMagiciens()">🎩 Banque de magiciens (${DB.all('magiciens').length})</button>
@@ -3996,6 +4035,7 @@ function projField(pid,field,val){ const p=getP(pid); if(!p)return; p[field]=val
 function projFieldRe(pid,field,val){ projField(pid,field,val); RENDERERS.projet({id:pid}); }
 RENDERERS.projet=function(params){
   const id=(params||currentParams||{}).id; const p=getP(id);
+  if(p&&p.demandeAgence&&!p.vue){ p.vue=true; saveP(p); setTimeout(updateBadges,0); }   // la demande a été consultée
   const el=document.getElementById('view-projet'); if(!p){ el.innerHTML='<div class="empty"><div class="empty-text">Projet introuvable</div></div>'; return; }
   const coutEquipe=projCoutEquipe(p), total=projTotalAgence(p), direct=projCoutDirect(p), budget=+p.budgetTotal||0;
   const marge=budget-total-direct;
