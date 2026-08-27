@@ -1420,7 +1420,11 @@ function clientDeDevis(d){ if(!d) return {};
   return DB.get('clients',d.idClient) || DB.all('clients').find(c=>((c.prenom||'')+' '+c.nom).trim().toLowerCase()===(''+(d.nomClient||'')).trim().toLowerCase()) || {}; }
 function contactDevis(d){ const c=clientDeDevis(d);
   const nom=((c.prenom?c.prenom+' ':'')+(c.nom||'')).trim();
-  return { nom:nom||d.nomClient||'', email:c.email||d.email||'', tel:c.tel||d.tel||'', adresse:c.adresse||d.lieu||'', siren:c.siren||'' }; }
+  // interlocuteur choisi sur le devis (agences à plusieurs chefs de projet)
+  const i=d.idContact?interlocuteur(c.id,d.idContact):null;
+  return { nom:(i?interNom(i):'')||nom||d.nomClient||'', societe:nom,
+           email:(i&&i.email)||c.email||d.email||'', tel:(i&&i.tel)||c.tel||d.tel||'',
+           adresse:c.adresse||d.lieu||'', siren:c.siren||'', fonction:(i&&i.fonction)||'' }; }
 /* Propage une modif de fiche client sur tous les devis/prestations liés (snapshot tenu à jour partout) */
 function propagateClient(c){
   let n=0;
@@ -1849,8 +1853,10 @@ function pdfDevis(id,returnDoc){
   const doc=pdfNew();
   let y=pdfHeader(doc,'DEVIS',d.id,[['Date',fmtDateShort(d.dateCreation)],['Validité',fmtDateShort(valid.toISOString().slice(0,10))]]);
   const ct=contactDevis(d);
+  const aTiers=ct.societe&&ct.nom&&ct.societe!==ct.nom;
   y=pdfBlocs(doc,y,
-    {nom:ct.nom,lines:[ct.email,ct.tel,ct.adresse||d.lieu,ct.siren?('SIREN '+ct.siren):'']},
+    {nom:aTiers?ct.societe:ct.nom,
+     lines:[aTiers?('À l\'attention de '+ct.nom+(ct.fonction?(' — '+ct.fonction):'')):'',ct.email,ct.tel,ct.adresse||d.lieu,ct.siren?('SIREN '+ct.siren):'']},
     {titre:'PRESTATION',lines:['Date : '+fmtDateFr(d.dateEvenement),'Créneau : '+(d.creneau||'—'),d.horaire?('Horaire : '+d.horaire):'','Lieu : '+(d.lieu||'—'),d.nbInvites?('Invités : '+d.nbInvites):'']});
   const body=(d.prestations||[]).map(p=>[p.label||'Prestation',p.duree||'—',fmtEurPdf(p.prix)]);
   pdfTable(doc,y,['Prestation','Durée','Montant'],body);
@@ -2093,9 +2099,64 @@ function trouverClient({nom,email,siren}={}){
   if(n) { const c=cls.find(x=>normNom(((x.prenom?x.prenom+' ':'')+(x.nom||''))) === n); if(c) return c; }
   return null;
 }
+/* ── Interlocuteurs d'un client (une agence a plusieurs chefs de projet) ── */
+function interlocuteurs(idClient){ const c=DB.get('clients',idClient); return (c&&c.contacts)||[]; }
+function interlocuteur(idClient,idContact){ return interlocuteurs(idClient).find(x=>x.id===idContact)||null; }
+function interNom(i){ return i?((i.prenom?i.prenom+' ':'')+(i.nom||'')).trim():''; }
+function interLigne(i){ return i?[interNom(i),i.fonction].filter(Boolean).join(' · '):''; }
+/* Coordonnées à utiliser pour écrire : interlocuteur choisi, sinon fiche client */
+function contactPour(idClient,idContact){
+  const c=DB.get('clients',idClient)||{};
+  const i=idContact?interlocuteur(idClient,idContact):null;
+  const princ=!i?interlocuteurs(idClient).find(x=>x.principal):null;
+  const src=i||princ;
+  return {nom:src?interNom(src):((c.prenom?c.prenom+' ':'')+(c.nom||'')).trim(),
+          email:(src&&src.email)||c.email||'', tel:(src&&src.tel)||c.tel||'',
+          societe:((c.prenom?c.prenom+' ':'')+(c.nom||'')).trim(), fonction:(src&&src.fonction)||''};
+}
+function editInterlocuteurs(idClient){
+  const c=DB.get('clients',idClient); if(!c)return;
+  const list=(c.contacts||[]).map((i,n)=>`<div style="border:1px solid var(--anthr);border-radius:var(--rsm);padding:12px;margin-bottom:8px">
+      <div class="form-grid c3">
+        <div class="form-group"><label class="form-label" style="font-size:11px">Prénom</label><input class="form-control" id="it${n}-prenom" value="${esc(i.prenom||'')}"></div>
+        <div class="form-group"><label class="form-label" style="font-size:11px">Nom</label><input class="form-control" id="it${n}-nom" value="${esc(i.nom||'')}"></div>
+        <div class="form-group"><label class="form-label" style="font-size:11px">Fonction</label><input class="form-control" id="it${n}-fonction" value="${esc(i.fonction||'')}" placeholder="Chef de projet"></div>
+        <div class="form-group"><label class="form-label" style="font-size:11px">Email</label><input class="form-control" id="it${n}-email" value="${esc(i.email||'')}"></div>
+        <div class="form-group"><label class="form-label" style="font-size:11px">Téléphone</label><input class="form-control" id="it${n}-tel" value="${esc(i.tel||'')}"></div>
+        <div class="form-group" style="display:flex;align-items:end;gap:8px">
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer"><input type="radio" name="it-principal" ${i.principal?'checked':''} onchange="interPrincipal('${idClient}','${i.id}')" style="width:16px;height:16px">Par défaut</label>
+          <button class="btn btn-danger btn-sm" onclick="interDel('${idClient}','${i.id}')">🗑</button>
+        </div>
+      </div></div>`).join('')||'<div class="td-dim" style="padding:8px 0">Aucun interlocuteur. Ajoute les personnes que tu contactes chez ce client.</div>';
+  openModal('👥 Interlocuteurs · '+esc(((c.prenom?c.prenom+' ':'')+c.nom).trim()),
+    `<div class="td-dim" style="margin-bottom:12px">Pour une agence avec plusieurs chefs de projet : chaque devis, facture ou email partira au bon interlocuteur.</div>${list}`,
+    `<button class="btn btn-ghost" onclick="interAdd('${idClient}')">+ Ajouter</button>
+     <button class="btn btn-ghost" onclick="voirClient('${idClient}')">Fermer</button>
+     <button class="btn btn-or" onclick="interSave('${idClient}')">💾 Enregistrer</button>`);
+}
+function interCollecte(idClient){
+  const c=DB.get('clients',idClient); if(!c)return null;
+  (c.contacts||[]).forEach((i,n)=>{ const g=k=>((document.getElementById('it'+n+'-'+k)||{}).value||'').trim();
+    if(!document.getElementById('it'+n+'-nom'))return;
+    i.prenom=g('prenom'); i.nom=g('nom'); i.fonction=g('fonction'); i.email=g('email'); i.tel=g('tel'); });
+  return c;
+}
+function interAdd(idClient){ const c=interCollecte(idClient)||DB.get('clients',idClient); if(!c)return;
+  c.contacts=c.contacts||[]; c.contacts.push({id:uid('ITL'),prenom:'',nom:'',fonction:'',email:'',tel:'',principal:!c.contacts.length});
+  DB.save('clients',c); editInterlocuteurs(idClient); }
+function interDel(idClient,idc){ const c=interCollecte(idClient); if(!c)return;
+  c.contacts=(c.contacts||[]).filter(x=>x.id!==idc);
+  if(c.contacts.length&&!c.contacts.some(x=>x.principal)) c.contacts[0].principal=true;
+  DB.save('clients',c); editInterlocuteurs(idClient); }
+function interPrincipal(idClient,idc){ const c=interCollecte(idClient); if(!c)return;
+  (c.contacts||[]).forEach(x=>x.principal=(x.id===idc)); DB.save('clients',c); }
+function interSave(idClient){ const c=interCollecte(idClient); if(!c)return;
+  DB.save('clients',c); toast('👥 Interlocuteurs enregistrés','ok'); voirClient(idClient); }
 function clientNomFacture(f){ if(f&&f.billingName) return f.billingName; const c=DB.get('clients',f.idClient); return c?(c.prenom+' '+c.nom).trim():((DB.get('devis',f.idDevis)||{}).nomClient||''); }
 /* Email destinataire d'une facture : override billing → fiche client → devis lié */
-function factEmailTo(f){ if(!f) return ''; return f.billingEmail||(DB.get('clients',f.idClient)||{}).email||(DB.get('devis',f.idDevis)||{}).email||''; }
+function factEmailTo(f){ if(!f) return '';
+  const co=f.idContact?contactPour(f.idClient,f.idContact):null;
+  return (co&&co.email)||f.billingEmail||(DB.get('clients',f.idClient)||{}).email||(DB.get('devis',f.idDevis)||{}).email||''; }
 function envoyerFactureMail(id){
   const f=DB.get('factures',id); if(!f)return;
   const tpl=EMAIL_TPL.facture(f,clientNomFacture(f));
@@ -3748,7 +3809,13 @@ const FOURNI_PAR=['Agence','Magiciens','Moi'];
 const COSTUME_PAR=['Fourni par l\'agence','Apporté par les magiciens','Fourni par moi','À définir'];
 const TARIF_MODE=['TTC','HT'];
 /* Imagine the Impossible est un format dédié à une agence partenaire (Inspiration) */
-function agenceImagine(){ const c=DB.config(); return {nom:c.imagineAgence||'Inspiration', id:c.imagineIdAgence||'', email:c.imagineAgenceEmail||'', tel:c.imagineAgenceTel||''}; }
+function agenceImagine(){
+  const c=DB.config();
+  const fiche=c.imagineIdAgence?DB.get('clients',c.imagineIdAgence):null;
+  if(fiche) return {nom:((fiche.prenom?fiche.prenom+' ':'')+fiche.nom).trim(), id:fiche.id,
+                    email:fiche.email||c.imagineAgenceEmail||'', tel:fiche.tel||c.imagineAgenceTel||'', fiche};
+  return {nom:c.imagineAgence||'Inspiration', id:'', email:c.imagineAgenceEmail||'', tel:c.imagineAgenceTel||'', fiche:null};
+}
 function getP(id){ return DB.get('projets',id); }
 /* ----- WhatsApp : lien wa.me avec message pré-rempli (normalise les numéros FR) ----- */
 function waNum(tel){ let n=String(tel||'').replace(/[^0-9+]/g,'');
@@ -3822,6 +3889,15 @@ function projSuppSet(pid,lid,f,v){ const p=getP(pid); const l=(p.lignesSupp||[])
 function projSuppDel(pid,lid){ const p=getP(pid); p.lignesSupp=(p.lignesSupp||[]).filter(x=>x.id!==lid); saveP(p); RENDERERS.projet({id:pid}); }
 function factureProjetDe(pid){ return DB.all('factures').find(f=>f.idProjet===pid&&f.type!=='avoir'&&f.statut!=='Annulée'); }
 /* Choix de l'agence parmi les clients référencés (ou saisie libre) */
+function projSetContact(pid,idc){
+  const p=getP(pid); if(!p)return;
+  p.idContact=idc||'';
+  const co=contactPour(p.idAgence||agenceImagine().id, p.idContact);
+  if(co.email) p.agenceEmail=co.email;
+  if(co.tel) p.agenceTel=co.tel;
+  saveP(p); RENDERERS.projet({id:pid});
+  toast(idc?('Interlocuteur : '+co.nom):'Contact par défaut de l\'agence','ok');
+}
 function projSetAgence(pid,val){
   const p=getP(pid); if(!p)return;
   if(val==='__new'){ p.idAgence=''; }
@@ -3833,7 +3909,9 @@ function projSetAgence(pid,val){
 }
 /* Retrouve (ou crée) la fiche client de l'agence — relie le projet au CRM clients */
 function clientAgence(p){
-  if(p.idAgence){ const c=DB.get('clients',p.idAgence); if(c) return c; }   // client déjà référencé
+  if(p.idAgence){ const c=DB.get('clients',p.idAgence); if(c) return c; }   // fiche déjà rattachée au projet
+  const ag=agenceImagine();
+  if(ag.fiche && normNom(ag.nom)===normNom(p.agence||ag.nom)) return ag.fiche;   // agence partenaire configurée
   const nom=(p.agence||'').trim(); if(!nom) return null;
   let c=trouverClient({nom,email:p.agenceEmail});
   if(!c){ c={id:uid('CLI'),nom,prenom:'',email:p.agenceEmail||'',tel:p.agenceTel||'',adresse:p.lieu||'',type:'entreprise',
@@ -3859,8 +3937,10 @@ function devisDepuisProjet(pid){
   if(montantMagiciens>0) lignes.push({label:'Magie immersive — équipe de '+(nbMag||1)+' magicien'+(nbMag>1?'s':'')+' (flash effects, personnages infiltrés)',prix:montantMagiciens,duree:p.dureePresta||''});
   if(gestion>0) lignes.push({label:'Direction artistique & coordination de projet (recrutement, brief, formation, logistique)',prix:gestion,duree:''});
   (p.lignesSupp||[]).forEach(l=>{ if((l.label||'').trim()||+l.prix) lignes.push({label:(l.label||'Prestation complémentaire').trim(),prix:+l.prix||0,duree:''}); });
-  const d={id:nextId('DEV','devis'),dateCreation:todayISO(),idProjet:pid,idClient:c?c.id:'',nomClient:p.agence,
-    email:(c&&c.email)||p.agenceEmail||'',tel:(c&&c.tel)||p.agenceTel||'',typeEvenement:p.typeEvenement||'',
+  const co=contactPour(c?c.id:'', p.idContact);
+  const d={id:nextId('DEV','devis'),dateCreation:todayISO(),idProjet:pid,idClient:c?c.id:'',idContact:p.idContact||'',
+    nomClient:(c?((c.prenom?c.prenom+' ':'')+c.nom).trim():p.agence),
+    email:co.email||p.agenceEmail||'',tel:co.tel||p.agenceTel||'',typeEvenement:p.typeEvenement||'',
     dateEvenement:p.date,creneau:p.creneau||'Soirée',horaire:p.horaire||'',lieu:p.lieu||'',distanceKm:0,nbInvites:p.nbInvites||'',
     prestations:lignes,montantHT:total,fraisDeplacement:0,tva:0,montantTTC:total,remise:0,
     acomptePct:cfg.acompteDefautPct||30,statut:'Brouillon',dateEnvoi:'',dateAcceptation:'',
@@ -3885,7 +3965,9 @@ function facturerProjet(pid){
   DB.save('factures',{id:fid,type:'complete',dateEmission:todayISO(),idDevis:'',idProjet:pid,idClient:cAg?cAg.id:'',
     montantTTC:montant,montantFacture:montant,acompteVerse:0,soldeDu:montant,dateEcheance:ech.toISOString().slice(0,10),
     statut:'Émise',datePaiement:'',dateEnvoi:'',dateRelance1:'',dateRelance2:'',
-    billingName:p.agence||'',billingEmail:p.agenceEmail||(cAg&&cAg.email)||'',
+    idContact:p.idContact||'',
+    billingName:(cAg?((cAg.prenom?cAg.prenom+' ':'')+cAg.nom).trim():(p.agence||'')),
+    billingEmail:contactPour(cAg?cAg.id:'',p.idContact).email||p.agenceEmail||'',
     designation:'Imagine the Impossible — '+(p.nom||'projet')+(p.date?(' ('+fmtDateFr(p.date)+')'):'')});
   p.factureId=fid; if(p.statut!=='Annulé'&&p.statut!=='Facturé') p.statut='Facturé'; saveP(p);
   logActivite('Facture projet Imagine émise ('+fmtEur(montant)+') → '+(p.agence||'')); updateBadges();
@@ -4361,7 +4443,18 @@ RENDERERS.projet=function(params){
               <option value="__new"${(!cur&&p.agence)?' selected':''}>✏️ Autre / nouveau nom…</option></select>`; })()}
           ${(!p.idAgence)?`<input class="form-control" style="margin-top:6px" value="${esc(p.agence||'')}" onchange="projField('${id}','agence',this.value)" placeholder="Nom de l'agence (si pas encore dans tes clients)">`:''}
         </div>
-        <div class="form-group"><label class="form-label">Email agence</label><input class="form-control" value="${esc(p.agenceEmail||'')}" onchange="projField('${id}','agenceEmail',this.value)" placeholder="pour le devis / la facture"></div>
+        ${(()=>{ const idAg=p.idAgence||agenceImagine().id;
+          const its=idAg?interlocuteurs(idAg):[];
+          if(!its.length) return `<div class="form-group"><label class="form-label">Email agence</label>
+            <input class="form-control" value="${esc(p.agenceEmail||'')}" onchange="projField('${id}','agenceEmail',this.value)" placeholder="pour le devis / la facture">
+            ${idAg?`<div class="td-dim" style="font-size:11px;margin-top:5px"><a href="#" onclick="editInterlocuteurs('${idAg}');return false" style="color:var(--or)">+ Ajouter des interlocuteurs</a> si l'agence a plusieurs chefs de projet</div>`:''}</div>`;
+          const cur=p.idContact||'';
+          return `<div class="form-group"><label class="form-label">Interlocuteur sur ce projet</label>
+            <select class="form-control" onchange="projSetContact('${id}',this.value)">
+              <option value="">— Contact par défaut de l'agence —</option>
+              ${its.map(i=>`<option value="${i.id}"${i.id===cur?' selected':''}>${esc(interLigne(i))}${i.email?' · '+esc(i.email):''}</option>`).join('')}
+            </select>
+            <div class="td-dim" style="font-size:11px;margin-top:5px">Devis, factures et emails partiront à cette personne · <a href="#" onclick="editInterlocuteurs('${idAg}');return false" style="color:var(--or)">gérer</a></div></div>`; })()}
         <div class="form-group"><label class="form-label">Lieu</label><input class="form-control" value="${esc(p.lieu||'')}" onchange="projField('${id}','lieu',this.value)"></div>
         <div class="form-group"><label class="form-label">Type d'événement</label><input class="form-control" value="${esc(p.typeEvenement||'')}" onchange="projField('${id}','typeEvenement',this.value)" placeholder="soirée de gala, lancement…"></div>
         <div class="form-group"><label class="form-label">Nombre d'invités</label><input class="form-control" value="${esc(p.nbInvites||'')}" onchange="projField('${id}','nbInvites',this.value)"></div>
