@@ -2503,11 +2503,16 @@ function voirDoublons(){
   const groupes=groupesDoublons();
   if(!groupes.length){ toast('✓ Aucun doublon détecté','ok'); return; }
   const body=groupes.map((g,i)=>{
-    const lignes=g.map(c=>`<div style="display:flex;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid var(--anthr)">
+    const score=c=>nbLiens(c.id)*100+['email','tel','adresse','siren'].filter(k=>c[k]).length;
+    const suggere=g.slice().sort((a,b)=>score(b)-score(a))[0];
+    const lignes=g.map(c=>`<label style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--anthr);cursor:pointer">
+        <input type="radio" name="dbl${i}" value="${c.id}" ${c.id===suggere.id?'checked':''} style="width:17px;height:17px;flex-shrink:0">
         <span style="flex:1;min-width:0"><span class="td-strong">${esc(((c.prenom?c.prenom+' ':'')+c.nom).trim())}</span>
-          <div class="td-dim" style="font-size:11px">${esc(c.email||'sans email')}${c.siren?(' · SIREN '+esc(c.siren)):''} · ${nbLiens(c.id)} document(s) · ${fmtEur(c.caTotal||0)}</div></span></div>`).join('');
+          <div class="td-dim" style="font-size:11px">${esc(c.email||'sans email')}${c.siren?(' · SIREN '+esc(c.siren)):''} · ${nbLiens(c.id)} document(s) · ${fmtEur(c.caTotal||0)}</div></span></label>`).join('');
     return `<div style="border:1px solid var(--anthr);border-radius:var(--rsm);padding:12px;margin-bottom:10px">
-      <div class="td-strong" style="margin-bottom:6px">${g.length} fiches identiques</div>${lignes}
+      <div class="td-strong" style="margin-bottom:4px">${g.length} fiches de la même entité</div>
+      <div class="td-dim" style="font-size:11px;margin-bottom:6px">Choisis la fiche à conserver (sa raison sociale sera gardée). Les autres deviennent des interlocuteurs.</div>
+      ${lignes}
       <button class="btn btn-or btn-sm" style="margin-top:10px" onclick="fusionnerGroupe(${i})">🔗 Fusionner en une seule fiche</button></div>`;
   }).join('');
   window._grpDoublons=groupes;
@@ -2517,16 +2522,32 @@ function voirDoublons(){
 }
 function fusionnerGroupe(i){
   const g=(window._grpDoublons||[])[i]; if(!g||g.length<2) return;
-  // fiche maître = celle qui a le plus de documents, puis la plus renseignée
+  // fiche conservée : celle cochée par l'utilisateur, sinon la plus complète
+  const choisi=(document.querySelector('input[name="dbl'+i+'"]:checked')||{}).value;
   const score=c=>nbLiens(c.id)*100 + ['email','tel','adresse','siren','naf','sourceInitiale'].filter(k=>c[k]).length;
   const tri=g.slice().sort((a,b)=>score(b)-score(a));
-  const maitre=tri[0], autres=tri.slice(1);
+  const maitre=(choisi&&g.find(c=>c.id===choisi))||tri[0];
+  const autres=g.filter(c=>c.id!==maitre.id);
   const total=autres.reduce((n,c)=>n+nbLiens(c.id),0);
   if(!confirm('Fusionner '+g.length+' fiches en une seule ?\n\nFiche conservée : '+((maitre.prenom?maitre.prenom+' ':'')+maitre.nom).trim()
-    +'\n'+total+' document(s) des autres fiches lui seront rattachés.\nLes fiches en double seront supprimées.')) return;
+    +'\n· '+total+' document(s) lui seront rattachés'
+    +'\n· les coordonnées des autres fiches deviennent des interlocuteurs (rien n\'est perdu)')) return;
+  maitre.contacts=maitre.contacts||[];
   autres.forEach(c=>{
     // complète les champs manquants de la fiche maître
     ['email','tel','adresse','siren','naf','sourceInitiale','notes'].forEach(k=>{ if(!maitre[k]&&c[k]) maitre[k]=c[k]; });
+    // la fiche absorbée devient un interlocuteur (utile pour « Ville de X — service des finances »)
+    (c.contacts||[]).forEach(i=>{ if(!maitre.contacts.some(x=>(x.email||'').toLowerCase()===(i.email||'').toLowerCase()&&interNom(x)===interNom(i)))
+      maitre.contacts.push(Object.assign({},i,{id:uid('ITL'),principal:false})); });
+    const nomC=((c.prenom?c.prenom+' ':'')+(c.nom||'')).trim();
+    const preciseUnService = normNom(nomC)!==normNom(((maitre.prenom?maitre.prenom+' ':'')+maitre.nom));
+    const dejaLa = maitre.contacts.some(x=>(x.email||'').toLowerCase()===(c.email||'').toLowerCase()&&(c.email||''));
+    if((c.email||c.tel) && !dejaLa && (preciseUnService||c.email!==maitre.email)){
+      // conserve le libellé distinctif (« service des finances ») comme fonction
+      const suffixe=preciseUnService?nomC.replace(new RegExp('^'+((maitre.nom||'').replace(/[.*+?^${}()|[\]\\]/g,'\\$&')),'i'),'').replace(/^[\s—·,-]+/,'').trim():'';
+      maitre.contacts.push({id:uid('ITL'),prenom:'',nom:suffixe||nomC,fonction:suffixe?'':'Contact',
+        email:c.email||'',tel:c.tel||'',principal:false});
+    }
     if(c.date1erDevis&&(!maitre.date1erDevis||c.date1erDevis<maitre.date1erDevis)) maitre.date1erDevis=c.date1erDevis;
     // réassigne tout ce qui pointait vers la fiche supprimée
     DB.all('devis').filter(d=>d.idClient===c.id).forEach(d=>{ d.idClient=maitre.id; DB.save('devis',d); });
@@ -2538,7 +2559,7 @@ function fusionnerGroupe(i){
   const cfg=DB.config(); if(autres.some(c=>c.id===cfg.imagineIdAgence)){ cfg.imagineIdAgence=maitre.id; DB.saveConfig(cfg); }
   DB.save('clients',recalcClient(maitre));
   logActivite('Fusion de '+g.length+' fiches clients · '+maitre.nom);
-  toast('🔗 '+g.length+' fiches fusionnées','ok');
+  toast('🔗 '+g.length+' fiches fusionnées'+(maitre.contacts.length?(' · '+maitre.contacts.length+' interlocuteur(s) conservé(s)'):''),'ok');
   RENDERERS.clients(); voirDoublons();
 }
 function cliSearchFilter(q){ q=(q||'').toLowerCase().trim(); document.querySelectorAll('#view-clients .cli-row').forEach(l=>{ l.style.display=(!q||(l.dataset.s||'').includes(q))?'':'none'; }); }
@@ -2561,7 +2582,20 @@ function voirClient(id){
     ${infoItem('Email',esc(c.email||'—'))}${infoItem('Téléphone',esc(c.tel||'—'))}
     ${infoItem('Ville',esc(c.adresse||'—'))}${infoItem('CA total payé',fmtEur(c.caTotal))}
     ${c.siren?infoItem('SIREN',esc(c.siren)):''}${c.naf?infoItem('Code NAF',esc(c.naf)):''}
-  </div>${prescriHtml}
+  </div>
+  ${(()=>{ const its=c.contacts||[];
+    const lignes=its.map(i=>`<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--anthr);flex-wrap:wrap">
+        <span style="flex:1;min-width:150px">
+          <span class="td-strong">${esc(interNom(i))}</span>${i.principal?' <span class="badge accepte" style="font-size:9px">par défaut</span>':''}
+          <div class="td-dim" style="font-size:11px">${esc(i.fonction||'—')}${i.email?' · '+esc(i.email):''}${i.tel?' · '+esc(i.tel):''}</div></span>
+        ${i.email?`<button class="btn btn-ghost btn-sm" onclick="mailInterlocuteur('${id}','${i.id}')">✉ Écrire</button>`:''}
+        ${i.tel?`<a class="btn btn-ghost btn-sm" href="tel:${esc(String(i.tel).replace(/[^0-9+]/g,''))}">📞</a>`:''}
+      </div>`).join('');
+    return `<div class="panel-title" style="margin-top:16px;font-size:13px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <span>👥 Interlocuteurs${its.length?' ('+its.length+')':''}</span>
+        <button class="btn btn-ghost btn-sm" onclick="editInterlocuteurs('${id}')">${its.length?'✎ Gérer':'+ Ajouter'}</button></div>
+      ${lignes||`<div class="td-dim" style="font-size:12px">Aucun interlocuteur enregistré. ${c.type==='partenaire'||c.type==='entreprise'?'Utile pour une agence : chaque devis ou email partira au bon chef de projet.':'Utile si tu as plusieurs contacts chez ce client.'}</div>`}`; })()}
+  ${prescriHtml}
   ${c.email?`<div class="panel-title" style="margin-top:16px;font-size:13px">📣 Emails marketing (1 clic)</div>
     <div style="display:flex;flex-wrap:wrap;gap:7px">
       <button class="btn btn-ghost btn-sm" onclick="mailMarketing('${id}','mktAnniversaire')">🎂 Anniversaire collaboration</button>
@@ -2645,6 +2679,46 @@ function saveClient(id){
   const prop=id?propagateClient(c):0;   // met à jour email/tel/nom sur tous les devis liés
   closeModal(); RENDERERS.clients(); updateBadges();
   toast((id?'Client modifié ✓':'Client créé ✓')+(prop?' · '+prop+' devis mis à jour':''),'ok');
+}
+/* Écrire à un interlocuteur précis depuis la fiche client */
+/* Rattacher cette fiche à une autre : elle devient un interlocuteur (services, filiales, contacts multiples) */
+function rattacherCommeInterlocuteur(id){
+  const c=DB.get('clients',id); if(!c)return;
+  const autres=DB.all('clients').filter(x=>x.id!==id)
+    .sort((a,b)=>((a.prenom||'')+a.nom).localeCompare((b.prenom||'')+b.nom));
+  if(!autres.length){ toast('Aucune autre fiche','err'); return; }
+  const nomC=((c.prenom?c.prenom+' ':'')+c.nom).trim();
+  openModal('Rattacher « '+esc(nomC)+' »',
+    `<div class="alert info" style="margin-top:0"><span class="alert-icon">👥</span><div>Cette fiche deviendra un <strong>interlocuteur</strong> de la fiche choisie. Ses devis, factures et demandes y seront rattachés, puis elle sera supprimée.</div></div>
+     <div class="form-group"><label class="form-label">Rattacher à</label>
+       <select class="form-control" id="rat-cible">${autres.map(x=>`<option value="${x.id}">${esc(((x.prenom?x.prenom+' ':'')+x.nom).trim())}</option>`).join('')}</select></div>
+     <div class="form-group"><label class="form-label">Fonction / service</label>
+       <input class="form-control" id="rat-fonction" value="${esc(c.type==='partenaire'?'Contact agence':'')}" placeholder="Service des finances, chef de projet…"></div>`,
+    `<button class="btn btn-ghost" onclick="voirClient('${id}')">Annuler</button>
+     <button class="btn btn-or" onclick="rattacherOk('${id}')">👥 Rattacher</button>`);
+}
+function rattacherOk(id){
+  const c=DB.get('clients',id); const cibleId=(document.getElementById('rat-cible')||{}).value;
+  const fonction=((document.getElementById('rat-fonction')||{}).value||'').trim();
+  const m=DB.get('clients',cibleId); if(!c||!m)return;
+  m.contacts=m.contacts||[];
+  const nomC=((c.prenom?c.prenom+' ':'')+c.nom).trim();
+  m.contacts.push({id:uid('ITL'),prenom:c.prenom||'',nom:c.prenom?c.nom:nomC,fonction,email:c.email||'',tel:c.tel||'',principal:!m.contacts.length});
+  (c.contacts||[]).forEach(i=>m.contacts.push(Object.assign({},i,{id:uid('ITL'),principal:false})));
+  ['email','tel','adresse','siren','naf'].forEach(k=>{ if(!m[k]&&c[k]) m[k]=c[k]; });
+  DB.all('devis').filter(d=>d.idClient===id).forEach(d=>{ d.idClient=m.id; DB.save('devis',d); });
+  DB.all('factures').filter(f=>f.idClient===id).forEach(f=>{ f.idClient=m.id; DB.save('factures',f); });
+  DB.all('demandes').filter(d=>d.idClient===id).forEach(d=>{ d.idClient=m.id; DB.save('demandes',d); });
+  DB.all('projets').filter(p=>p.idAgence===id).forEach(p=>{ p.idAgence=m.id; saveP(p); });
+  const cfg=DB.config(); if(cfg.imagineIdAgence===id){ cfg.imagineIdAgence=m.id; DB.saveConfig(cfg); }
+  DB.remove('clients',id); DB.save('clients',recalcClient(m));
+  logActivite('« '+nomC+' » rattaché à « '+m.nom+' » comme interlocuteur');
+  toast('👥 Rattaché à '+m.nom,'ok'); voirClient(m.id);
+}
+function mailInterlocuteur(idClient,idContact){
+  const c=DB.get('clients',idClient); const co=contactPour(idClient,idContact); if(!co.email){ toast('Cet interlocuteur n\'a pas d\'email','err'); return; }
+  openMailComposer({titre:'Email · '+co.nom+(co.societe&&co.societe!==co.nom?(' ('+co.societe+')'):''),
+    to:co.email, subject:'', body:`Bonjour ${prenomDe(co.nom)},\n\n\n\n${sig()}`, kind:'libre', ref:idClient});
 }
 function mailClient(id){
   const c=DB.get('clients',id); if(!c)return;
