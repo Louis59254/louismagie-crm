@@ -629,7 +629,10 @@ function openModal(title,body,footer){
   document.getElementById('modal-footer').innerHTML=footer||'';
   document.getElementById('modal-bg').classList.add('open');
 }
-function closeModal(){ document.getElementById('modal-bg').classList.remove('open'); }
+function closeModal(){
+  if(typeof briefAutoSave==='function') briefAutoSave();   // jamais de perte en fermant l'éditeur de brief
+  if(typeof _briefAuto==='object'&&_briefAuto) _briefAuto.pid=null;
+  document.getElementById('modal-bg').classList.remove('open'); }
 function toggleSidebar(force){
   const sb=document.getElementById('sidebar'), bd=document.getElementById('sb-backdrop');
   const open = force===undefined ? !sb.classList.contains('open') : force;
@@ -4163,6 +4166,56 @@ function genererBriefEN(pid){
   toast('🇬🇧 Version anglaise prête — relis et ajuste si besoin','ok');
   _briefLang='en'; editBrief(pid);
 }
+/* ─── Enregistrement automatique du brief ───────────────────────────────
+   Le brief est un long document : on ne perd rien parce qu'on a fermé la
+   modale, cliqué à côté, ou basculé sur une autre app en cours de frappe. */
+let _briefAuto={pid:null,t:null};
+function briefEditeurOuvert(){ return !!document.getElementById('br-titre'); }
+function briefEtat(txt,cls){ const el=document.getElementById('br-etat'); if(!el) return;
+  el.textContent=txt; el.style.color=cls==='err'?'var(--rouge,#E5564B)':(cls==='ok'?'var(--vert,#3FB97A)':'var(--gm,#8A8580)'); }
+function briefAutoSave(){
+  if(!_briefAuto.pid || !briefEditeurOuvert()) return false;
+  clearTimeout(_briefAuto.t); _briefAuto.t=null;
+  try{
+    collecteBrief(_briefAuto.pid);
+    const h=new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
+    briefEtat('✓ Enregistré à '+h,'ok');
+    return true;
+  }catch(err){
+    console.error('Autosave brief',err);
+    briefEtat('⚠️ Enregistrement impossible — clique sur 💾','err');
+    return false;
+  }
+}
+function briefAutoInit(pid){
+  _briefAuto.pid=pid;
+  const mb=document.getElementById('modal-body'); if(!mb) return;
+  if(!mb.dataset.brAuto){                       // écouteur délégué, posé une seule fois
+    mb.dataset.brAuto='1';
+    const onEdit=()=>{ if(!_briefAuto.pid||!briefEditeurOuvert()) return;
+      briefEtat('Modification en cours…');
+      clearTimeout(_briefAuto.t); _briefAuto.t=setTimeout(briefAutoSave,900); };
+    mb.addEventListener('input',onEdit);
+    mb.addEventListener('change',()=>{ if(_briefAuto.pid&&briefEditeurOuvert()) briefAutoSave(); });
+    mb.addEventListener('focusout',()=>{ if(_briefAuto.t) briefAutoSave(); });   // on quitte un champ → on fige
+  }
+}
+/* Sorties brutales : changement d'app / d'onglet sur mobile, fermeture, rechargement.
+   On enregistre en local ET on pousse au serveur : le push différé de 1,5 s n'a pas
+   le temps de partir, et une synchro descendante ultérieure écraserait le travail. */
+function briefFlushCloud(){
+  try{
+    const url=(typeof cloudUrl==='function')?cloudUrl():''; if(!url||!navigator.sendBeacon) return;
+    const payload=JSON.stringify({action:'putEntity',entity:'projets',rows:DB.all('projets'),
+      token:DB.config().backendToken||'', auth:cloudAuth()});
+    navigator.sendBeacon(url, new Blob([payload],{type:'text/plain;charset=utf-8'}));
+  }catch(_){}
+}
+function briefSortie(){ if(briefAutoSave()) briefFlushCloud(); }
+document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='hidden') briefSortie(); });
+window.addEventListener('pagehide',briefSortie);
+window.addEventListener('beforeunload',briefSortie);
+
 function briefLangue(pid,lang){
   collecteBrief(pid);
   const p=getP(pid);
@@ -4329,7 +4382,7 @@ function editBrief(pid){
       <button class="btn ${en?'btn-or':'btn-ghost'} btn-sm" onclick="briefLangue('${pid}','en')">🇬🇧 English${racine.en?'':' · à générer'}</button>
       ${en?`<button class="btn btn-ghost btn-sm" onclick="genererBriefEN('${pid}')">🔄 Re-traduire depuis le français</button>
            <button class="btn btn-ghost btn-sm" onclick="supprimerBriefEN('${pid}')">🗑 Retirer l'anglais</button>`:''}
-      <span class="td-dim" style="font-size:11px;margin-left:auto">${racine.en?'Les magiciens choisissent leur langue sur la page.':'Publication en français uniquement.'}</span>
+      <span id="br-etat" class="td-dim" style="font-size:11px;margin-left:auto">Enregistrement automatique</span>
     </div>
     ${racine.publie&&url?`<div class="alert success" style="margin-top:0"><span class="alert-icon">🌐</span><div><strong>Brief en ligne.</strong> <a href="${esc(url)}${en?'&lang=en':''}" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">Ouvrir la page${en?' (EN)':''}</a>${racine.code?(' · Code : <strong>'+esc(racine.code)+'</strong>'):' · sans code'}</div></div>`
       :'<div class="alert warning" style="margin-top:0"><span class="alert-icon">🔒</span><div><strong>Brouillon.</strong> Publie-le pour générer le lien à partager aux magiciens.</div></div>'}
@@ -4402,12 +4455,14 @@ function editBrief(pid){
     <button class="btn btn-ghost" onclick="apercuBrief('${pid}')">👁 Aperçu</button>
     <button class="btn btn-or" onclick="saveBrief('${pid}')">💾 Enregistrer</button>`;
   openModal('📋 Brief · '+esc(p.nom||''),body,foot);
+  briefAutoInit(pid);
 }
 /* Retire la page du web : le lien cesse immédiatement de fonctionner, le contenu est conservé */
 function depublierBrief(pid){
   const p=getP(pid); if(!p||!p.brief)return;
   if(!confirm('Retirer le brief du web ?\n\nLe lien déjà partagé cessera de fonctionner immédiatement.\nLe contenu est conservé : tu pourras le republier quand tu veux.')) return;
-  collecteBrief(pid); p.brief.publie=false; saveP(p);
+  collecteBrief(pid);
+  const px=getP(pid); px.brief.publie=false; saveP(px);   // relecture après collecte, sinon on réécrit une version périmée
   if(cloudUrl()) cloudPost({action:'putEntity',entity:'projets',rows:DB.all('projets')});
   logActivite('Brief dépublié · '+(p.nom||pid)); toast('🔒 Brief retiré du web','ok'); editBrief(pid);
 }
@@ -4498,6 +4553,7 @@ function apercuBrief(pid){
     .then(()=>window.open(url+(p.brief.code?('&c='+encodeURIComponent(p.brief.code)):'')+(_briefLang==='en'?'&lang=en':''),'_blank'));
 }
 function partagerBrief(pid){
+  briefAutoSave();                       // on ne perd pas ce qui vient d'être tapé
   const p=getP(pid), url=briefUrlPub(p); if(!url){ toast('Publie d\'abord le brief','err'); return; }
   const b=p.brief||{}, en=b.en||null, urlEn=en?(url+'&lang=en'):'';
   const msgFr=`🎩 *${b.titre||p.nom||'Brief équipe'}*\n${b.sousTitre||''}\n\nVoici le brief complet (à lire avant l'événement) :\n${url}\n`
