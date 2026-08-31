@@ -184,14 +184,18 @@ function writeJson($path,$val){ // écriture atomique (tmp + rename), jamais de 
   return true; }
 
 $raw = file_get_contents('php://input');
-$req = $raw ? json_decode($raw, true) : [];
+// Les pages publiques (code d'accès d'un brief, accusé de lecture, formulaire agence)
+// envoient un formulaire HTML classique : PHP l'a déjà décodé dans $_POST et le corps
+// n'est pas du JSON. Seules les requêtes du CRM transportent du JSON.
+$estFormulaire = !empty($_POST);
+$req = (!$estFormulaire && $raw !== '') ? json_decode($raw, true) : [];
 if (!is_array($req)) $req = [];
 $action = $_GET['action'] ?? ($req['action'] ?? '');
 $auth   = $_GET['auth']   ?? ($req['auth']   ?? '');   // sha256(mot de passe) envoyé par le CRM
 $token  = $_GET['token']  ?? ($req['token']  ?? '');   // legacy / Apps Script
 
-// Un corps illisible (POST tronqué, JSON invalide) ne doit JAMAIS passer pour un succès
-if ($raw !== '' && json_decode($raw, true) === null && json_last_error() !== JSON_ERROR_NONE) {
+// Un corps JSON illisible (POST tronqué, JSON invalide) ne doit JAMAIS passer pour un succès
+if (!$estFormulaire && $raw !== '' && json_decode($raw, true) === null && json_last_error() !== JSON_ERROR_NONE) {
   out(['ok'=>false, 'error'=>'corps de requête illisible (tronqué ou trop volumineux)']);
 }
 if ($action === '' && $raw === '' && empty($_GET)) out(['ok'=>true, 'msg'=>'CRM LouisMagie API (PHP) en ligne']);
