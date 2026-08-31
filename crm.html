@@ -457,6 +457,48 @@ const LOGO_B64="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAACgCAYAAACLz2
 /* ───── Couche données (abstraction) ───── */
 const ENTITIES = ['demandes','devis','prestations','factures','clients','relances','activite','mails','catalogue','recettes','declarations','planifs','templates','projets','magiciens','effets','segments','campagnes'];
 const LS_PREFIX = 'lm_crm_';
+/* ═══ Fusion multi-appareils ═══════════════════════════════════════════
+   Rien n'est jamais remplacé en bloc : chaque enregistrement est arbitré
+   par son updatedAt, et les suppressions sont tracées (sinon la fusion
+   les ressusciterait). Téléphone et ordinateur convergent sans perte. */
+const LS_DELS='lm_dels';
+function delsAll(){ try{ return JSON.parse(localStorage.getItem(LS_DELS))||{}; }catch(_){ return {}; } }
+function delsSave(m){ try{ localStorage.setItem(LS_DELS, JSON.stringify(delsPrune(m))); }catch(_){} }
+function delsPrune(m){ const lim=new Date(Date.now()-180*864e5).toISOString();
+  Object.keys(m||{}).forEach(e=>{ Object.keys(m[e]||{}).forEach(id=>{ if(m[e][id]<lim) delete m[e][id]; }); });
+  return m||{}; }
+function delsAdd(e,id){ const m=delsAll(); (m[e]=m[e]||{})[String(id)]=new Date().toISOString(); delsSave(m); }
+function delsFusion(a,b){ const r=JSON.parse(JSON.stringify(a||{}));
+  Object.keys(b||{}).forEach(e=>{ r[e]=r[e]||{};
+    Object.keys(b[e]||{}).forEach(id=>{ if(!r[e][id]||b[e][id]>r[e][id]) r[e][id]=b[e][id]; }); });
+  return delsPrune(r); }
+/* Seul updatedAt arbitre : `date` est une date métier (échéance, envoi prévu),
+   pas une date de modification — s'en servir inverserait des conflits. */
+function rowTs(r){ return String((r&&r.updatedAt)||''); }
+/* Fusionne deux listes : à id égal, la version la plus récente gagne ;
+   une ligne absente d'un côté est conservée ; une suppression tracée
+   l'emporte sauf si la ligne a été réécrite après. */
+function fusionRows(locales, distantes, dels){
+  const map=new Map();
+  (distantes||[]).forEach(r=>{ if(r&&r.id!=null) map.set(String(r.id), r); });
+  (locales||[]).forEach(r=>{ if(!r||r.id==null) return; const k=String(r.id), d=map.get(k);
+    if(!d){ map.set(k,r); return; }
+    const tl=rowTs(r), td=rowTs(d);
+    if(tl && (!td || tl>td)) map.set(k,r);          // égalité → on garde le distant (convergence stable)
+  });
+  const del=dels||{}, out=[];
+  map.forEach((r,k)=>{ const t=del[k]; if(t && !(rowTs(r)>t)) return; out.push(r); });
+  return out;
+}
+/* Le journal d'activité n'est pas un référentiel : on garde les plus récents */
+function capActivite(rows){ return rows.sort((a,b)=>String(b.date||'').localeCompare(String(a.date||''))).slice(0,300); }
+/* Le serveur a-t-il besoin de recevoir notre version ? (lignes en plus ou plus récentes) */
+function rowsDiffer(distantes, fusion){
+  if(!Array.isArray(distantes) || distantes.length!==fusion.length) return true;
+  const m=new Map(); distantes.forEach(r=>{ if(r&&r.id!=null) m.set(String(r.id), rowTs(r)); });
+  return fusion.some(r=>!m.has(String(r.id)) || m.get(String(r.id))!==rowTs(r));
+}
+
 const DB = {
   all(e){ try{ return JSON.parse(localStorage.getItem(LS_PREFIX+e)) || []; }catch(_){ return []; } },
   _writeLocal(e,arr){ try{ localStorage.setItem(LS_PREFIX+e, JSON.stringify(arr)); }
@@ -464,9 +506,11 @@ const DB = {
       console.error('localStorage plein',e,err); throw err; } },     // local seul (utilisé par la sync descendante)
   _write(e,arr){ DB._writeLocal(e,arr); if(typeof cloudQueueEntity==='function') cloudQueueEntity(e); }, // local + push cloud
   get(e,id){ return DB.all(e).find(x=>x.id===id) || null; },
-  save(e,obj){ const arr=DB.all(e); const i=arr.findIndex(x=>x.id===obj.id);
+  save(e,obj){ obj.updatedAt=new Date().toISOString();    // horodatage : arbitre la fusion entre appareils
+    const arr=DB.all(e); const i=arr.findIndex(x=>x.id===obj.id);
     if(i>=0) arr[i]=obj; else arr.push(obj); DB._write(e,arr); return obj; },
-  remove(e,id){ DB._write(e, DB.all(e).filter(x=>x.id!==id)); },
+  remove(e,id){ delsAdd(e,id);                            // trace la suppression, sinon la fusion la ressuscite
+    DB._write(e, DB.all(e).filter(x=>x.id!==id)); },
   config(){ try{ return JSON.parse(localStorage.getItem(LS_PREFIX+'config')) || {}; }catch(_){ return {}; } },
   saveConfig(c){ localStorage.setItem(LS_PREFIX+'config', JSON.stringify(c)); if(typeof cloudQueueConfig==='function') cloudQueueConfig(); },
 };
@@ -3830,8 +3874,38 @@ let _cloudTimers={};
 function setCloudStatus(s){ const el=document.getElementById('cloud-dot'); if(!el)return;
   const map={off:['#5A5650','Cloud non configuré'],sync:['#E8A13A','Synchronisation…'],ok:['#3FB97A','Synchronisé avec Google'],err:['#E5564B','Erreur de synchro — réessaie']};
   const m=map[s]||map.off; el.style.background=m[0]; el.title=m[1]; el.dataset.s=s; }
-function cloudQueueEntity(entity){ if(!cloudUrl())return; clearTimeout(_cloudTimers[entity]);
-  _cloudTimers[entity]=setTimeout(()=>cloudPost({action:'putEntity',entity,rows:DB.all(entity)}),1500); }
+const LS_PEND='lm_pending';
+function pendAll(){ try{ return JSON.parse(localStorage.getItem(LS_PEND))||[]; }catch(_){ return []; } }
+function pendSet(a){ try{ localStorage.setItem(LS_PEND, JSON.stringify([...new Set(a)])); }catch(_){} }
+function pendAdd(e){ const a=pendAll(); if(a.indexOf(e)<0){ a.push(e); pendSet(a); } majPendState(); }
+function pendDel(e){ pendSet(pendAll().filter(x=>x!==e)); majPendState(); }
+function majPendState(){ const el=document.getElementById('cloud-dot'); if(!el)return;
+  const n=pendAll().length;
+  if(n && el.dataset.s!=='sync'){ el.style.background='#E8A13A'; el.title=n+' modification(s) en attente d\'envoi — clique pour synchroniser'; } }
+/* Rejoue tout ce qui n'a pas pu partir (retour du réseau, retour sur l'app) */
+function cloudFlushPending(){ const a=pendAll(); if(!a.length||!cloudUrl()) return Promise.resolve();
+  return Promise.all(a.map(e=>cloudPushEntity(e))); }
+window.addEventListener('online',()=>{ cloudFlushPending(); });
+
+function cloudQueueEntity(entity){ if(!cloudUrl())return; pendAdd(entity);   // marqué avant l'envoi : une fermeture en plein vol ne perd rien
+  clearTimeout(_cloudTimers[entity]);
+  _cloudTimers[entity]=setTimeout(()=>cloudPushEntity(entity),1500); }
+/* Envoi d'une entité : le serveur fusionne et renvoie le résultat, qu'on
+   refusionne en local (une frappe pendant l'aller-retour n'est pas perdue). */
+function cloudPushEntity(entity){
+  const dels=delsAll()[entity]||{};
+  return cloudPost({action:'putEntity',entity,rows:DB.all(entity),dels})
+    .then(j=>{ if(j&&j.ok){
+        pendDel(entity);
+        if(Array.isArray(j.rows)){
+          let m=fusionRows(DB.all(entity), j.rows, delsAll()[entity]);
+          if(entity==='activite') m=capActivite(m);
+          DB._writeLocal(entity,m);
+        }
+      } else pendAdd(entity);                      // échec → on retentera
+      return j; })
+    .catch(err=>{ pendAdd(entity); return {ok:false}; });
+}
 function cloudQueueConfig(){ if(!cloudUrl())return; clearTimeout(_cloudTimers._cfg);
   _cloudTimers._cfg=setTimeout(()=>cloudPost({action:'putConfig',config:DB.config()}),1500); }
 function cloudAuth(){ return sessionStorage.getItem('lm_authh')||localStorage.getItem('lm_authh')||''; }
@@ -3840,7 +3914,8 @@ function cloudPost(payload){ const url=cloudUrl(); if(!url) return Promise.resol
   return fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload)})
     .then(r=>r.json()).then(j=>{ setCloudStatus(j&&j.ok?'ok':'err'); return j; })
     .catch(()=>{ setCloudStatus('err'); return {ok:false}; }); }
-function cloudPushAll(){ if(!cloudUrl())return; ENTITIES.forEach(e=>cloudPost({action:'putEntity',entity:e,rows:DB.all(e)})); cloudPost({action:'putConfig',config:DB.config()}); toast('Envoi de toutes les données vers Google…','ok'); }
+function cloudPushAll(){ if(!cloudUrl())return; ENTITIES.forEach(e=>cloudPushEntity(e));
+  cloudPost({action:'putConfig',config:DB.config()}); toast('Envoi de toutes les données vers le serveur…','ok'); }
 async function cloudPull(){ const url=cloudUrl(); if(!url){ setCloudStatus('off'); return 'off'; }
   setCloudStatus('sync');
   try{ const r=await fetch(url+'?action=getAll&auth='+encodeURIComponent(cloudAuth())+'&token='+encodeURIComponent(DB.config().backendToken||'')); const j=await r.json();
@@ -3851,9 +3926,21 @@ async function cloudPull(){ const url=cloudUrl(); if(!url){ setCloudStatus('off'
       // serveur vide mais pas neuf (fichiers corrompus/absents après deploy) → ne rien écraser, alerter
       setCloudStatus('err'); toast('⚠️ Serveur vide alors qu\'il ne devrait pas l\'être — synchro suspendue pour protéger tes données. Vérifie le stockage du serveur.','err'); return 'empty-guard';
     }
-    ENTITIES.forEach(e=>{ if(Array.isArray(j.data[e])) DB._writeLocal(e,j.data[e]); });  // adopte le cloud (local-only, pas de re-push)
+    // Fusion par enregistrement : on n'écrase JAMAIS le local en bloc.
+    const dels=delsFusion(delsAll(), j.dels||{}); delsSave(dels);
+    const aRepublier=[];
+    ENTITIES.forEach(e=>{
+      const dist=j.data[e]; if(!Array.isArray(dist)) return;
+      let m=fusionRows(DB.all(e), dist, dels[e]);
+      if(e==='activite') m=capActivite(m);
+      DB._writeLocal(e,m);                               // local seul : le re-push est décidé juste après
+      if(rowsDiffer(dist,m)) aRepublier.push(e);         // le serveur ignore des lignes d'ici → on les lui rend
+    });
+    aRepublier.forEach(e=>cloudQueueEntity(e));
     if(Array.isArray(j.signatures)) applySignatures(j.signatures);   // ré-applique le journal de signatures (anti-perte)
-    if(j.config&&Object.keys(j.config).length){ const cur=DB.config(); localStorage.setItem(LS_PREFIX+'config', JSON.stringify(Object.assign({},j.config,{passwordHash:j.config.passwordHash||cur.passwordHash}))); }  // priorité au hash serveur (mdp changé ailleurs)
+    if(j.config&&Object.keys(j.config).length){ const cur=DB.config();
+      // fusion : le serveur arbitre les clés qu'il connaît, les réglages locaux inédits survivent
+      localStorage.setItem(LS_PREFIX+'config', JSON.stringify(Object.assign({},cur,j.config,{passwordHash:j.config.passwordHash||cur.passwordHash}))); }
     try{ if(Array.isArray(j.opens)) localStorage.setItem('lm_opens', JSON.stringify(j.opens.map(o=>o.m))); }catch(_){}
     setCloudStatus('ok'); return 'pulled';
   }catch(_){ setCloudStatus('err'); return 'err'; } }
@@ -3870,7 +3957,7 @@ async function saveBackend(){            // sauve les réglages + POUSSE vers le
   if(_currentView==='reglages') RENDERERS.reglages();
 }
 async function cloudSyncNow(){ const res=await cloudPull(); if(typeof RENDERERS[_currentView]==='function') RENDERERS[_currentView](currentParams); updateBadges();
-  toast(res==='pulled'?'Données récupérées depuis Google':(res==='init'?'Cloud initialisé depuis ce CRM':(res==='off'?'Configure d\'abord l\'URL':'Échec — vérifie l\'URL')), res==='err'?'err':'ok'); }
+  toast(res==='pulled'?'✅ Appareils synchronisés (fusion, aucune perte)':(res==='init'?'Serveur initialisé depuis ce CRM':(res==='off'?'Configure d\'abord l\'URL':'Échec — vérifie la connexion')), res==='err'?'err':'ok'); }
 
 /* ───── Boot ───── */
 /* ═══════════════════════════════════════════════════════════
@@ -4207,12 +4294,26 @@ function briefFlushCloud(){
   try{
     const url=(typeof cloudUrl==='function')?cloudUrl():''; if(!url||!navigator.sendBeacon) return;
     const payload=JSON.stringify({action:'putEntity',entity:'projets',rows:DB.all('projets'),
-      token:DB.config().backendToken||'', auth:cloudAuth()});
+      dels:delsAll().projets||{}, token:DB.config().backendToken||'', auth:cloudAuth()});
     navigator.sendBeacon(url, new Blob([payload],{type:'text/plain;charset=utf-8'}));
   }catch(_){}
 }
 function briefSortie(){ if(briefAutoSave()) briefFlushCloud(); }
-document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='hidden') briefSortie(); });
+let _dernierPull=Date.now();
+/* Retour sur l'application (déverrouillage du téléphone, changement d'onglet) :
+   on pousse ce qui n'était pas parti, puis on récupère le travail des autres appareils. */
+async function cloudReprise(){
+  if(!cloudUrl()||!cloudAuth()) return;
+  await cloudFlushPending();
+  if(Date.now()-_dernierPull < 60000) return;
+  _dernierPull=Date.now();
+  const r=await cloudPull();
+  if(r==='pulled'&&typeof RENDERERS[_currentView]==='function'){ RENDERERS[_currentView](currentParams); updateBadges(); }
+}
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='hidden') briefSortie();
+  else cloudReprise();
+});
 window.addEventListener('pagehide',briefSortie);
 window.addEventListener('beforeunload',briefSortie);
 
