@@ -4049,6 +4049,131 @@ function facturerProjet(pid){
 }
 
 /* ═══════ BRIEF D'ÉQUIPE — page privée générée depuis le projet ═══════ */
+let _briefLang='fr';
+/* Version éditée : le français est la base, l'anglais vit dans brief.en (mêmes champs) */
+function briefVer(p){ if(!p||!p.brief) return null; return _briefLang==='en' ? (p.brief.en||null) : p.brief; }
+/* Version anglaise : reconstruite depuis les données du projet (pas une traduction des chaînes FR) */
+function genererBriefEN(pid){
+  const p=getP(pid); if(!p||!p.brief) return;
+  const b=p.brief, cfg=DB.config(), lo=p.logistique||{};
+  const eq=p.equipe||[], nb=eq.length||(+p.nbMagiciensCible||0);
+  const mail=cfg.emailLouis||'contact@louismagie.fr';
+  const roleEN={'Serveur':'Waiter','Serveuse':'Waitress','Hôte d\'accueil':'Host','Hôtesse d\'accueil':'Host',
+    'Invité':'Guest','Barman':'Bartender','Vestiaire':'Cloakroom','Photographe':'Photographer',
+    'Technicien':'Technician','Sécurité':'Security','Autre':'Other'};
+  const rEN=r=>roleEN[r]||r;
+  const dEN=d=>d?new Date(d).toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'}):'';
+
+  const sousTitre=[p.typeEvenement||'', p.nbInvites?('~'+p.nbInvites+' guests'):'', p.lieu||'',
+    p.date?new Date(p.date).toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'}):'',
+    p.dureePresta||'', nb?(nb+(nb>1?' magicians':' magician')):''].filter(Boolean).join(' · ');
+
+  // Effets par rôle : mêmes effets, rôles traduits
+  const roles=(b.roles||[]).map(r=>({nom:rEN(r.nom), effets:(r.effets||[]).slice()}));
+
+  const pratique=[
+    {k:'Venue',v:p.lieu?('**'+p.lieu+'**'):''},
+    {k:'Date & time',v:[p.date?('**'+dEN(p.date)+'**'):'',p.dureePresta||''].filter(Boolean).join(' · ')},
+    {k:'Arrival',v:'We all meet **well before** the start, for the preparation briefing.'},
+    {k:'Dress code',v:p.costume||'To be confirmed.'},
+    {k:'Travel',v:lo.transport||''},
+    {k:'Accommodation',v:lo.hebergement||''},
+    {k:'Meals',v:lo.repas||''},
+    {k:'Invoicing',v:p.agence?('Invoice **'+p.agence+'** and send it to me at **'+mail+'** or on WhatsApp.'):''},
+    {k:'Contact',v:'**Louis** — your single point of contact · WhatsApp · '+mail},
+  ].filter(x=>x.v);
+
+  // Déroulé : même logique que le français, libellés anglais
+  const planAg=(p.planningAgence||'').trim();
+  const hm=(p.dureePresta||'').match(/(\d{1,2})\s*h\s*(\d{2})?\s*[-–àa>]+\s*(\d{1,2})\s*h\s*(\d{2})?/i);
+  const fmtH=(h,m)=>String(h).padStart(2,'0')+':'+(m||'00');
+  let deroule;
+  if(hm){
+    const debut=+hm[1], fin=+hm[3];
+    deroule=[{h:fmtH(debut-4,hm[2]),quoi:'**Arrival on site** — we all meet up'},
+             {h:fmtH(debut-3,hm[2]),quoi:'Set-up, walk-through of the venue, gear check'},
+             {h:fmtH(debut-2,hm[2]),quoi:'**Team briefing** + dinner together'},
+             {h:fmtH(debut,hm[2]),quoi:'**Walkabout starts**'},
+             {h:fmtH(fin,hm[4]),quoi:'**End of performance** — we regroup before leaving'}];
+  } else if(planAg){
+    deroule=(b.deroule||[]).map(d=>({h:d.h,quoi:d.quoi}));   // planning fourni par l'agence : on ne le traduit pas
+  } else {
+    deroule=[{h:'—',quoi:'**Arrival on site** — we all meet up (time to be confirmed)'},
+             {h:'—',quoi:'**Team briefing** + dinner together'},
+             {h:'—',quoi:'**Walkabout starts**'},
+             {h:'—',quoi:'**End of performance**'}];
+  }
+
+  const consoMag=(p.consommables||[]).concat(p.equipement||[]).filter(x=>x.par==='Magiciens').map(x=>x.label).filter(Boolean);
+  const checklist=[
+    p.costume&&/magicien/i.test(p.costume)?('Outfit: '+p.costume):(p.costume?('Outfit ('+p.costume+') — check before leaving'):'Outfit'),
+    'Your own gear (see your mission sheet)',
+    ...consoMag.map(x=>x+' (on you)'),
+    'Spare refills / consumables',
+    'Charged phone + power bank',
+    /maroc|marrakech|turquie|antalya|dubai|étranger/i.test((p.lieu||'')+' '+(p.notes||''))?'Valid passport':'',
+    'This brief link at hand',
+  ].filter(Boolean);
+
+  const contacts=(b.contacts||[]).map(c=>({role:c.role==='Chef de projet'?'Project manager':(c.role==='Agence'?'Agency':c.role),nom:c.nom,tel:c.tel}));
+  const anc=b.en||{};   // on garde ce que Louis a déjà retouché en anglais
+  b.en={
+    eyebrow:anc.eyebrow||'LouisMagie · Team brief',
+    titre:anc.titre||b.titre||'Imagine the Impossible',
+    sousTitre:anc.sousTitre||sousTitre,
+    catEsprit:anc.catEsprit||'Part one · The mindset',
+    catMenu:anc.catMenu||'Part two · The menu of illusions',
+    catPratique:anc.catPratique||'Part three · Practical details',
+    concept:anc.concept||("We are "+(nb||'several')+(nb===1?' magician':' magicians')+" walking the room. Magic that is never announced. We slip into **characters of the event** (waiter, host, guest…) and we trigger **« glitches in reality »** lasting a few seconds — an everyday object that defies physics for an instant — then we melt back into the crowd."),
+    sections:anc.sections||[
+      {titre:"Tonight is not classic close-up",
+       texte:"Forget your usual set: **no crowd management, no group build-up, no multi-phase routine.** We are **undercover magic-makers**, characters hidden among the guests."},
+      {titre:"The principle: your opener, as a surprise",
+       texte:"Think of the opening effect you use in close-up: **one trick, visual, instant**, that catches everyone. Not a routine — a single moment.",
+       quote:"« Wait… what was that? Who is he? A magician? Did I imagine it? »",
+       texte2:"That is exactly the reaction we are after."},
+      {titre:"The golden rule: hit, then leave",
+       texte:"The hard part will not be the trick. It will be **walking away right after.** No encore, no second effect for the same group. A word or two — and you are gone.",
+       calloutBig:'20 seconds max', calloutSmall:"per interaction · from 2-3 seconds to 20 seconds absolute maximum. Short, sharp, gone."},
+      {titre:"The goal: coverage",
+       texte:"We are a **big team.** The point is not for a few of us to do a lot, but to **reach as many people as possible** across the whole event. We want it to travel: « did you see that? what was that? »."},
+      {titre:"Your role",
+       texte:"Each of you has **a character** and **your own effects** (see the menu below). Stay in character, hit, walk away.",
+       do:["One effect, visual, that surprises","Stay in character","Hit and leave","Cover as many groups as possible"],
+       dont:["Chaining tricks, doing a routine","Letting the interaction drag","Breaking character / getting burnt","Repeating the same trick to the same group"]},
+    ],
+    menuIntro:anc.menuIntro||"Pick the effects you master best. Roles are confirmed a few days before, based on your comfort and your suggestions. I can provide gear if you need it.",
+    roles:anc.roles||roles,
+    menuNote:anc.menuNote||"**Any extra illusion idea is welcome** — send me yours. And if you have a **speciality** (FI, productions, fire…), let me know early.",
+    pratique:anc.pratique||pratique,
+    deroule:anc.deroule||deroule,
+    zonesIntro:anc.zonesIntro||"We are many: each of us covers a zone so the whole event is reached without crossing paths. We rotate during the night if needed.",
+    zones:anc.zones||(b.zones||[]).map(z=>({nom:z.nom,qui:z.qui})),
+    contacts:anc.contacts||contacts,
+    checklist:anc.checklist||checklist,
+    equipe:anc.equipe||(eq.length?eq.map(m=>magNom(m.magicienId)+(m.role?(' · '+rEN(m.role)):'')):(b.equipe||[])),
+    accuse:b.accuse!==false,
+    cloture:anc.cloture||"The trick is the easy part.\n**The discipline is knowing when to stop.**",
+    contact:anc.contact||"Any question, message me directly on WhatsApp — don't hesitate.",
+    waLouis:b.waLouis||cfg.entrepriseTel||'',
+    updatedAt:new Date().toISOString(),
+  };
+  saveP(p);
+  logActivite('Version anglaise du brief générée · '+(p.nom||pid));
+  toast('🇬🇧 Version anglaise prête — relis et ajuste si besoin','ok');
+  _briefLang='en'; editBrief(pid);
+}
+function briefLangue(pid,lang){
+  collecteBrief(pid);
+  const p=getP(pid);
+  if(lang==='en'&&!(p.brief&&p.brief.en)){ genererBriefEN(pid); return; }
+  _briefLang=lang; editBrief(pid);
+}
+function supprimerBriefEN(pid){
+  if(!confirm('Supprimer la version anglaise ?')) return;
+  const p=getP(pid); if(p&&p.brief){ delete p.brief.en; saveP(p); }
+  _briefLang='fr'; toast('Version anglaise supprimée','ok'); editBrief(pid);
+}
 function briefUrlPub(p){ const base=cloudUrl(); const b=p.brief||{};
   return (base&&b.token) ? base+'?action=brief&id='+encodeURIComponent(p.id)+'&k='+encodeURIComponent(b.token) : ''; }
 /* Pré-remplit tout ce qui est déductible du projet : dates, lieu, équipe, effets par rôle, costume, logistique, facturation */
@@ -4161,6 +4286,7 @@ function genererBrief(pid,silencieux){
     waLouis: b.waLouis||cfg.entrepriseTel||'',
     updatedAt: new Date().toISOString(),
   };
+  if(b.en) nouveau.en=b.en;          // la version anglaise survit à une régénération du français
   p.brief=nouveau; saveP(p);
   if(!silencieux){ logActivite('Brief généré · '+(p.nom||pid)); toast('📋 Brief pré-rempli depuis le projet','ok'); editBrief(pid); }
   return nouveau;
@@ -4169,7 +4295,8 @@ function genererBrief(pid,silencieux){
 function editBrief(pid){
   const p=getP(pid); if(!p)return;
   if(!p.brief){ genererBrief(pid,true); return editBrief(pid); }
-  const b=p.brief, url=briefUrlPub(p);
+  if(_briefLang==='en'&&!p.brief.en) _briefLang='fr';
+  const racine=p.brief, b=briefVer(p)||racine, url=briefUrlPub(p), en=_briefLang==='en';
   const ta=(id,val,h)=>`<textarea class="form-control" id="${id}" style="min-height:${h||60}px">${esc(val||'')}</textarea>`;
   const secs=(b.sections||[]).map((s,i)=>`<div style="border:1px solid var(--anthr);border-radius:var(--rsm);padding:12px;margin-bottom:10px">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px">
@@ -4197,11 +4324,18 @@ function editBrief(pid){
       <input class="form-control" id="br-p${i}-v" value="${esc(it.v||'')}" placeholder="Valeur (**gras** possible)">
       <button class="qa" onclick="brPratDel('${pid}',${i})">✕</button></div>`).join('');
   const body=`
-    ${b.publie&&url?`<div class="alert success" style="margin-top:0"><span class="alert-icon">🌐</span><div><strong>Brief en ligne.</strong> <a href="${esc(url)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">Ouvrir la page</a>${b.code?(' · Code : <strong>'+esc(b.code)+'</strong>'):' · sans code'}</div></div>`
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+      <button class="btn ${en?'btn-ghost':'btn-or'} btn-sm" onclick="briefLangue('${pid}','fr')">🇫🇷 Français</button>
+      <button class="btn ${en?'btn-or':'btn-ghost'} btn-sm" onclick="briefLangue('${pid}','en')">🇬🇧 English${racine.en?'':' · à générer'}</button>
+      ${en?`<button class="btn btn-ghost btn-sm" onclick="genererBriefEN('${pid}')">🔄 Re-traduire depuis le français</button>
+           <button class="btn btn-ghost btn-sm" onclick="supprimerBriefEN('${pid}')">🗑 Retirer l'anglais</button>`:''}
+      <span class="td-dim" style="font-size:11px;margin-left:auto">${racine.en?'Les magiciens choisissent leur langue sur la page.':'Publication en français uniquement.'}</span>
+    </div>
+    ${racine.publie&&url?`<div class="alert success" style="margin-top:0"><span class="alert-icon">🌐</span><div><strong>Brief en ligne.</strong> <a href="${esc(url)}${en?'&lang=en':''}" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">Ouvrir la page${en?' (EN)':''}</a>${racine.code?(' · Code : <strong>'+esc(racine.code)+'</strong>'):' · sans code'}</div></div>`
       :'<div class="alert warning" style="margin-top:0"><span class="alert-icon">🔒</span><div><strong>Brouillon.</strong> Publie-le pour générer le lien à partager aux magiciens.</div></div>'}
     <div class="form-grid">
       <div class="form-group"><label class="form-label">Titre</label><input class="form-control" id="br-titre" value="${esc(b.titre||'')}"></div>
-      <div class="form-group"><label class="form-label">Code d'accès <span class="td-dim">(vide = sans code)</span></label><input class="form-control" id="br-code" value="${esc(b.code||'')}"></div>
+      <div class="form-group"><label class="form-label">Code d'accès <span class="td-dim">(vide = sans code)</span></label><input class="form-control" id="br-code" value="${esc(racine.code||'')}"${en?' disabled title="Réglage commun aux deux langues"':''}></div>
     </div>
     <div class="form-group"><label class="form-label">Sous-titre <span class="td-dim">(lieu, date, horaires, effectif)</span></label><input class="form-control" id="br-sousTitre" value="${esc(b.sousTitre||'')}"></div>
     <div class="form-group"><label class="form-label">Le concept</label>${ta('br-concept',b.concept,80)}</div>
@@ -4260,11 +4394,11 @@ function editBrief(pid){
     <div class="form-group" style="margin-top:18px"><label class="form-label">Mot de la fin</label>${ta('br-cloture',b.cloture,55)}</div>
     <div class="form-group"><label class="form-label">Contact</label>${ta('br-contact',b.contact,50)}</div>
     <div class="form-group"><label class="form-label">Mon numéro WhatsApp <span class="td-dim">(bouton en bas du brief)</span></label><input class="form-control" id="br-waLouis" value="${esc(b.waLouis||'')}"></div>
-    <label style="display:flex;align-items:center;gap:9px;margin-top:10px;font-size:14px;cursor:pointer"><input type="checkbox" id="br-publie" ${b.publie?'checked':''} style="width:18px;height:18px">Publier le brief <span class="td-dim">(accessible via le lien privé)</span></label>`;
+    <label style="display:flex;align-items:center;gap:9px;margin-top:10px;font-size:14px;cursor:pointer"><input type="checkbox" id="br-publie" ${racine.publie?'checked':''} ${en?'disabled':''} style="width:18px;height:18px">Publier le brief <span class="td-dim">(accessible via le lien privé)</span></label>`;
   const foot=`<button class="btn btn-danger" onclick="supprimerBrief('${pid}')">🗑 Supprimer</button>
-    ${b.publie?`<button class="btn btn-warn" onclick="depublierBrief('${pid}')">🔒 Dépublier</button>`:''}
+    ${racine.publie?`<button class="btn btn-warn" onclick="depublierBrief('${pid}')">🔒 Dépublier</button>`:''}
     <button class="btn btn-ghost" onclick="RENDERERS.projet({id:'${pid}'});closeModal()">Fermer</button>
-    ${url&&b.publie?`<button class="btn btn-ghost" onclick="partagerBrief('${pid}')">📤 Partager</button>`:''}
+    ${url&&racine.publie?`<button class="btn btn-ghost" onclick="partagerBrief('${pid}')">📤 Partager</button>`:''}
     <button class="btn btn-ghost" onclick="apercuBrief('${pid}')">👁 Aperçu</button>
     <button class="btn btn-or" onclick="saveBrief('${pid}')">💾 Enregistrer</button>`;
   openModal('📋 Brief · '+esc(p.nom||''),body,foot);
@@ -4287,12 +4421,14 @@ function supprimerBrief(pid){
   closeModal(); RENDERERS.projet({id:pid}); toast('🗑 Brief supprimé','ok');
 }
 function collecteBrief(pid){
-  const p=getP(pid); const b=p.brief||{}; const g=id=>((document.getElementById(id)||{}).value||'');
-  b.titre=g('br-titre').trim(); b.code=g('br-code').trim(); b.sousTitre=g('br-sousTitre').trim();
+  const p=getP(pid); const racine=p.brief||{}; const b=(_briefLang==='en'&&racine.en)?racine.en:racine;
+  const g=id=>((document.getElementById(id)||{}).value||'');
+  b.titre=g('br-titre').trim(); b.sousTitre=g('br-sousTitre').trim();
+  if(b===racine) b.code=g('br-code').trim();          // code et publication : réglages communs
   b.concept=g('br-concept'); b.menuIntro=g('br-menuIntro'); b.menuNote=g('br-menuNote');
   b.cloture=g('br-cloture'); b.contact=g('br-contact'); b.waLouis=g('br-waLouis').trim();
-  b.publie=!!(document.getElementById('br-publie')||{}).checked;
-  if(!b.token) b.token=genToken();
+  if(b===racine) b.publie=!!(document.getElementById('br-publie')||{}).checked;
+  if(!racine.token) racine.token=genToken();
   (b.sections||[]).forEach((s,i)=>{ if(!document.getElementById('br-s'+i+'-titre'))return;
     s.titre=g('br-s'+i+'-titre'); s.texte=g('br-s'+i+'-texte'); s.quote=g('br-s'+i+'-quote');
     s.calloutBig=g('br-s'+i+'-cb'); s.calloutSmall=g('br-s'+i+'-cs');
@@ -4308,12 +4444,16 @@ function collecteBrief(pid){
   if(document.getElementById('br-checklist')) b.checklist=g('br-checklist').split('\n').map(x=>x.trim()).filter(Boolean);
   if(document.getElementById('br-zonesIntro')) b.zonesIntro=g('br-zonesIntro');
   if(document.getElementById('br-accuse')) b.accuse=!!document.getElementById('br-accuse').checked;
-  b.updatedAt=new Date().toISOString(); p.brief=b; saveP(p); return b;
+  b.updatedAt=new Date().toISOString();
+  if(b===racine) p.brief=b; else p.brief.en=b;
+  saveP(p); return b;
 }
 function saveBrief(pid){ const b=collecteBrief(pid);
   if(cloudUrl()) cloudPost({action:'putEntity',entity:'projets',rows:DB.all('projets')});   // publication immédiate
   toast(b.publie?'💾 Brief enregistré et publié':'💾 Brief enregistré (brouillon)','ok'); editBrief(pid); }
-function brSave(pid,b){ const p=getP(pid); if(p){ p.brief=b; saveP(p); } return b; }
+function brSave(pid,b){ const p=getP(pid); if(!p) return b;
+  if(_briefLang==='en'&&p.brief&&p.brief.en) p.brief.en=b; else p.brief=b;
+  saveP(p); return b; }
 function brSecAdd(pid){ const b=collecteBrief(pid); b.sections=b.sections||[]; b.sections.push({titre:'Nouvelle section',texte:''}); brSave(pid,b); editBrief(pid); }
 function brSecDel(pid,i){ const b=collecteBrief(pid); b.sections.splice(i,1); brSave(pid,b); editBrief(pid); }
 function brSecMove(pid,i,d){ const b=collecteBrief(pid); const j=i+d; if(j<0||j>=b.sections.length)return;
@@ -4355,25 +4495,35 @@ function apercuBrief(pid){
   if(!url){ toast('Backend non configuré','err'); return; }
   if(!p.brief.publie){ toast('Coche « Publier » puis Enregistrer pour voir la page','err'); return; }
   if(cloudUrl()) cloudPost({action:'putEntity',entity:'projets',rows:DB.all('projets')})
-    .then(()=>window.open(url+(p.brief.code?('&c='+encodeURIComponent(p.brief.code)):''),'_blank'));
+    .then(()=>window.open(url+(p.brief.code?('&c='+encodeURIComponent(p.brief.code)):'')+(_briefLang==='en'?'&lang=en':''),'_blank'));
 }
 function partagerBrief(pid){
   const p=getP(pid), url=briefUrlPub(p); if(!url){ toast('Publie d\'abord le brief','err'); return; }
-  const b=p.brief||{};
-  const msg=`🎩 *${b.titre||p.nom||'Brief équipe'}*\n${b.sousTitre||''}\n\nVoici le brief complet (à lire avant l'événement) :\n${url}\n`
+  const b=p.brief||{}, en=b.en||null, urlEn=en?(url+'&lang=en'):'';
+  const msgFr=`🎩 *${b.titre||p.nom||'Brief équipe'}*\n${b.sousTitre||''}\n\nVoici le brief complet (à lire avant l'événement) :\n${url}\n`
     +(b.code?`\n🔐 Code d'accès : *${b.code}*\n`:'')
     +`\nDes questions ? Écris-moi.\nLouis`;
+  const msgEn=en?(`🎩 *${en.titre||b.titre||p.nom||'Team brief'}*\n${en.sousTitre||''}\n\nHere is the full brief — please read it before the event:\n${urlEn}\n`
+    +(b.code?`\n🔐 Access code: *${b.code}*\n`:'')
+    +`\nAny question, just message me.\nLouis`):'';
+  window._briefMsg=msgFr; window._briefMsgEn=msgEn;
   const eq=(p.equipe||[]).filter(m=>(DB.get('magiciens',m.magicienId)||{}).tel);
-  const liste=eq.map(m=>`<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--anthr)">
-      <span style="flex:1">${esc(magNom(m.magicienId))}</span>
-      <button class="btn btn-success btn-sm" onclick="waOpen('${esc((DB.get('magiciens',m.magicienId)||{}).tel)}',window._briefMsg)">💬 Envoyer</button></div>`).join('')
+  const liste=eq.map(m=>{ const mg=DB.get('magiciens',m.magicienId)||{}; const tel=esc(mg.tel);
+    const boutons = en
+      ? `<button class="btn btn-success btn-sm" onclick="waOpen('${tel}',window._briefMsg)">💬 FR</button>
+         <button class="btn btn-success btn-sm" onclick="waOpen('${tel}',window._briefMsgEn)">💬 EN</button>`
+      : `<button class="btn btn-success btn-sm" onclick="waOpen('${tel}',window._briefMsg)">💬 Envoyer</button>`;
+    return `<div style="display:flex;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid var(--anthr)">
+      <span style="flex:1">${esc(magNom(m.magicienId))}</span>${boutons}</div>`; }).join('')
     ||'<div class="td-dim">Aucun magicien avec un numéro enregistré.</div>';
-  window._briefMsg=msg;
   openModal('📤 Partager le brief',
-    `<div class="form-group"><label class="form-label">Lien privé</label><input class="form-control" readonly value="${esc(url)}" onclick="this.select()"></div>
+    `<div class="form-group"><label class="form-label">Lien privé${en?' · français 🇫🇷':''}</label><input class="form-control" readonly value="${esc(url)}" onclick="this.select()"></div>
+     ${en?`<div class="form-group"><label class="form-label">Private link · English 🇬🇧</label><input class="form-control" readonly value="${esc(urlEn)}" onclick="this.select()"></div>
+       <div class="alert" style="margin-bottom:14px"><span class="alert-icon">🌐</span><div>Les deux versions sont sur la même page : le magicien peut aussi basculer FR/EN en haut du brief.</div></div>`:''}
      ${b.code?`<div class="form-group"><label class="form-label">Code d'accès</label><input class="form-control" readonly value="${esc(b.code)}" onclick="this.select()"></div>`:''}
      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
-       <button class="btn btn-or" onclick="copierTexte(window._briefMsg,'Message copié')">📋 Copier le message</button>
+       <button class="btn btn-or" onclick="copierTexte(window._briefMsg,'Message copié')">📋 Copier le message${en?' (FR)':''}</button>
+       ${en?'<button class="btn btn-ghost" onclick="copierTexte(window._briefMsgEn,\'English message copied\')">📋 Copy message (EN)</button>':''}
        <a class="btn btn-ghost" href="${esc(url)}" target="_blank" rel="noopener">👁 Ouvrir la page</a></div>
      <div class="panel-title" style="font-size:13px">Envoyer à l'équipe</div>${liste}`,
     '<button class="btn btn-ghost" onclick="editBrief(\''+pid+'\')">← Retour</button>');

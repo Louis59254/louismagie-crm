@@ -171,8 +171,8 @@ if ($action === 'brief') {
   header('Content-Type: text/html; charset=utf-8');
   $H = function($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); };
   // ── Coquille commune à la charte
-  $page = function($corps, $titre='Brief équipe') use ($H) {
-    return '<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+  $page = function($corps, $titre='Brief équipe', $htmlLang='fr') use ($H) {
+    return '<!doctype html><html lang="'.$H($htmlLang).'"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
       .'<meta name="color-scheme" content="dark"><meta name="robots" content="noindex,nofollow">'
       .'<title>'.$H($titre).' — LouisMagie</title>'
       .'<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
@@ -247,14 +247,21 @@ if ($action === 'brief') {
       .'.gate input:focus{border-color:var(--or)}'
       .'.gate button{width:100%;margin-top:14px;padding:15px;background:var(--or);color:#fff;border:none;border-radius:4px;font-family:Syne,sans-serif;font-weight:700;font-size:12px;letter-spacing:2px;text-transform:uppercase;cursor:pointer}'
       .'.err{color:#E5564B;font-size:13px;margin-top:12px}'
+      .'.lang{display:flex;gap:6px;justify-content:center;padding-top:18px}'
+      .'.lang a{font-family:Syne,sans-serif;font-size:10px;font-weight:700;letter-spacing:2px;color:var(--gm);text-decoration:none;border:1px solid var(--anthr);border-radius:100px;padding:6px 14px}'
+      .'.lang a.on{color:#fff;border-color:var(--or);background:rgba(255,119,0,.12)}'
       .'@media(min-width:620px){.cols{grid-template-columns:1fr 1fr}.prat{grid-template-columns:1fr 1fr}}'
       .'</style></head><body>'.$corps.'</body></html>';
   };
 
+  $wantEN = ($_GET['lang'] ?? '') === 'en';   // le magicien anglophone arrive avec &lang=en
   if(!$ok){
     echo $page('<div class="gate"><div class="eyebrow" style="margin-bottom:18px">Louis<span style="color:#fff">Magie</span></div>'
-      .'<h1>Brief indisponible</h1><p>Ce lien n\'est pas valide, ou le brief n\'est pas encore publié.<br>Contacte Louis pour recevoir le bon lien.</p>'
-      .'<a class="wa" href="mailto:contact@louismagie.fr">Écrire à Louis</a></div>','Brief indisponible');
+      .'<h1>'.($wantEN?'Brief unavailable':'Brief indisponible').'</h1><p>'
+      .($wantEN?'This link is not valid, or the brief is not published yet.<br>Contact Louis to get the right link.'
+              :'Ce lien n\'est pas valide, ou le brief n\'est pas encore publié.<br>Contacte Louis pour recevoir le bon lien.').'</p>'
+      .'<a class="wa" href="mailto:contact@louismagie.fr">'.($wantEN?'Email Louis':'Écrire à Louis').'</a></div>',
+      $wantEN?'Brief unavailable':'Brief indisponible', $wantEN?'en':'fr');
     exit;
   }
 
@@ -263,15 +270,56 @@ if ($action === 'brief') {
   if($code !== ''){
     $saisi = (string)($_POST['code'] ?? $_GET['c'] ?? '');
     if(!hash_equals(mb_strtoupper($code), mb_strtoupper(trim($saisi)))){
-      $err = $saisi!=='' ? '<div class="err">Code incorrect.</div>' : '';
-      echo $page('<form class="gate" method="post">'
+      $err = $saisi!=='' ? '<div class="err">'.($wantEN?'Wrong code.':'Code incorrect.').'</div>' : '';
+      $titreG = $wantEN && !empty($b['en']['titre']) ? $b['en']['titre'] : ($b['titre'] ?? 'Imagine the Impossible');
+      echo $page('<form class="gate" method="post" action="'.$H('?action=brief&id='.rawurlencode($id).'&k='.rawurlencode($k).($wantEN?'&lang=en':'')).'">'
         .'<div class="eyebrow" style="margin-bottom:18px">Louis<span style="color:#fff">Magie</span></div>'
-        .'<h1>Brief équipe</h1><p>'.$H($b['titre'] ?? 'Imagine the Impossible').'<br>Entre le code transmis par Louis.</p>'
+        .'<h1>'.($wantEN?'Team brief':'Brief équipe').'</h1><p>'.$H($titreG).'<br>'
+        .($wantEN?'Enter the code Louis sent you.':'Entre le code transmis par Louis.').'</p>'
         .'<input name="code" placeholder="CODE" autocapitalize="characters" autofocus>'
-        .'<button type="submit">Accéder au brief</button>'.$err.'</form>','Accès au brief');
+        .'<button type="submit">'.($wantEN?'Open the brief':'Accéder au brief').'</button>'.$err.'</form>',
+        $wantEN?'Brief access':'Accès au brief', $wantEN?'en':'fr');
       exit;
     }
   }
+
+  // ── Langue : le français est la base, l'anglais vit dans brief.en (mêmes champs)
+  $aEN  = !empty($b['en']) && is_array($b['en']);
+  $lang = ($aEN && ($_GET['lang'] ?? '') === 'en') ? 'en' : 'fr';
+  if($lang === 'en'){
+    $v = $b['en'];
+    foreach(['waLouis','token'] as $kk) if(!isset($v[$kk]) && isset($b[$kk])) $v[$kk] = $b[$kk];
+    $v['lus'] = $b['lus'] ?? [];   // les accusés de lecture restent communs aux deux versions
+    $b = $v;
+  }
+  $T = $lang === 'en' ? [
+    'concept'=>'The concept','catE'=>'Part one · The mindset','catM'=>'Part two · The menu of illusions',
+    'catP'=>'Part three · Practical details','do'=>'Do','dont'=>'Don\'t','deroule'=>'The run of the night',
+    'zones'=>'Who covers what','contacts'=>'Contacts on site','contact'=>'Contact','avant'=>'Before you leave',
+    'equipe'=>'The team','lu'=>'Read it all?',
+    'luTexte'=>'Let me know, so I can see everyone is up to date — saves me chasing you.',
+    'luChoix'=>'— Pick your name —','luDeja'=>' ✓ (already confirmed)','luPrenom'=>'Your first name',
+    'luBtn'=>'I have read the brief','luOk'=>'Noted, thank you!','luOk2'=>'Louis knows you are up to date. See you very soon.',
+    'contactDef'=>'Any question, message me directly on WhatsApp.','wa'=>'Message Louis',
+    'foot'=>' — confidential document',
+  ] : [
+    'concept'=>'Le concept','catE'=>'Première partie · L\'état d\'esprit','catM'=>'Deuxième partie · Le menu d\'illusions',
+    'catP'=>'Troisième partie · Le cadre pratique','do'=>'À faire','dont'=>'À éviter','deroule'=>'Le déroulé',
+    'zones'=>'Qui couvre quoi','contacts'=>'Contacts sur place','contact'=>'Contact','avant'=>'Avant de partir',
+    'equipe'=>'L\'équipe','lu'=>'Tu as tout lu ?',
+    'luTexte'=>'Signale-le-moi pour que je sache que tout le monde est à jour — ça m\'évite de relancer.',
+    'luChoix'=>'— Choisis ton nom —','luDeja'=>' ✓ (déjà signalé)','luPrenom'=>'Ton prénom',
+    'luBtn'=>'J\'ai lu le brief','luOk'=>'C\'est noté, merci !','luOk2'=>'Louis sait que tu es à jour. À très vite.',
+    'contactDef'=>'La moindre question, écris-moi directement sur WhatsApp.','wa'=>'Écrire à Louis',
+    'foot'=>' — document confidentiel',
+  ];
+  // lien de bascule : on conserve le code d'accès déjà saisi
+  $urlLang = function($l) use ($id, $k, $code, $H) {
+    $u = '?action=brief&id='.rawurlencode($id).'&k='.rawurlencode($k);
+    if($code !== '') $u .= '&c='.rawurlencode($code);
+    if($l === 'en') $u .= '&lang=en';
+    return $H($u);
+  };
 
   // ── Rendu du brief
   $md = function($t) use ($H) {   // gras **texte** + retours à la ligne
@@ -279,7 +327,13 @@ if ($action === 'brief') {
     $t = preg_replace('/\*\*(.+?)\*\*/u', '<strong>$1</strong>', $t);
     return nl2br($t);
   };
-  $o = '<div class="wrap"><header><div class="eyebrow">'.$H($b['eyebrow'] ?? 'LouisMagie · Brief équipe').'</div>';
+  $o = '<div class="wrap">';
+  if($aEN){
+    $o .= '<div class="lang">'
+      .'<a href="'.$urlLang('fr').'"'.($lang==='fr'?' class="on"':'').'>FR</a>'
+      .'<a href="'.$urlLang('en').'"'.($lang==='en'?' class="on"':'').'>EN</a></div>';
+  }
+  $o .= '<header><div class="eyebrow">'.$H($b['eyebrow'] ?? ($lang==='en' ? 'LouisMagie · Team brief' : 'LouisMagie · Brief équipe')).'</div>';
   $titre = $b['titre'] ?? 'Imagine the Impossible';
   // met en accent orange les derniers mots du titre
   $mots = preg_split('/\s+/u', $titre);
@@ -288,11 +342,11 @@ if ($action === 'brief') {
   if(!empty($b['sousTitre'])) $o .= '<p class="lede">'.$H($b['sousTitre']).'</p>';
   $o .= '</header>';
 
-  if(!empty($b['concept'])) $o .= '<section><h2>Le concept</h2><p>'.$md($b['concept']).'</p></section>';
+  if(!empty($b['concept'])) $o .= '<section><h2>'.$H($T['concept']).'</h2><p>'.$md($b['concept']).'</p></section>';
 
   $secs = is_array($b['sections'] ?? null) ? $b['sections'] : [];
   if($secs){
-    $o .= '<div class="cat">'.$H($b['catEsprit'] ?? 'Première partie · L\'état d\'esprit').'</div>';
+    $o .= '<div class="cat">'.$H($b['catEsprit'] ?? $T['catE']).'</div>';
     $n=0;
     foreach($secs as $sec){
       $n++;
@@ -305,8 +359,8 @@ if ($action === 'brief') {
       if(!empty($sec['do']) || !empty($sec['dont'])){
         $li = function($arr){ $h=''; foreach((array)$arr as $x){ if(trim((string)$x)!=='') $h.='<li>'.htmlspecialchars($x,ENT_QUOTES,'UTF-8').'</li>'; } return $h; };
         $o .= '<div class="cols">'
-          .'<div class="col do"><div class="h">À faire</div><ul>'.$li($sec['do'] ?? []).'</ul></div>'
-          .'<div class="col dont"><div class="h">À éviter</div><ul>'.$li($sec['dont'] ?? []).'</ul></div></div>';
+          .'<div class="col do"><div class="h">'.$H($T['do']).'</div><ul>'.$li($sec['do'] ?? []).'</ul></div>'
+          .'<div class="col dont"><div class="h">'.$H($T['dont']).'</div><ul>'.$li($sec['dont'] ?? []).'</ul></div></div>';
       }
       $o .= '</section>';
     }
@@ -314,7 +368,7 @@ if ($action === 'brief') {
 
   $roles = is_array($b['roles'] ?? null) ? $b['roles'] : [];
   if($roles){
-    $o .= '<div class="cat">'.$H($b['catMenu'] ?? 'Deuxième partie · Le menu d\'illusions').'</div><section>';
+    $o .= '<div class="cat">'.$H($b['catMenu'] ?? $T['catM']).'</div><section>';
     if(!empty($b['menuIntro'])) $o .= '<p class="menu-intro">'.$md($b['menuIntro']).'</p>';
     foreach($roles as $r){
       $o .= '<div class="role"><h3>'.$H($r['nom'] ?? '').'</h3><ul>';
@@ -338,11 +392,11 @@ if ($action === 'brief') {
   $contacts = is_array($b['contacts'] ?? null) ? $b['contacts'] : [];
 
   if($prat || $deroule || $zones || $check || $contacts)
-    $o .= '<div class="cat">'.$H($b['catPratique'] ?? 'Troisième partie · Le cadre pratique').'</div>';
+    $o .= '<div class="cat">'.$H($b['catPratique'] ?? $T['catP']).'</div>';
 
   // ── Déroulé de la soirée (frise horaire)
   if($deroule){
-    $o .= '<section><h2>Le déroulé</h2><div class="tl">';
+    $o .= '<section><h2>'.$H($T['deroule']).'</h2><div class="tl">';
     foreach($deroule as $d){
       if(trim((string)($d['quoi'] ?? ''))==='') continue;
       $o .= '<div class="tl-i"><div class="tl-h">'.$H($d['h'] ?? '').'</div><div class="tl-v">'.$md($d['quoi']).'</div></div>';
@@ -361,7 +415,7 @@ if ($action === 'brief') {
 
   // ── Répartition des zones
   if($zones){
-    $o .= '<section><h2>Qui couvre quoi</h2>';
+    $o .= '<section><h2>'.$H($T['zones']).'</h2>';
     if(!empty($b['zonesIntro'])) $o .= '<p class="menu-intro">'.$md($b['zonesIntro']).'</p>';
     $o .= '<div class="prat">';
     foreach($zones as $z){
@@ -373,26 +427,26 @@ if ($action === 'brief') {
 
   // ── Contacts sur place
   if($contacts){
-    $o .= '<section><h2>Contacts sur place</h2><div class="prat">';
+    $o .= '<section><h2>'.$H($T['contacts']).'</h2><div class="prat">';
     foreach($contacts as $c){
       if(trim((string)($c['nom'] ?? ''))==='') continue;
       $tel = trim((string)($c['tel'] ?? ''));
       $v = '<b>'.$H($c['nom']).'</b>';
       if($tel !== '') $v .= '<br><a href="tel:'.$H(preg_replace('/[^0-9+]/','',$tel)).'">'.$H($tel).'</a>';
-      $o .= '<div class="pr"><div class="k">'.$H($c['role'] ?? 'Contact').'</div><div class="v">'.$v.'</div></div>';
+      $o .= '<div class="pr"><div class="k">'.$H($c['role'] ?? $T['contact']).'</div><div class="v">'.$v.'</div></div>';
     }
     $o .= '</div></section>';
   }
 
   // ── Checklist avant de partir
   if($check){
-    $o .= '<section><h2>Avant de partir</h2><ul class="chk">';
+    $o .= '<section><h2>'.$H($T['avant']).'</h2><ul class="chk">';
     foreach($check as $c){ if(trim((string)$c)!=='') $o .= '<li>'.$H($c).'</li>'; }
     $o .= '</ul></section>';
   }
 
   if(!empty($b['equipe']) && is_array($b['equipe'])){
-    $o .= '<section><h2>L\'équipe</h2><div class="mag">';
+    $o .= '<section><h2>'.$H($T['equipe']).'</h2><div class="mag">';
     foreach($b['equipe'] as $m){ $o .= '<span>'.$H($m).'</span>'; }
     $o .= '</div></section>';
   }
@@ -402,21 +456,21 @@ if ($action === 'brief') {
     $noms = [];
     foreach((array)($b['equipe'] ?? []) as $m){ $n = trim(explode('·', (string)$m)[0]); if($n!=='') $noms[] = $n; }
     $lus = array_map(function($x){ return mb_strtolower(trim((string)($x['nom'] ?? ''))); }, (array)($b['lus'] ?? []));
-    $o .= '<section id="lu"><h2>Tu as tout lu ?</h2>'
-      .'<p>Signale-le-moi pour que je sache que tout le monde est à jour — ça m\'évite de relancer.</p>'
-      .'<form class="lu-f" method="post" action="?action=briefLu&id='.$H($id).'&k='.$H($k).'">';
+    $o .= '<section id="lu"><h2>'.$H($T['lu']).'</h2>'
+      .'<p>'.$H($T['luTexte']).'</p>'
+      .'<form class="lu-f" method="post" action="?action=briefLu&id='.$H($id).'&k='.$H($k).($lang==='en'?'&lang=en':'').($code!==''?'&c='.$H(rawurlencode($code)):'').'">';
     if($noms){
-      $o .= '<select name="nom" required><option value="">— Choisis ton nom —</option>';
+      $o .= '<select name="nom" required><option value="">'.$H($T['luChoix']).'</option>';
       foreach($noms as $n){
         $dejaLu = in_array(mb_strtolower($n), $lus, true);
-        $o .= '<option value="'.$H($n).'"'.($dejaLu?' disabled':'').'>'.$H($n).($dejaLu?' ✓ (déjà signalé)':'').'</option>';
+        $o .= '<option value="'.$H($n).'"'.($dejaLu?' disabled':'').'>'.$H($n).($dejaLu?$T['luDeja']:'').'</option>';
       }
       $o .= '</select>';
     } else {
-      $o .= '<input name="nom" placeholder="Ton prénom" required>';
+      $o .= '<input name="nom" placeholder="'.$H($T['luPrenom']).'" required>';
     }
-    $o .= '<button type="submit">J\'ai lu le brief</button></form>';
-    if(($_GET['lu'] ?? '')==='1') $o .= '<div class="ok-lu"><strong>C\'est noté, merci !</strong><br>Louis sait que tu es à jour. À très vite.</div>';
+    $o .= '<button type="submit">'.$H($T['luBtn']).'</button></form>';
+    if(($_GET['lu'] ?? '')==='1') $o .= '<div class="ok-lu"><strong>'.$H($T['luOk']).'</strong><br>'.$H($T['luOk2']).'</div>';
     if(!empty($b['lus'])){
       $o .= '<div class="mag" style="margin-top:14px">';
       foreach((array)$b['lus'] as $l){ $o .= '<span>✓ '.$H($l['nom'] ?? '').'</span>'; }
@@ -426,11 +480,11 @@ if ($action === 'brief') {
   }
 
   if(!empty($b['cloture'])) $o .= '<div class="close">'.$md($b['cloture']).'</div>';
-  $o .= '<div class="contact">'.$md($b['contact'] ?? 'La moindre question, écris-moi directement sur WhatsApp.');
-  if(!empty($b['waLouis'])) $o .= '<br><a class="wa" href="https://wa.me/'.$H(preg_replace('/[^0-9]/','',$b['waLouis'])).'">Écrire à Louis</a>';
+  $o .= '<div class="contact">'.$md($b['contact'] ?? $T['contactDef']);
+  if(!empty($b['waLouis'])) $o .= '<br><a class="wa" href="https://wa.me/'.$H(preg_replace('/[^0-9]/','',$b['waLouis'])).'">'.$H($T['wa']).'</a>';
   $o .= '</div>';
-  $o .= '<footer>LouisMagie · '.$H($b['titre'] ?? '').($p['date'] ? ' · '.$H(date('d/m/Y', strtotime($p['date']))) : '').' — document confidentiel</footer></div>';
-  echo $page($o, ($b['titre'] ?? 'Brief').' — Brief équipe');
+  $o .= '<footer>LouisMagie · '.$H($b['titre'] ?? '').($p['date'] ? ' · '.$H(date('d/m/Y', strtotime($p['date']))) : '').$H($T['foot']).'</footer></div>';
+  echo $page($o, ($b['titre'] ?? 'Brief').($lang==='en'?' — Team brief':' — Brief équipe'), $lang);
   exit;
 }
 
@@ -747,7 +801,8 @@ if ($action === 'briefLu') {
     }
   }
   // retour sur la page du brief, avec confirmation
-  $url = '?action=brief&id='.rawurlencode($id).'&k='.rawurlencode($k).(!empty($b['code'])?('&c='.rawurlencode($b['code'])):'').'&lu='.($ok?'1':'0').'#lu';
+  $url = '?action=brief&id='.rawurlencode($id).'&k='.rawurlencode($k).(!empty($b['code'])?('&c='.rawurlencode($b['code'])):'')
+       .((($_GET['lang'] ?? '')==='en')?'&lang=en':'').'&lu='.($ok?'1':'0').'#lu';
   header('Location: '.$url); exit;
 }
 
