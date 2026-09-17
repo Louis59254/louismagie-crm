@@ -653,8 +653,7 @@ function publierVariantesLogo(){
     if(cfg.logoOnDark===_logoMeta.onDark && cfg.logoOnLight===_logoMeta.onLight) return;  // rien de neuf : pas de push inutile
     cfg.logoOnDark=_logoMeta.onDark; cfg.logoOnLight=_logoMeta.onLight;
     cfg.logoRatio=Math.round((_logoMeta.ratio||1)*1000)/1000;
-    DB.saveConfig(cfg);
-    if(cloudUrl()) cloudPost({action:'putConfig',config:DB.config()});
+    DB.saveConfig(cfg);                       // saveConfig met déjà l'envoi en file (et le pull répare si on n'était pas connecté)
   }catch(_){}
 }
 function majLogoAvecNom(v){ const c=DB.config(); c.pdfAfficherNom=!!v; DB.saveConfig(c); appliquerLogos();
@@ -3973,6 +3972,10 @@ async function cloudPull(){ const url=cloudUrl(); if(!url){ setCloudStatus('off'
     if(j.config&&Object.keys(j.config).length){ const cur=DB.config();
       // fusion : le serveur arbitre les clés qu'il connaît, les réglages locaux inédits survivent
       localStorage.setItem(LS_PREFIX+'config', JSON.stringify(Object.assign({},cur,j.config,{passwordHash:j.config.passwordHash||cur.passwordHash}))); }
+    // Les variantes du logo sont calculées au démarrage, AVANT la connexion : leur
+    // envoi part alors sans authentification et échoue. On répare ici, une fois connecté.
+    const cfgL=DB.config(), cfgS=j.config||{};
+    if(cfgL.logoOnDark && cfgS.logoOnDark!==cfgL.logoOnDark) cloudQueueConfig();
     try{ if(Array.isArray(j.opens)) localStorage.setItem('lm_opens', JSON.stringify(j.opens.map(o=>o.m))); }catch(_){}
     setCloudStatus('ok'); return 'pulled';
   }catch(_){ setCloudStatus('err'); return 'err'; } }

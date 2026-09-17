@@ -26,6 +26,11 @@ RUN printf '%s\n' \
     '<Files "robots.txt">' \
     '  Require all granted' \
     '</Files>' \
+    '# Le CRM doit toujours etre revalide : sans cela le navigateur garde' \
+    '# une version perimee apres un deploiement.' \
+    '<FilesMatch "\.html$">' \
+    '  Header always set Cache-Control "no-cache, must-revalidate"' \
+    '</FilesMatch>' \
     '# Rien de ce CRM ne doit finir dans un moteur de recherche' \
     'Header always set X-Robots-Tag "noindex, nofollow, noarchive, nosnippet"' \
     'Header always set X-Content-Type-Options "nosniff"' \
