@@ -225,6 +225,17 @@ if ($action === 'brief') {
   $ok = $p && is_array($b) && !empty($b['token']) && hash_equals((string)$b['token'], (string)$k) && !empty($b['publie']);
   header('Content-Type: text/html; charset=utf-8');
   $H = function($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); };
+  // ── Marque : le logo si Louis en a chargé un, sinon le mot-symbole
+  $cfgB = readJson("$DATA_DIR/config.json"); if(!is_array($cfgB)) $cfgB = [];
+  // On exige la variante « fond sombre » publiée par le CRM : servir le logo brut
+  // sur une page noire peut donner un dessin noir sur noir, donc invisible.
+  $aLogo = !empty($cfgB['logoOnDark']);
+  // Le logo porte déjà le mot « LouisMagie » : on ne le réécrit pas à côté
+  // (même règle que les PDF, pilotée par le réglage « écrire le nom à côté du logo »).
+  $nomAcote = !$aLogo || ($cfgB['pdfAfficherNom'] ?? false) === true;
+  $marque = function($cls='mark') use ($aLogo) {
+    return $aLogo ? '<img class="'.$cls.'" src="?action=logo&v=dark" alt="LouisMagie">' : '';
+  };
   // ── Coquille commune à la charte
   $page = function($corps, $titre='Brief équipe', $htmlLang='fr') use ($H) {
     return '<!doctype html><html lang="'.$H($htmlLang).'"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -302,6 +313,9 @@ if ($action === 'brief') {
       .'.gate input:focus{border-color:var(--or)}'
       .'.gate button{width:100%;margin-top:14px;padding:15px;background:var(--or);color:#fff;border:none;border-radius:4px;font-family:Syne,sans-serif;font-weight:700;font-size:12px;letter-spacing:2px;text-transform:uppercase;cursor:pointer}'
       .'.err{color:#E5564B;font-size:13px;margin-top:12px}'
+      .'.mark{display:block;margin:0 auto 20px;height:64px;width:auto;max-width:72%;object-fit:contain}'
+      .'.mark-f{display:block;margin:0 auto 14px;height:34px;width:auto;opacity:.55;object-fit:contain}'
+      .'.gate .mark{height:52px;margin-bottom:18px}'
       .'.lang{display:flex;gap:6px;justify-content:center;padding-top:18px}'
       .'.lang a{font-family:Syne,sans-serif;font-size:10px;font-weight:700;letter-spacing:2px;color:var(--gm);text-decoration:none;border:1px solid var(--anthr);border-radius:100px;padding:6px 14px}'
       .'.lang a.on{color:#fff;border-color:var(--or);background:rgba(255,119,0,.12)}'
@@ -311,7 +325,7 @@ if ($action === 'brief') {
 
   $wantEN = ($_GET['lang'] ?? '') === 'en';   // le magicien anglophone arrive avec &lang=en
   if(!$ok){
-    echo $page('<div class="gate"><div class="eyebrow" style="margin-bottom:18px">Louis<span style="color:#fff">Magie</span></div>'
+    echo $page('<div class="gate">'.($aLogo ? $marque() : '<div class="eyebrow" style="margin-bottom:18px">Louis<span style="color:#fff">Magie</span></div>')
       .'<h1>'.($wantEN?'Brief unavailable':'Brief indisponible').'</h1><p>'
       .($wantEN?'This link is not valid, or the brief is not published yet.<br>Contact Louis to get the right link.'
               :'Ce lien n\'est pas valide, ou le brief n\'est pas encore publié.<br>Contacte Louis pour recevoir le bon lien.').'</p>'
@@ -328,7 +342,7 @@ if ($action === 'brief') {
       $err = $saisi!=='' ? '<div class="err">'.($wantEN?'Wrong code.':'Code incorrect.').'</div>' : '';
       $titreG = $wantEN && !empty($b['en']['titre']) ? $b['en']['titre'] : ($b['titre'] ?? 'Imagine the Impossible');
       echo $page('<form class="gate" method="post" action="'.$H('?action=brief&id='.rawurlencode($id).'&k='.rawurlencode($k).($wantEN?'&lang=en':'')).'">'
-        .'<div class="eyebrow" style="margin-bottom:18px">Louis<span style="color:#fff">Magie</span></div>'
+        .($aLogo ? $marque() : '<div class="eyebrow" style="margin-bottom:18px">Louis<span style="color:#fff">Magie</span></div>')
         .'<h1>'.($wantEN?'Team brief':'Brief équipe').'</h1><p>'.$H($titreG).'<br>'
         .($wantEN?'Enter the code Louis sent you.':'Entre le code transmis par Louis.').'</p>'
         .'<input name="code" placeholder="CODE" autocapitalize="characters" autofocus>'
@@ -388,7 +402,9 @@ if ($action === 'brief') {
       .'<a href="'.$urlLang('fr').'"'.($lang==='fr'?' class="on"':'').'>FR</a>'
       .'<a href="'.$urlLang('en').'"'.($lang==='en'?' class="on"':'').'>EN</a></div>';
   }
-  $o .= '<header><div class="eyebrow">'.$H($b['eyebrow'] ?? ($lang==='en' ? 'LouisMagie · Team brief' : 'LouisMagie · Brief équipe')).'</div>';
+  $eyebrow = $b['eyebrow'] ?? ($lang==='en' ? 'LouisMagie · Team brief' : 'LouisMagie · Brief équipe');
+  if (!$nomAcote) $eyebrow = trim(preg_replace('/^\s*LouisMagie\s*·\s*/ui', '', $eyebrow));
+  $o .= '<header>'.$marque().'<div class="eyebrow">'.$H($eyebrow).'</div>';
   $titre = $b['titre'] ?? 'Imagine the Impossible';
   // met en accent orange les derniers mots du titre
   $mots = preg_split('/\s+/u', $titre);
@@ -538,7 +554,7 @@ if ($action === 'brief') {
   $o .= '<div class="contact">'.$md($b['contact'] ?? $T['contactDef']);
   if(!empty($b['waLouis'])) $o .= '<br><a class="wa" href="https://wa.me/'.$H(preg_replace('/[^0-9]/','',$b['waLouis'])).'">'.$H($T['wa']).'</a>';
   $o .= '</div>';
-  $o .= '<footer>LouisMagie · '.$H($b['titre'] ?? '').($p['date'] ? ' · '.$H(date('d/m/Y', strtotime($p['date']))) : '').$H($T['foot']).'</footer></div>';
+  $o .= '<footer>'.$marque('mark-f').($nomAcote?'LouisMagie · ':'').$H($b['titre'] ?? '').($p['date'] ? ' · '.$H(date('d/m/Y', strtotime($p['date']))) : '').$H($T['foot']).'</footer></div>';
   echo $page($o, ($b['titre'] ?? 'Brief').($lang==='en'?' — Team brief':' — Brief équipe'), $lang);
   exit;
 }
@@ -932,7 +948,13 @@ if ($action === 'newDemande') {
 
 /* ===== Logo public (sert le logo configuré pour l'en-tête des emails) ===== */
 if ($action === 'logo') {
-  $config = readJson("$DATA_DIR/config.json"); $l = is_array($config) ? ($config['logo'] ?? '') : '';
+  $config = readJson("$DATA_DIR/config.json"); if(!is_array($config)) $config = [];
+  $v = $_GET['v'] ?? '';
+  // Un logo dessiné en noir disparaîtrait sur les pages à fond sombre : le CRM
+  // publie une variante détourée/inversée par fond, on la sert si elle existe.
+  $l = $config['logo'] ?? '';
+  if ($v === 'dark'  && !empty($config['logoOnDark']))  $l = $config['logoOnDark'];
+  if ($v === 'light' && !empty($config['logoOnLight'])) $l = $config['logoOnLight'];
   if ($l && strpos($l, 'base64,') !== false) {
     $mime = preg_match('/^data:([^;]+);/', $l, $mm) ? $mm[1] : 'image/png';
     header('Content-Type: '.$mime); header('Cache-Control: max-age=3600');

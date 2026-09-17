@@ -644,9 +644,22 @@ function appliquerLogos(){
     const sb=document.querySelector('.sb-logo'); if(sb) sb.classList.toggle('logo-seul',cacherNom);
   }catch(_){}
 }
+/* Les pages publiques (brief, signature) sont servies par PHP : il leur faut
+   les variantes détourées, sinon un logo noir reste invisible sur fond noir. */
+function publierVariantesLogo(){
+  try{
+    if(!_logoMeta) return;
+    const cfg=DB.config();
+    if(cfg.logoOnDark===_logoMeta.onDark && cfg.logoOnLight===_logoMeta.onLight) return;  // rien de neuf : pas de push inutile
+    cfg.logoOnDark=_logoMeta.onDark; cfg.logoOnLight=_logoMeta.onLight;
+    cfg.logoRatio=Math.round((_logoMeta.ratio||1)*1000)/1000;
+    DB.saveConfig(cfg);
+    if(cloudUrl()) cloudPost({action:'putConfig',config:DB.config()});
+  }catch(_){}
+}
 function majLogoAvecNom(v){ const c=DB.config(); c.pdfAfficherNom=!!v; DB.saveConfig(c); appliquerLogos();
   toast(v?'Le nom sera écrit à côté du logo':'Le logo parle seul — nom retiré','ok'); }
-function resetLogo(){ const cfg=DB.config(); delete cfg.logo; DB.saveConfig(cfg);
+function resetLogo(){ const cfg=DB.config(); delete cfg.logo; delete cfg.logoOnDark; delete cfg.logoOnLight; delete cfg.logoRatio; DB.saveConfig(cfg);
   if(cloudUrl()) cloudPost({action:'putConfig',config:DB.config()});
   prepareLogo(); appliquerLogos();
   toast('Logo par défaut rétabli','ok'); if(_currentView==='reglages') RENDERERS.reglages();
@@ -1674,25 +1687,44 @@ function prepareLogo(){
             cx.putImageData(d,0,0);
           }
         }
-        // 2) Luminance du DESSIN seul (pixels visibles après détourage)
+        // 2) Recadrage sur le dessin : des marges vides (ici 500x500 pour un dessin
+        //    de 413x179) rapetissent le logo partout — en-tête, PDF, pages publiques.
+        let cc=c, ccx=cx, dd=d, ppx=px;
+        {
+          let x0=c.width, y0=c.height, x1=-1, y1=-1;
+          for(let y=0;y<c.height;y++) for(let x=0;x<c.width;x++){
+            if(px[(y*c.width+x)*4+3]>30){ if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y; }
+          }
+          if(x1>=x0 && y1>=y0 && (x1-x0+1<c.width || y1-y0+1<c.height)){
+            const m=Math.round(Math.max(x1-x0+1,y1-y0+1)*0.02);   // 2% de respiration
+            x0=Math.max(0,x0-m); y0=Math.max(0,y0-m);
+            x1=Math.min(c.width-1,x1+m); y1=Math.min(c.height-1,y1+m);
+            cc=document.createElement('canvas'); cc.width=x1-x0+1; cc.height=y1-y0+1;
+            ccx=cc.getContext('2d');
+            ccx.drawImage(c,x0,y0,cc.width,cc.height,0,0,cc.width,cc.height);
+            dd=ccx.getImageData(0,0,cc.width,cc.height); ppx=dd.data;
+          }
+        }
+        // 3) Luminance du DESSIN seul (pixels visibles après détourage)
         let sum=0,wsum=0;
-        for(let i=0;i<px.length;i+=4){
-          const a=px[i+3]/255; if(a<0.15) continue;
-          sum+=((0.2126*px[i]+0.7152*px[i+1]+0.0722*px[i+2])/255)*a; wsum+=a;
+        for(let i=0;i<ppx.length;i+=4){
+          const a=ppx[i+3]/255; if(a<0.15) continue;
+          sum+=((0.2126*ppx[i]+0.7152*ppx[i+1]+0.0722*ppx[i+2])/255)*a; wsum+=a;
         }
         const lum=wsum?sum/wsum:0.5;
-        const detoure=c.toDataURL('image/png');                    // logo détouré, fond transparent
-        // 3) Variante inversée (la transparence est conservée)
-        const inv=cx.createImageData(d);
-        for(let i=0;i<px.length;i+=4){
-          inv.data[i]=255-px[i]; inv.data[i+1]=255-px[i+1]; inv.data[i+2]=255-px[i+2]; inv.data[i+3]=px[i+3];
+        const detoure=cc.toDataURL('image/png');                   // logo détouré et recadré
+        // 4) Variante inversée (la transparence est conservée)
+        const inv=ccx.createImageData(dd);
+        for(let i=0;i<ppx.length;i+=4){
+          inv.data[i]=255-ppx[i]; inv.data[i+1]=255-ppx[i+1]; inv.data[i+2]=255-ppx[i+2]; inv.data[i+3]=ppx[i+3];
         }
-        const c2=document.createElement('canvas'); c2.width=c.width; c2.height=c.height;
+        const c2=document.createElement('canvas'); c2.width=cc.width; c2.height=cc.height;
         c2.getContext('2d').putImageData(inv,0,0);
         const invUrl=c2.toDataURL('image/png');
-        _logoMeta={ratio:img.width/Math.max(1,img.height), lum, detoure,
+        _logoMeta={ratio:cc.width/Math.max(1,cc.height), lum, detoure,
           onDark:  lum<0.45 ? invUrl : detoure,   // dessin sombre → inversé pour rester lisible sur noir
           onLight: lum>0.60 ? invUrl : detoure};  // dessin clair  → inversé pour rester lisible sur blanc
+        publierVariantesLogo();
         appliquerLogos();
       }catch(_){ _logoMeta={ratio:img.width/Math.max(1,img.height),lum:.5,onDark:src,onLight:src}; appliquerLogos(); }
     };
