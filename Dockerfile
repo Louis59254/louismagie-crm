@@ -1,6 +1,13 @@
 # CRM LouisMagie — image PHP + Apache (pour Coolify / Docker)
 FROM php:8.2-apache
 
+# GD : le serveur prépare lui-même les variantes de logo lisibles sur fond
+# sombre pour les pages publiques (brief, signature), sans dépendre du CRM.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libpng-dev \
+    && docker-php-ext-install gd \
+    && rm -rf /var/lib/apt/lists/*
+
 # Sert crm.html comme page d'accueil + l'API PHP
 COPY crm.html /var/www/html/index.html
 COPY api.php  /var/www/html/api.php

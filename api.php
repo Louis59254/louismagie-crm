@@ -164,6 +164,92 @@ function delsMerge($a, $b){
   foreach ($a as $e => $ids) foreach ((array)$ids as $id => $t) if (strcmp((string)$t, $lim) < 0) unset($a[$e][$id]);
   return $a;
 }
+/* ── Logo : détourage, recadrage et inversion selon le fond ──────────────
+   Même traitement que le CRM, mais côté serveur : les pages publiques
+   restent correctes même si l'application n'est pas passée publier sa
+   version. Résultat mis en cache, le calcul ne se fait qu'une fois. */
+function logoVariante($dataUrl, $fond, $DATA_DIR){
+  if (!function_exists('imagecreatefromstring')) return null;      // GD absent → repli sur le mot-symbole
+  if (strpos($dataUrl, 'base64,') === false) return null;
+  $cache = "$DATA_DIR/_logo-".substr(md5($dataUrl), 0, 10)."-$fond.png";
+  if (is_file($cache)) return 'data:image/png;base64,'.base64_encode((string)file_get_contents($cache));
+
+  $src = @imagecreatefromstring(base64_decode(explode('base64,', $dataUrl, 2)[1]));
+  if (!$src) return null;
+  $w = imagesx($src); $h = imagesy($src);
+  if ($w < 2 || $h < 2 || $w * $h > 4000000) { imagedestroy($src); return null; }
+  // Sur un PNG à palette, imagecolorat rend un index et non une couleur : on convertit
+  if (!imageistruecolor($src) && function_exists('imagepalettetotruecolor')) imagepalettetotruecolor($src);
+
+  // Couleur du coin = fond présumé ; on mesure aussi l'opacité générale
+  $coin = imagecolorat($src, 0, 0);
+  $br = ($coin >> 16) & 0xFF; $bg = ($coin >> 8) & 0xFF; $bb = $coin & 0xFF;
+  $opaques = 0;
+  for ($y = 0; $y < $h; $y += 2) for ($x = 0; $x < $w; $x += 2) {
+    if (((imagecolorat($src, $x, $y) >> 24) & 0x7F) < 60) $opaques++;
+  }
+  $proches = 0;
+  for ($y = 0; $y < $h; $y += 2) for ($x = 0; $x < $w; $x += 2) {
+    $c = imagecolorat($src, $x, $y);
+    if (abs((($c >> 16) & 0xFF) - $br) + abs((($c >> 8) & 0xFF) - $bg) + abs(($c & 0xFF) - $bb) < 60) $proches++;
+  }
+  $echant = (int)(ceil($w/2) * ceil($h/2));
+  // image pleine ET assez de pixels de la couleur du coin → c'est bien un fond uni
+  $fondUni = $echant > 0 && $opaques > $echant * 0.92 && $proches > $echant * 0.25;
+
+  // Passe unique : transparence du fond, boîte du dessin, luminance du dessin
+  $alphaDe = function($c) use ($fondUni, $br, $bg, $bb) {
+    $a = ($c >> 24) & 0x7F;
+    if (!$fondUni) return $a;
+    $d = abs((($c >> 16) & 0xFF) - $br) + abs((($c >> 8) & 0xFF) - $bg) + abs(($c & 0xFF) - $bb);
+    if ($d < 40) return 127;                                       // fond → transparent
+    if ($d < 80) return (int)round(127 - (127 - $a) * ($d - 40) / 40);
+    return $a;
+  };
+  $x0 = $w; $y0 = $h; $x1 = -1; $y1 = -1; $somme = 0.0; $poids = 0.0;
+  for ($y = 0; $y < $h; $y++) {
+    for ($x = 0; $x < $w; $x++) {
+      $c = imagecolorat($src, $x, $y);
+      $a = $alphaDe($c); $r = ($c >> 16) & 0xFF; $g = ($c >> 8) & 0xFF; $b = $c & 0xFF;
+      if ($a < 110) {                                              // pixel visible → dessin
+        if ($x < $x0) $x0 = $x; if ($x > $x1) $x1 = $x;
+        if ($y < $y0) $y0 = $y; if ($y > $y1) $y1 = $y;
+        $op = (127 - $a) / 127;
+        $somme += ((0.2126*$r + 0.7152*$g + 0.0722*$b) / 255) * $op; $poids += $op;
+      }
+    }
+  }
+  if ($x1 < $x0 || $y1 < $y0) { imagedestroy($src); return null; }  // rien de visible
+  $lum = $poids > 0 ? $somme / $poids : 0.5;
+  $inverser = ($fond === 'dark') ? ($lum < 0.45) : ($lum > 0.60);
+
+  // Recadrage sur le dessin, avec 2% de respiration
+  $m = (int)round(max($x1 - $x0 + 1, $y1 - $y0 + 1) * 0.02);
+  $x0 = max(0, $x0 - $m); $y0 = max(0, $y0 - $m);
+  $x1 = min($w - 1, $x1 + $m); $y1 = min($h - 1, $y1 + $m);
+  $nw = $x1 - $x0 + 1; $nh = $y1 - $y0 + 1;
+
+  $out = imagecreatetruecolor($nw, $nh);
+  imagealphablending($out, false); imagesavealpha($out, true);
+  for ($y = 0; $y < $nh; $y++) {
+    for ($x = 0; $x < $nw; $x++) {
+      $c = imagecolorat($src, $x0 + $x, $y0 + $y);
+      $r = ($c >> 16) & 0xFF; $g = ($c >> 8) & 0xFF; $b = $c & 0xFF;
+      $a = $alphaDe($c);
+      if ($inverser) { $r = 255 - $r; $g = 255 - $g; $b = 255 - $b; }
+      imagesetpixel($out, $x, $y, imagecolorallocatealpha($out, $r, $g, $b, $a));
+    }
+  }
+  ob_start(); imagepng($out); $png = (string)ob_get_clean();
+  imagedestroy($src); imagedestroy($out);
+  if ($png === '') return null;
+  @file_put_contents($cache, $png);
+  foreach ((array)@glob("$DATA_DIR/_logo-*.png") as $vieux) {       // un logo remplacé laisse un cache orphelin
+    if (@filemtime($vieux) < time() - 30*86400) @unlink($vieux);
+  }
+  return 'data:image/png;base64,'.base64_encode($png);
+}
+
 /* Copie de sécurité quotidienne avant la première écriture du jour */
 function backupJour($DATA_DIR, $e){
   $src = "$DATA_DIR/$e.json"; if (!is_file($src)) return;
@@ -227,9 +313,10 @@ if ($action === 'brief') {
   $H = function($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); };
   // ── Marque : le logo si Louis en a chargé un, sinon le mot-symbole
   $cfgB = readJson("$DATA_DIR/config.json"); if(!is_array($cfgB)) $cfgB = [];
-  // On exige la variante « fond sombre » publiée par le CRM : servir le logo brut
-  // sur une page noire peut donner un dessin noir sur noir, donc invisible.
-  $aLogo = !empty($cfgB['logoOnDark']);
+  // Le logo brut peut être noir sur noir : on ne l'affiche que si une version
+  // lisible sur fond sombre existe — publiée par le CRM, ou calculable ici.
+  $aLogo = !empty($cfgB['logoOnDark'])
+        || (!empty($cfgB['logo']) && function_exists('imagecreatefromstring'));
   // Le logo porte déjà le mot « LouisMagie » : on ne le réécrit pas à côté
   // (même règle que les PDF, pilotée par le réglage « écrire le nom à côté du logo »).
   $nomAcote = !$aLogo || ($cfgB['pdfAfficherNom'] ?? false) === true;
@@ -950,11 +1037,17 @@ if ($action === 'newDemande') {
 if ($action === 'logo') {
   $config = readJson("$DATA_DIR/config.json"); if(!is_array($config)) $config = [];
   $v = $_GET['v'] ?? '';
-  // Un logo dessiné en noir disparaîtrait sur les pages à fond sombre : le CRM
-  // publie une variante détourée/inversée par fond, on la sert si elle existe.
-  $l = $config['logo'] ?? '';
+  $brut = (string)($config['logo'] ?? '');
+  // 1) Variante déjà calculée par le CRM (identique à ce qu'affichent l'app et les PDF)
+  $l = $brut;
   if ($v === 'dark'  && !empty($config['logoOnDark']))  $l = $config['logoOnDark'];
   if ($v === 'light' && !empty($config['logoOnLight'])) $l = $config['logoOnLight'];
+  // 2) Sinon on la calcule ici : les pages publiques ne doivent pas dépendre
+  //    du passage du CRM, et un logo noir serait invisible sur fond noir.
+  if ($l === $brut && ($v === 'dark' || $v === 'light') && $brut !== '') {
+    $calc = logoVariante($brut, $v, $DATA_DIR);
+    if ($calc !== null) $l = $calc;
+  }
   if ($l && strpos($l, 'base64,') !== false) {
     $mime = preg_match('/^data:([^;]+);/', $l, $mm) ? $mm[1] : 'image/png';
     header('Content-Type: '.$mime); header('Cache-Control: max-age=3600');
