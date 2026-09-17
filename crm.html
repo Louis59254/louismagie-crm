@@ -4276,7 +4276,7 @@ function genererBriefEN(pid){
     zones:anc.zones||(b.zones||[]).map(z=>({nom:z.nom,qui:z.qui})),
     contacts:anc.contacts||contacts,
     checklist:anc.checklist||checklist,
-    equipe:anc.equipe||(eq.length?eq.map(m=>magNom(m.magicienId)+(m.role?(' · '+rEN(m.role)):'')):(b.equipe||[])),
+    equipe:(eq.length?eq.map(m=>magNom(m.magicienId)+(m.role?(' · '+rEN(m.role)):'')):(b.equipe||[])),
     accuse:b.accuse!==false,
     cloture:anc.cloture||"The trick is the easy part.\n**The discipline is knowing when to stop.**",
     contact:anc.contact||"Any question, message me directly on WhatsApp — don't hesitate.",
@@ -4469,7 +4469,9 @@ function genererBrief(pid,silencieux){
     checklist: b.checklist||checklist,
     accuse: b.accuse!==undefined?b.accuse:true,
     lus: b.lus||[],
-    equipe: b.equipe||eq.map(m=>magNom(m.magicienId)+(m.role?(' · '+m.role):'')),
+    // Recalculée à chaque génération ; la page publique, elle, résout les noms
+    // depuis les fiches magiciens à l'affichage (un renommage s'y propage seul).
+    equipe: eq.map(m=>magNom(m.magicienId)+(m.role?(' · '+m.role):'')),
     cloture: b.cloture||"Le tour est facile.\n**La discipline, c'est de savoir s'arrêter.**",
     contact: b.contact||"La moindre question, écris-moi directement sur WhatsApp — n'hésite pas.",
     waLouis: b.waLouis||cfg.entrepriseTel||'',

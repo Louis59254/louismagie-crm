@@ -543,6 +543,31 @@ if ($action === 'brief') {
     $o .= '</section>';
   }
 
+  /* Équipe : résolue à l'affichage depuis le projet et les fiches magiciens.
+     Un magicien renommé se met donc à jour sur un brief déjà publié, sans
+     avoir à le régénérer. La liste figée du brief ne sert que de repli. */
+  $equipeAff = [];
+  if (!empty($p['equipe']) && is_array($p['equipe'])) {
+    $mags = readJson("$DATA_DIR/magiciens.json"); if(!is_array($mags)) $mags = [];
+    $parId = [];
+    foreach ($mags as $mg) {
+      if (!is_array($mg) || !isset($mg['id'])) continue;
+      $parId[(string)$mg['id']] = trim(((string)($mg['prenom'] ?? '')).' '.((string)($mg['nom'] ?? '')));
+    }
+    $rolesEN = ['Serveur'=>'Waiter','Serveuse'=>'Waitress','Hôte d\'accueil'=>'Host','Hôtesse d\'accueil'=>'Host',
+                'Invité'=>'Guest','Barman'=>'Bartender','Vestiaire'=>'Cloakroom','Photographe'=>'Photographer',
+                'Technicien'=>'Technician','Sécurité'=>'Security','Autre'=>'Other'];
+    foreach ($p['equipe'] as $m) {
+      if (!is_array($m)) continue;
+      $nom = trim((string)($parId[(string)($m['magicienId'] ?? '')] ?? ''));
+      if ($nom === '') continue;
+      $role = (string)($m['role'] ?? '');
+      if ($lang === 'en' && isset($rolesEN[$role])) $role = $rolesEN[$role];
+      $equipeAff[] = $nom.($role !== '' ? ' · '.$role : '');
+    }
+  }
+  if (!$equipeAff && !empty($b['equipe']) && is_array($b['equipe'])) $equipeAff = $b['equipe'];
+
   $prat = is_array($b['pratique'] ?? null) ? $b['pratique'] : [];
   $deroule = is_array($b['deroule'] ?? null) ? $b['deroule'] : [];
   $zones = is_array($b['zones'] ?? null) ? $b['zones'] : [];
@@ -603,16 +628,16 @@ if ($action === 'brief') {
     $o .= '</ul></section>';
   }
 
-  if(!empty($b['equipe']) && is_array($b['equipe'])){
+  if($equipeAff){
     $o .= '<section><h2>'.$H($T['equipe']).'</h2><div class="mag">';
-    foreach($b['equipe'] as $m){ $o .= '<span>'.$H($m).'</span>'; }
+    foreach($equipeAff as $m){ $o .= '<span>'.$H($m).'</span>'; }
     $o .= '</div></section>';
   }
 
   // ── Accusé de lecture
   if(!empty($b['accuse'])){
     $noms = [];
-    foreach((array)($b['equipe'] ?? []) as $m){ $n = trim(explode('·', (string)$m)[0]); if($n!=='') $noms[] = $n; }
+    foreach($equipeAff as $m){ $n = trim(explode('·', (string)$m)[0]); if($n!=='') $noms[] = $n; }
     $lus = array_map(function($x){ return mb_strtolower(trim((string)($x['nom'] ?? ''))); }, (array)($b['lus'] ?? []));
     $o .= '<section id="lu"><h2>'.$H($T['lu']).'</h2>'
       .'<p>'.$H($T['luTexte']).'</p>'
