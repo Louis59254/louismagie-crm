@@ -755,6 +755,7 @@ function showApp(){
   // empêchait toute récupération au démarrage et chaque appareil restait sur ses données.
   if(cloudUrl()&&cloudAuth()){ _dernierPull=Date.now(); cloudPull().then(r=>{
       if(RENDERERS[_currentView])RENDERERS[_currentView](currentParams); updateBadges();
+      if(r==='pulled'||r==='init') verifierCoherence();
       if(r!=='pulled'&&r!=='init') toast('⚠️ Serveur injoignable : tu vois les données de cet appareil. Rien ne sera envoyé tant que la connexion n\'est pas rétablie — tes modifications sont gardées ici.','err');
     }); }
 }
@@ -3791,6 +3792,15 @@ RENDERERS.reglages=function(){
       <div style="text-align:right;margin-top:10px"><button class="btn btn-or" onclick="saveParams()">Enregistrer</button></div>
     </div>
 
+    <div class="panel"><div class="panel-title">🛡️ Mes données entre mes appareils</div>
+      <div id="coherence-panel">${coherenceHtml()}</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">
+        <button class="btn btn-or" onclick="(async()=>{document.getElementById('coherence-panel').innerHTML='<div class=\'td-dim\'>Vérification en cours…</div>';await cloudSyncNow();document.getElementById('coherence-panel').innerHTML=coherenceHtml();})()">🔍 Vérifier maintenant</button>
+        <button class="btn btn-ghost" onclick="ouvrirHistorique()">🕘 Historique & corbeille</button>
+      </div>
+      <div class="td-dim" style="margin-top:12px;font-size:12.5px">Chaque version remplacée ou supprimée est conservée <strong>24 mois</strong> sur le serveur, en plus d'une copie complète quotidienne (14 jours).</div>
+    </div>
+
     <div class="panel"><div class="panel-title">☁️ Backend de synchronisation</div>
       <div class="td-dim" style="margin-bottom:12px">Synchro sécurisée par <strong>ton mot de passe</strong> : connecte-toi avec sur n'importe quel appareil → données synchronisées + PDF archivés. Plus de token à recopier. Laisse l'URL vide = 100 % local.</div>
       <div class="form-grid">
@@ -3943,6 +3953,109 @@ function cloudUrl(){ const u=(DB.config().appsScriptUrl||'').trim();
   if(location.protocol.indexOf('http')===0) return location.origin+'/api.php'; // auto : même domaine
   return ''; }                                                 // fichier local : pas de backend
 let _cloudTimers={};
+/* ─── Cohérence appareil ↔ serveur ────────────────────────────────────────
+   Empreinte d'une table = SHA-256 des couples (id, updatedAt) triés — calcul
+   identique à empreinte() côté PHP. Même empreinte = mêmes versions exactes.
+   Deux appareils qui affichent le même code ont donc les mêmes données. */
+let _coherence=null;   // {ok, diff:[tables], code:'XXXX-XXXX', n, at}
+async function sha256hex(t){ const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(t));
+  return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join(''); }
+async function empreinteTable(rows){
+  const l=(rows||[]).filter(r=>r&&r.id!=null).map(r=>[String(r.id),String(r.updatedAt||'')]);
+  l.sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0);
+  return {n:l.length, h:(await sha256hex(l.map(x=>x[0]+'\t'+x[1]+'\n').join(''))).slice(0,12)};
+}
+async function codeGlobal(emp){
+  const k=Object.keys(emp).sort();
+  const h=await sha256hex(k.map(e=>e+':'+emp[e].h).join('|'));
+  return (h.slice(0,4)+'-'+h.slice(4,8)).toUpperCase();
+}
+/* Attend que plus rien ne soit en vol ni programmé (10 s max) */
+function attendreCalme(){ return new Promise(ok=>{ const t0=Date.now();
+  (function tic(){ if((_volants===0&&_planifies.size===0)||Date.now()-t0>10000) ok(); else setTimeout(tic,200); })(); }); }
+async function verifierCoherence(opts){
+  opts=opts||{};
+  if(!cloudUrl()||!cloudAuth()||!_pullOk) return null;
+  try{
+    await cloudFlushPending(); await attendreCalme();
+    const j=await cloudPost({action:'empreintes'});
+    if(!j||!j.ok||!j.empreintes) return null;
+    const loc={}, diff=[];
+    for(const e of Object.keys(j.empreintes)){
+      loc[e]=await empreinteTable(DB.all(e));
+      if(loc[e].h!==j.empreintes[e].h) diff.push(e);
+    }
+    // Une différence juste après un envoi peut venir d'une modif faite ailleurs à l'instant :
+    // on récupère, on renvoie, et on revérifie une fois avant de conclure.
+    if(diff.length&&!opts.second){ await cloudPull(); await cloudFlushPending(); await attendreCalme(); return verifierCoherence({second:true}); }
+    _coherence={ok:!diff.length, diff, code:await codeGlobal(loc), n:Object.values(loc).reduce((a,x)=>a+x.n,0), at:new Date().toISOString()};
+    peindrePastille();
+    const el=document.getElementById('coherence-panel'); if(el) el.innerHTML=coherenceHtml();
+    return _coherence;
+  }catch(err){ console.error('verifierCoherence',err); return null; }
+}
+const NOMS_TABLES={demandes:'demandes',devis:'devis',prestations:'agenda',factures:'factures',clients:'clients',relances:'relances',mails:'emails',catalogue:'catalogue',recettes:'recettes',declarations:'déclarations',planifs:'envois planifiés',templates:'modèles',projets:'projets Imagine',magiciens:'magiciens',effets:'effets',segments:'listes',campagnes:'campagnes'};
+function coherenceHtml(){
+  const c=_coherence;
+  if(!cloudUrl()) return '<div class="td-dim">Pas de serveur : les données ne vivent que sur cet appareil.</div>';
+  if(!c) return '<div class="td-dim">Vérification en cours…</div>';
+  const h=new Date(c.at).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
+  return c.ok
+    ? `<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+         <div style="font-size:28px">✅</div>
+         <div style="flex:1;min-width:200px"><strong>Cet appareil est identique au serveur.</strong><br>
+           <span class="td-dim">${c.n} fiches · vérifié à ${h}</span></div>
+         <div style="text-align:center"><div class="td-dim" style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase">Empreinte</div>
+           <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:700;font-size:22px;letter-spacing:2px">${c.code}</div></div>
+       </div>
+       <div class="td-dim" style="margin-top:10px;font-size:12.5px">Ouvre ce même écran sur ton autre appareil : <strong>même empreinte = exactement les mêmes données</strong>.</div>`
+    : `<div class="alert warning" style="margin:0"><span class="alert-icon">⚠️</span><div><strong>Différence avec le serveur</strong> sur : ${c.diff.map(e=>esc(NOMS_TABLES[e]||e)).join(', ')}.<br>
+         Rien n'est effacé — clique sur « Vérifier maintenant » pour relancer l'échange.</div></div>`;
+}
+
+/* ─── Historique & corbeille ─────────────────────────────────────────────
+   Le serveur garde toute version remplacée ou supprimée. Restaurer = réenregistrer
+   l'ancienne version : elle reçoit une date récente, l'emporte sur la suppression
+   et se propage à tous les appareils. La version actuelle part elle-même à l'historique. */
+let _histo=[];
+async function ouvrirHistorique(filtre){
+  if(!cloudUrl()||!cloudAuth()){ toast('Historique disponible une fois connecté au serveur','err'); return; }
+  openModal('🕘 Historique & corbeille','<div class="td-dim">Chargement…</div>','<button class="btn btn-ghost" onclick="closeModal()">Fermer</button>');
+  const j=await cloudPost({action:'historique',limit:300});
+  if(!j||!j.ok){ document.getElementById('modal-body').innerHTML='<div class="alert warning"><span class="alert-icon">⚠️</span><div>Historique indisponible (serveur injoignable ?)</div></div>'; return; }
+  _histo=j.entrees||[];
+  rendreHistorique(filtre||'suppression');
+}
+function rendreHistorique(filtre){
+  const l=_histo.filter(x=>!filtre||x.raison===filtre);
+  const onglet=(f,lab)=>`<button class="btn ${filtre===f?'btn-or':'btn-ghost'} btn-sm" onclick="rendreHistorique('${f}')">${lab}</button>`;
+  const ligne=(x,i)=>{
+    const d=new Date(x.at).toLocaleString('fr-FR',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'});
+    const existe=!!DB.get(x.entity,x.id);
+    return `<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--anthr)">
+      <div style="flex:1;min-width:0"><div style="font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.libelle||x.id)}</div>
+        <div class="td-dim" style="font-size:12px">${esc(NOMS_TABLES[x.entity]||x.entity)} · ${x.raison==='suppression'?'supprimé':'version remplacée'} le ${d}${x.raison==='suppression'&&existe?' · déjà restauré':''}</div></div>
+      <button class="btn btn-ghost btn-sm" onclick="restaurerVersion(${_histo.indexOf(x)})">↩ Restaurer</button></div>`;
+  };
+  document.getElementById('modal-body').innerHTML=`
+    <div style="display:flex;gap:8px;margin-bottom:12px">${onglet('suppression','🗑 Supprimés')}${onglet('modification','✎ Versions remplacées')}</div>
+    ${l.length?l.map(ligne).join(''):'<div class="td-dim" style="padding:14px 0">Rien ici pour l\'instant.</div>'}
+    <div class="td-dim" style="margin-top:12px;font-size:12px">Une modification n'est photographiée qu'une fois par quart d'heure et par fiche ; une suppression l'est toujours.</div>`;
+}
+async function restaurerVersion(i){
+  const x=_histo[i]; if(!x) return;
+  const actuelle=DB.get(x.entity,x.id);
+  if(!confirm((actuelle?'Remplacer la version actuelle de « ':'Restaurer « ')+(x.libelle||x.id)+' » par celle du '+new Date(x.at).toLocaleString('fr-FR')+' ?'+(actuelle?'\n\nLa version actuelle ne sera pas perdue : elle part à son tour dans l\'historique.':''))) return;
+  const j=await cloudPost({action:'historiqueEntree',at:x.at,entity:x.entity,id:x.id});
+  if(!j||!j.ok||!j.entree||!j.entree.avant){ toast('Version introuvable sur le serveur','err'); return; }
+  const m=delsAll(); if(m[x.entity]) { delete m[x.entity][String(x.id)]; delsSave(m); }   // n'est plus supprimée
+  DB.save(x.entity, j.entree.avant);                                                       // date récente → l'emporte partout
+  if(x.entity==='devis') resyncDerives();
+  logActivite('Restauré depuis l\'historique : '+(x.libelle||x.id));
+  toast('↩ Restauré — synchronisé sur tous tes appareils','ok');
+  closeModal(); if(typeof RENDERERS[_currentView]==='function') RENDERERS[_currentView](currentParams);
+}
+
 /* ─── Pastille de synchro ───────────────────────────────────────────────
    Vert   : rien en attente, tout est sur le serveur.
    Orange : des modifications ne sont PAS parties et rien n'est en train de les envoyer.
@@ -3972,7 +4085,8 @@ function peindrePastille(){
   if(s==='off'){ c='#5A5650'; t='Serveur non configuré'; }
   else if(s==='err'&&!actif){ c='#E5564B'; t='La dernière synchronisation a échoué — clique pour réessayer'+(pend.length?' · en attente : '+pend.join(', '):''); }
   else if(pend.length&&!actif){ c='#E8A13A'; t=pend.length+' élément(s) pas encore envoyé(s) : '+pend.join(', ')+' — clique pour synchroniser'; }
-  else if(l||s==='ok'){ c='#3FB97A'; t=actif?'Synchronisation en cours…':('À jour'+(h?' · dernière synchro '+h:'')); }
+  else if(_coherence&&!_coherence.ok&&!actif){ c='#E8A13A'; t='Différence avec le serveur sur : '+_coherence.diff.join(', ')+' — clique pour synchroniser'; }
+  else if(l||s==='ok'){ c='#3FB97A'; t=actif?'Synchronisation en cours…':(_coherence&&_coherence.ok?('Identique au serveur · empreinte '+_coherence.code+(h?' · '+h:'')):('À jour'+(h?' · dernière synchro '+h:''))); }
   else { c='#8A8580'; t='Connexion au serveur…'; }
   el.style.background=c; el.title=t; el.setAttribute('aria-label',t);
 }
@@ -4077,6 +4191,11 @@ async function cloudSyncNow(){
   await cloudFlushPending();
   const res=await cloudPull(); if(typeof RENDERERS[_currentView]==='function') RENDERERS[_currentView](currentParams); updateBadges();
   const reste=pendAll();
+  if(!reste.length && (res==='pulled'||res==='init')){
+    const c=await verifierCoherence();
+    if(c&&c.ok){ toast('✅ Identique au serveur · empreinte '+c.code,'ok'); return; }
+    if(c&&!c.ok){ toast('⚠️ Différence persistante sur : '+c.diff.map(e=>NOMS_TABLES[e]||e).join(', ')+'. Rien n\'est effacé.','err'); return; }
+  }
   if(reste.length){ toast('⚠️ Pas encore envoyé au serveur : '+reste.join(', ')+'. Tes données restent sur cet appareil, rien n\'est perdu — réessaie quand la connexion revient.','err'); return; }
   toast(res==='pulled'?'✅ Appareils synchronisés (fusion, aucune perte)':(res==='init'?'Serveur initialisé depuis ce CRM':(res==='off'?'Configure d\'abord l\'URL':'Échec — vérifie la connexion')), res==='err'?'err':'ok'); }
 
@@ -4430,6 +4549,7 @@ async function cloudReprise(){
   _dernierPull=Date.now();
   const r=await cloudPull();
   if(r==='pulled'&&typeof RENDERERS[_currentView]==='function'){ RENDERERS[_currentView](currentParams); updateBadges(); }
+  if(r==='pulled') verifierCoherence();
 }
 document.addEventListener('visibilitychange',()=>{
   if(document.visibilityState==='hidden') briefSortie();

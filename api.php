@@ -250,6 +250,84 @@ function logoVariante($dataUrl, $fond, $DATA_DIR){
   return 'data:image/png;base64,'.base64_encode($png);
 }
 
+/* Verrou exclusif par fichier : deux appareils qui envoient la même table au
+   même instant liraient chacun l'ancien état et le second effacerait la
+   fusion du premier. Lecture-fusion-écriture se fait donc sous verrou. */
+function sousVerrou($DATA_DIR, $nom, $fn){
+  $h = @fopen("$DATA_DIR/.verrou-".preg_replace('/[^a-z_]/i','',$nom), 'c');
+  if ($h) @flock($h, LOCK_EX);
+  try { return $fn(); }
+  finally { if ($h) { @flock($h, LOCK_UN); @fclose($h); } }
+}
+
+/* Modifie une table côté serveur SOUS VERROU et en relisant le fichier : une
+   écriture du serveur (signature, accusé de lecture…) ne doit pas écraser un
+   envoi d'appareil arrivé entre sa lecture et son écriture. $fn reçoit le
+   tableau par référence ; renvoyer false = rien à écrire. */
+function majTable($DATA_DIR, $e, $fn){
+  return sousVerrou($DATA_DIR, $e, function() use ($DATA_DIR, $e, $fn) {
+    $f = "$DATA_DIR/$e.json"; $arr = readJson($f); if (!is_array($arr)) $arr = [];
+    $avant = $arr;
+    $res = $fn($arr);
+    if ($res === false) return false;
+    historiser($DATA_DIR, $e, $avant, $arr);
+    return writeJson($f, $arr) ? $res : false;
+  });
+}
+
+/* Historique : toute version remplacée ou supprimée est conservée (journal
+   mensuel en ajout seul). Une modification n'est photographiée qu'une fois
+   par quart d'heure et par fiche — sinon l'enregistrement automatique d'un
+   brief en cours de frappe remplirait le disque. Une suppression l'est toujours. */
+function historiser($DATA_DIR, $e, $existantes, $fusion){
+  if ($e === 'activite') return;
+  $apres = [];
+  foreach ((array)$fusion as $r) if (is_array($r) && isset($r['id'])) $apres[(string)$r['id']] = $r;
+  $dir = "$DATA_DIR/_historique"; if (!is_dir($dir)) @mkdir($dir, 0775, true);
+  $idxF = "$dir/.derniers.json"; $idx = readJson($idxF); if (!is_array($idx)) $idx = [];
+  $at = nowTs(); $lim = gmdate('Y-m-d\\TH:i:s.000\\Z', time() - 15*60);
+  $lignes = ''; $idxModif = false;
+  foreach ((array)$existantes as $r) {
+    if (!is_array($r) || !isset($r['id'])) continue;
+    $k = (string)$r['id'];
+    if (!isset($apres[$k])) $raison = 'suppression';
+    elseif (json_encode($apres[$k]) !== json_encode($r)) {
+      $cle = "$e|$k";
+      if (isset($idx[$cle]) && strcmp((string)$idx[$cle], $lim) > 0) continue;   // photo récente : inutile
+      $raison = 'modification';
+    }
+    else continue;
+    $lignes .= json_encode(['at'=>$at,'entity'=>$e,'id'=>$k,'raison'=>$raison,'avant'=>$r],
+                           JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE)."\n";
+    $idx["$e|$k"] = $at; $idxModif = true;
+  }
+  if ($lignes === '') return;
+  @file_put_contents("$dir/".gmdate('Y-m').".jsonl", $lignes, FILE_APPEND | LOCK_EX);
+  if ($idxModif) {
+    foreach ($idx as $c => $t) if (strcmp((string)$t, gmdate('Y-m-d', time() - 2*86400)) < 0) unset($idx[$c]);
+    writeJson($idxF, $idx);
+  }
+  foreach ((array)@glob("$dir/*.jsonl") as $vieux) {                // 24 mois d'historique
+    if (@filemtime($vieux) < time() - 730*86400) @unlink($vieux);
+  }
+}
+/* Libellé lisible d'une fiche, pour la liste de l'historique */
+function resumeFiche($r){
+  foreach (['nom','nomClient','titre','label','client','objet','subject','txt'] as $c) {
+    if (!empty($r[$c]) && is_string($r[$c])) return trim(((string)($r['prenom'] ?? '')).' '.$r[$c]);
+  }
+  return (string)($r['id'] ?? '');
+}
+/* Empreinte d'une table : id + date de modification de chaque fiche, triés.
+   Deux appareils qui affichent la même empreinte ont exactement les mêmes versions. */
+function empreinte($rows){
+  $l = [];
+  foreach ((array)$rows as $r) if (is_array($r) && isset($r['id'])) $l[] = [(string)$r['id'], (string)($r['updatedAt'] ?? '')];
+  usort($l, function($a, $b){ return strcmp($a[0], $b[0]); });
+  $s = ''; foreach ($l as $x) $s .= $x[0]."\t".$x[1]."\n";
+  return ['n'=>count($l), 'h'=>substr(hash('sha256', $s), 0, 12)];
+}
+
 /* Copie de sécurité quotidienne avant la première écriture du jour */
 function backupJour($DATA_DIR, $e){
   $src = "$DATA_DIR/$e.json"; if (!is_file($src)) return;
@@ -814,8 +892,7 @@ if ($action === 'imagine') {
       'contraintes'=>$c('contraintes',300), 'langues'=>$c('langues',80),
     ];
     $prj['updatedAt'] = nowTs();
-    $f = "$DATA_DIR/projets.json"; $arr = readJson($f); if(!is_array($arr)) $arr=[];
-    $arr[] = $prj; writeJson($f, $arr);
+    majTable($DATA_DIR, 'projets', function(&$arr) use ($prj) { $arr[] = $prj; return true; });
 
     $notif = getenv('SMTP_FROM') ?: getenv('SMTP_USER');
     if ($notif) {
@@ -951,11 +1028,12 @@ if ($action === 'desabo') {
   };
   $GLOBALS['__mailLouis'] = $cfgD['emailLouis'] ?? 'contact@louismagie.fr';
   if ($em === '' || !hash_equals($attendu, $sig)) { echo $page('Lien invalide','Ce lien de désabonnement n\'est pas valide.'); exit; }
-  $f = "$DATA_DIR/clients.json"; $cls = readJson($f); if(!is_array($cls)) $cls=[];
-  $trouve = false;
-  foreach ($cls as &$c) { if (strtolower(trim((string)($c['email'] ?? ''))) === $em) { $c['desabo'] = true; $c['desaboLe'] = date('c'); $c['updatedAt'] = nowTs(); $trouve = true; } }
-  unset($c);
-  if ($trouve) writeJson($f, $cls);
+  majTable($DATA_DIR, 'clients', function(&$cls) use ($em) {
+    $t = false;
+    foreach ($cls as &$c) { if (strtolower(trim((string)($c['email'] ?? ''))) === $em) { $c['desabo'] = true; $c['desaboLe'] = date('c'); $c['updatedAt'] = nowTs(); $t = true; } }
+    unset($c);
+    return $t;
+  });
   echo $page('C\'est fait', 'L\'adresse <strong>'.$H($em).'</strong> ne recevra plus d\'email d\'actualité.<br><br>Les échanges liés à vos devis, factures et prestations continueront normalement.');
   exit;
 }
@@ -975,9 +1053,17 @@ if ($action === 'briefLu') {
     foreach($lus as $l){ if(mb_strtolower(trim((string)($l['nom'] ?? ''))) === mb_strtolower($nom)) { $existe=true; break; } }
     if(!$existe){
       $lus[] = ['nom'=>$nom, 'at'=>date('c')];
-      $projets[$idx]['brief']['lus'] = $lus;
-      $projets[$idx]['updatedAt'] = nowTs();
-      writeJson($f, $projets);
+      majTable($DATA_DIR, 'projets', function(&$arr) use ($id, $nom) {
+        foreach ($arr as &$x) {
+          if (($x['id'] ?? '') !== $id || !is_array($x['brief'] ?? null)) continue;
+          $l = is_array($x['brief']['lus'] ?? null) ? $x['brief']['lus'] : [];
+          foreach ($l as $y) if (mb_strtolower(trim((string)($y['nom'] ?? ''))) === mb_strtolower($nom)) return false;
+          $l[] = ['nom'=>$nom, 'at'=>date('c')];
+          $x['brief']['lus'] = $l; $x['updatedAt'] = nowTs();
+          return true;
+        }
+        return false;
+      });
       $notif = getenv('SMTP_FROM') ?: getenv('SMTP_USER');
       if($notif) @smtpSend($notif, '✅ Brief lu — '.$nom,
         $nom." vient de confirmer la lecture du brief « ".($b['titre'] ?? '')." ».\n\n"
@@ -1039,8 +1125,7 @@ if ($action === 'newDemande') {
     'statut'=>'Nouveau', 'notes'=>'',
     'recuLe'=>date('c'), 'updatedAt'=>nowTs(),
   ];
-  $f = "$DATA_DIR/demandes.json"; $arr = readJson($f); if(!is_array($arr)) $arr=[];
-  $arr[] = $dem; writeJson($f, $arr);
+  majTable($DATA_DIR, 'demandes', function(&$arr) use ($dem) { $arr[] = $dem; return true; });
 
   // Notification immédiate (best effort)
   $notif = getenv('SMTP_FROM') ?: getenv('SMTP_USER');
@@ -1100,22 +1185,30 @@ if ($action === 'sign' || $action === 'signSubmit') {
     if ($img !== '' && (!preg_match('#^data:image/(png|jpeg);base64,[A-Za-z0-9+/=]+$#', $img) || strlen($img) > 500000)) $img = '';
     if($signataire===''&&$img==='') out(['ok'=>false,'error'=>'signature vide']);
     $now = date('c');
-    // Garde : la signature ne fait AVANCER le statut que depuis Brouillon/Envoyé (jamais rétrograder « Acompte reçu » etc.)
-    if (in_array($d['statut'] ?? '', ['Brouillon','Envoyé',''])) {
-      $devis[$idx]['statut']='Accepté';
-      if (empty($devis[$idx]['dateAcceptation'])) $devis[$idx]['dateAcceptation']=date('Y-m-d');
-    }
-    $devis[$idx]['signataire']=$signataire;
-    $devis[$idx]['signatureImg']=$img;
-    $devis[$idx]['signedAt']=$now;
-    $devis[$idx]['updatedAt']=nowTs();
-    writeJson("$DATA_DIR/devis.json",$devis);
+    $deja = false;
+    majTable($DATA_DIR, 'devis', function(&$devis) use ($id, $signataire, $img, $now, &$deja) {
+      foreach ($devis as &$x) {
+        if (($x['id'] ?? '') !== $id) continue;
+        if (!empty($x['signataire'])) { $deja = true; return false; }
+        // Garde : la signature ne fait AVANCER le statut que depuis Brouillon/Envoyé (jamais rétrograder « Acompte reçu » etc.)
+        if (in_array($x['statut'] ?? '', ['Brouillon','Envoyé',''])) {
+          $x['statut'] = 'Accepté';
+          if (empty($x['dateAcceptation'])) $x['dateAcceptation'] = date('Y-m-d');
+        }
+        $x['signataire'] = $signataire; $x['signatureImg'] = $img; $x['signedAt'] = $now; $x['updatedAt'] = nowTs();
+        return true;
+      }
+      return false;
+    });
+    if ($deja) out(['ok'=>true,'already'=>true]);
     // Journal séparé, jamais écrasé par une resynchro → la signature ne se perd jamais
-    $sf=$DATA_DIR.'/_signatures.json'; $sigs=readJson($sf); if(!is_array($sigs))$sigs=[];
-    $sigs=array_values(array_filter($sigs,function($s)use($id){return ($s['id']??'')!==$id;}));
-    $sigs[]=['id'=>$id,'signataire'=>$signataire,'signatureImg'=>$img,'signedAt'=>$now,
-             'ip'=>$_SERVER['REMOTE_ADDR']??'','montantTTC'=>$d['montantTTC']??0];
-    writeJson($sf,$sigs);
+    sousVerrou($DATA_DIR, 'signatures', function() use ($DATA_DIR, $id, $signataire, $img, $now, $d) {
+      $sf=$DATA_DIR.'/_signatures.json'; $sigs=readJson($sf); if(!is_array($sigs))$sigs=[];
+      $sigs=array_values(array_filter($sigs,function($s)use($id){return ($s['id']??'')!==$id;}));
+      $sigs[]=['id'=>$id,'signataire'=>$signataire,'signatureImg'=>$img,'signedAt'=>$now,
+               'ip'=>$_SERVER['REMOTE_ADDR']??'','montantTTC'=>$d['montantTTC']??0];
+      writeJson($sf,$sigs);
+    });
     // Notifie LouisMagie (best effort, ignore les erreurs)
     $notif=getenv('SMTP_FROM')?:getenv('SMTP_USER');
     if($notif){ @smtpSend($notif,'✍️ Devis '.$id.' signé en ligne',
@@ -1243,24 +1336,36 @@ if ($action === 'runScheduled') {
   $desab=[]; $cl=readJson($DATA_DIR.'/clients.json');
   if(is_array($cl)) foreach($cl as $c){ if(!empty($c['desabo']) && !empty($c['email'])) $desab[strtolower(trim($c['email']))]=1; }
   $today=date('Y-m-d'); $sent=0; $fail=0; $skip=0;
-  foreach ($arr as $i => &$p) {
+  // Mise à jour d'UNE ligne dans le fichier relu sous verrou (id, ou trackId en secours) :
+  // un envoi d'appareil arrivé pendant la campagne n'est pas écrasé.
+  $majPlanif = function($p, $champs) use ($DATA_DIR) {
+    $pid = (string)($p['id'] ?? ''); $tid = (string)($p['trackId'] ?? '');
+    majTable($DATA_DIR, 'planifs', function(&$t) use ($pid, $tid, $champs) {
+      foreach ($t as &$x) {
+        if (($pid !== '' && (string)($x['id'] ?? '') === $pid) || ($pid === '' && $tid !== '' && (string)($x['trackId'] ?? '') === $tid)) {
+          foreach ($champs as $k => $v) $x[$k] = $v;
+          return true;
+        }
+      }
+      return false;
+    });
+  };
+  foreach ($arr as $i => $p) {
     if (($p['statut']??'')==='prévu' && ($p['date']??'9999') <= $today) {
       if (isset($desab[strtolower(trim((string)($p['to'] ?? '')))])) {
-        $p['statut']='annulé'; $p['info']='destinataire désabonné'; $p['updatedAt']=nowTs(); $skip++;
-        writeJson($f,$arr); continue;
+        $majPlanif($p, ['statut'=>'annulé', 'info'=>'destinataire désabonné', 'updatedAt'=>nowTs()]); $skip++;
+        continue;
       }
       $tu='';
       if(!empty($p['trackId'])){ $base=(isset($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off'?'https':'http').'://'.$_SERVER['HTTP_HOST'].$_SERVER['SCRIPT_NAME']; $tu=$base.'?action=track&m='.rawurlencode($p['trackId']); }
       list($ok,$info)=smtpSend($p['to']??'',$p['subject']??'',$p['body']??'','','',$tu,$p['html']??'');
-      $p['statut']=$ok?'envoyé':'échec'; $p['sentAt']=date('c'); $p['info']=$info;
-      $p['updatedAt']=nowTs();   // sinon un appareil en retard réécrirait « prévu » par-dessus
+      // persistance immédiate : une coupure ne fait pas réexpédier le lot ; updatedAt empêche
+      // un appareil en retard de réécrire « prévu » par-dessus
+      $majPlanif($p, ['statut'=>$ok?'envoyé':'échec', 'sentAt'=>date('c'), 'info'=>$info, 'updatedAt'=>nowTs()]);
       $ok?$sent++:$fail++;
-      writeJson($f,$arr);          // persistance immédiate : une coupure ne fait pas réexpédier le lot
       usleep(350000);              // cadence douce, pour ne pas se faire limiter par le serveur SMTP
     }
   }
-  unset($p);
-  writeJson($f,$arr);
   if ($lock) { @flock($lock, LOCK_UN); @fclose($lock); }
   out(['ok'=>true,'sent'=>$sent,'fail'=>$fail,'desabonnes'=>$skip,'total'=>count($arr)]);
 }
@@ -1315,25 +1420,75 @@ switch ($action) {
     $e = $req['entity'] ?? '';
     if (!in_array($e, $ENTITIES)) out(['ok'=>false,'error'=>'entité inconnue']);
     $entrantes = is_array($req['rows'] ?? null) ? $req['rows'] : [];
-    $existantes = readJson("$DATA_DIR/$e.json"); if (!is_array($existantes)) $existantes = [];
-    // journal de suppressions : union de ce que le serveur sait et de ce que l'appareil apporte
-    $dels = delsRead($DATA_DIR);
-    if (is_array($req['dels'] ?? null) && $req['dels']) {
-      $dels = delsMerge($dels, [$e => $req['dels']]);
-      writeJson("$DATA_DIR/_dels.json", $dels);
+    $res = sousVerrou($DATA_DIR, $e, function() use ($DATA_DIR, $e, $entrantes, $req) {
+      $existantes = readJson("$DATA_DIR/$e.json"); if (!is_array($existantes)) $existantes = [];
+      // journal de suppressions : union de ce que le serveur sait et de ce que l'appareil apporte
+      $dels = sousVerrou($DATA_DIR, 'dels', function() use ($DATA_DIR, $e, $req) {
+        $d = delsRead($DATA_DIR);
+        if (is_array($req['dels'] ?? null) && $req['dels']) {
+          $d = delsMerge($d, [$e => $req['dels']]);
+          writeJson("$DATA_DIR/_dels.json", $d);
+        }
+        return $d;
+      });
+      $fusion = mergeRows($existantes, $entrantes, $dels[$e] ?? [], $e);
+      backupJour($DATA_DIR, $e);
+      historiser($DATA_DIR, $e, $existantes, $fusion);
+      if (!writeJson("$DATA_DIR/$e.json", $fusion)) return null;
+      return $fusion;
+    });
+    if ($res === null) out(['ok'=>false,'error'=>'écriture impossible']);
+    out(['ok'=>true, 'entity'=>$e, 'n'=>count($res), 'rows'=>$res]);
+  }
+
+  case 'empreintes': {
+    $r = [];
+    foreach ($ENTITIES as $e) {
+      if ($e === 'activite') continue;                             // journal, pas des données métier
+      $v = readJson("$DATA_DIR/$e.json"); $r[$e] = empreinte(is_array($v) ? $v : []);
     }
-    $fusion = mergeRows($existantes, $entrantes, $dels[$e] ?? [], $e);
-    backupJour($DATA_DIR, $e);
-    if (!writeJson("$DATA_DIR/$e.json", $fusion)) out(['ok'=>false,'error'=>'écriture impossible']);
-    out(['ok'=>true, 'entity'=>$e, 'n'=>count($fusion), 'rows'=>$fusion]);
+    out(['ok'=>true, 'empreintes'=>$r]);
+  }
+
+  case 'historique': {
+    $dir = "$DATA_DIR/_historique";
+    $fichiers = @glob("$dir/*.jsonl"); if (!is_array($fichiers)) $fichiers = []; rsort($fichiers);
+    $max = min(300, max(1, (int)($req['limit'] ?? 150)));
+    $out = [];
+    foreach ($fichiers as $f) {
+      $lignes = @file($f, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES); if (!is_array($lignes)) continue;
+      for ($i = count($lignes) - 1; $i >= 0 && count($out) < $max; $i--) {
+        $x = json_decode($lignes[$i], true); if (!is_array($x)) continue;
+        // liste légère : le contenu complet n'est renvoyé qu'au moment de restaurer
+        $out[] = ['at'=>$x['at'] ?? '', 'entity'=>$x['entity'] ?? '', 'id'=>$x['id'] ?? '',
+                  'raison'=>$x['raison'] ?? '', 'libelle'=>resumeFiche(is_array($x['avant'] ?? null) ? $x['avant'] : [])];
+      }
+      if (count($out) >= $max) break;
+    }
+    out(['ok'=>true, 'entrees'=>$out]);
+  }
+
+  case 'historiqueEntree': {
+    $at = (string)($req['at'] ?? ''); $e = (string)($req['entity'] ?? ''); $id = (string)($req['id'] ?? '');
+    if (!preg_match('/^\d{4}-\d{2}/', $at)) out(['ok'=>false,'error'=>'date invalide']);
+    $f = "$DATA_DIR/_historique/".substr($at, 0, 7).".jsonl";
+    $lignes = is_file($f) ? @file($f, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) : [];
+    foreach ((array)$lignes as $l) {
+      $x = json_decode($l, true);
+      if (is_array($x) && ($x['at'] ?? '') === $at && ($x['entity'] ?? '') === $e && (string)($x['id'] ?? '') === $id)
+        out(['ok'=>true, 'entree'=>$x]);
+    }
+    out(['ok'=>false, 'error'=>'version introuvable']);
   }
 
   case 'putConfig': {
     $entrant = is_array($req['config'] ?? null) ? $req['config'] : [];
-    $actuel  = readJson("$DATA_DIR/config.json"); if (!is_array($actuel)) $actuel = [];
-    // fusion par clé : un appareil qui ignore un réglage récent ne l'efface plus
-    $fusion = array_merge($actuel, $entrant);
-    if (!writeJson("$DATA_DIR/config.json", $fusion)) out(['ok'=>false,'error'=>'écriture impossible']);
+    $ok = sousVerrou($DATA_DIR, 'config', function() use ($DATA_DIR, $entrant) {
+      $actuel = readJson("$DATA_DIR/config.json"); if (!is_array($actuel)) $actuel = [];
+      // fusion par clé : un appareil qui ignore un réglage récent ne l'efface plus
+      return writeJson("$DATA_DIR/config.json", array_merge($actuel, $entrant));
+    });
+    if (!$ok) out(['ok'=>false,'error'=>'écriture impossible']);
     out(['ok'=>true]);
   }
 
