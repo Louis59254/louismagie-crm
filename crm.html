@@ -1538,15 +1538,39 @@ function syncPrestationDevis(d){
   if(cible===null){ if(p) DB.remove('prestations',p.id); return null; }
   const voulu=Object.assign({},champs,{statutRealisation:cible});
   if(p && !change(voulu)) return p;
-  if(!p) p={id:uid('PRE'),idDevis:d.id,materielNotes:''};
+  // Identifiant DÉRIVÉ du devis : deux appareils qui créent le créneau chacun de
+  // leur côté produisent la même fiche (fusionnée), pas deux doublons.
+  if(!p) p={id:'PRE-'+d.id,idDevis:d.id,materielNotes:''};
   Object.assign(p,voulu);
   return DB.save('prestations',p);
 }
 /* Agenda et fiches clients sont DÉRIVÉS des devis. Un devis modifié ailleurs
    (autre appareil, signature en ligne reçue par le serveur) arrive par la
    synchro sans passer par le code qui les met à jour : on les recalcule. */
+/* Plusieurs créneaux pour un même devis (créés sur deux appareils avant ce correctif) :
+   on en garde UN, choisi de la même façon sur tous les appareils — réalisé d'abord,
+   puis celui qui porte des notes matériel, puis le plus petit identifiant — et on y
+   reporte les notes des autres. Les supprimés restent dans l'historique du serveur. */
+function dedoublonnerAgenda(){
+  const parDevis={};
+  DB.all('prestations').forEach(p=>{ if(p&&p.idDevis) (parDevis[p.idDevis]=parDevis[p.idDevis]||[]).push(p); });
+  let n=0;
+  Object.values(parDevis).forEach(l=>{
+    if(l.length<2) return;
+    l.sort((a,b)=>((b.statutRealisation==='Réalisée')-(a.statutRealisation==='Réalisée'))
+                 ||((!!(b.materielNotes||'').trim())-(!!(a.materielNotes||'').trim()))
+                 ||(String(a.id)<String(b.id)?-1:String(a.id)>String(b.id)?1:0));
+    const garde=l[0];
+    const notes=[...new Set(l.map(p=>(p.materielNotes||'').trim()).filter(Boolean))].join('\n');
+    if(notes!==(garde.materielNotes||'').trim()){ garde.materielNotes=notes; DB.save('prestations',garde); }
+    l.slice(1).forEach(p=>{ DB.remove('prestations',p.id); n++; });
+  });
+  if(n) logActivite('Agenda : '+n+' créneau(x) en double fusionné(s)');
+  return n;
+}
 function resyncDerives(){
   try{
+    dedoublonnerAgenda();
     DB.all('devis').forEach(d=>{
       syncPrestationDevis(d);
       if(d.statut==='Accepté'||d.statut==='Acompte reçu'||d.signataire) promouvoirProspect(d);
@@ -3685,6 +3709,7 @@ function annulerPlanif(id){ mktCaptureDraft(); DB.remove('planifs',id); RENDERER
 
 /* ═══════════ VUE : RÉGLAGES & CATALOGUE ═══════════ */
 RENDERERS.reglages=function(){
+  setTimeout(()=>{ if(_currentView==='reglages'&&cloudUrl()&&_pullOk) verifierCoherence(); },50);
   const cfg=DB.config();
   const cat=DB.all('catalogue');
   const catRows=cat.length?cat.map(c=>`<tr>
@@ -4008,7 +4033,7 @@ function coherenceHtml(){
          <div style="text-align:center"><div class="td-dim" style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase">Empreinte</div>
            <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:700;font-size:22px;letter-spacing:2px">${c.code}</div></div>
        </div>
-       <div class="td-dim" style="margin-top:10px;font-size:12.5px">Ouvre ce même écran sur ton autre appareil : <strong>même empreinte = exactement les mêmes données</strong>.</div>`
+       <div class="td-dim" style="margin-top:10px;font-size:12.5px">Pour comparer : clique <strong>« Vérifier maintenant »</strong> sur un appareil, puis tout de suite sur l'autre, sans rien modifier entre les deux. <strong>Même empreinte = exactement les mêmes données.</strong> Le code change dès qu'une fiche est modifiée, sur n'importe quel appareil.</div>`
     : `<div class="alert warning" style="margin:0"><span class="alert-icon">⚠️</span><div><strong>Différence avec le serveur</strong> sur : ${c.diff.map(e=>esc(NOMS_TABLES[e]||e)).join(', ')}.<br>
          Rien n'est effacé — clique sur « Vérifier maintenant » pour relancer l'échange.</div></div>`;
 }
