@@ -503,6 +503,15 @@ function rowsDiffer(distantes, fusion){
   return fusion.some(r=>!m.has(String(r.id)) || m.get(String(r.id))!==rowTs(r));
 }
 
+/* Comparaison de contenu indépendante de l'ordre des clés, hors updatedAt */
+function jsonStable(v){
+  if(v===null||typeof v!=='object') return JSON.stringify(v);
+  if(Array.isArray(v)) return '['+v.map(x=>x===undefined?'null':jsonStable(x)).join(',')+']';
+  return '{'+Object.keys(v).filter(k=>k!=='updatedAt'&&v[k]!==undefined).sort()
+    .map(k=>JSON.stringify(k)+':'+jsonStable(v[k])).join(',')+'}';
+}
+function memeContenu(a,b){ try{ return jsonStable(a)===jsonStable(b); }catch(_){ return false; } }
+
 const DB = {
   all(e){ try{ return JSON.parse(localStorage.getItem(LS_PREFIX+e)) || []; }catch(_){ return []; } },
   _writeLocal(e,arr){ try{ localStorage.setItem(LS_PREFIX+e, JSON.stringify(arr)); }
@@ -510,8 +519,12 @@ const DB = {
       console.error('localStorage plein',e,err); throw err; } },     // local seul (utilisé par la sync descendante)
   _write(e,arr){ DB._writeLocal(e,arr); if(typeof cloudQueueEntity==='function') cloudQueueEntity(e); }, // local + push cloud
   get(e,id){ return DB.all(e).find(x=>x.id===id) || null; },
-  save(e,obj){ obj.updatedAt=new Date().toISOString();    // horodatage : arbitre la fusion entre appareils
+  save(e,obj){
     const arr=DB.all(e); const i=arr.findIndex(x=>x.id===obj.id);
+    // Contenu identique à l'existant → rien : pas de nouvelle date, pas d'envoi. Sinon un
+    // simple réenregistrement changerait l'empreinte de l'appareil sans rien modifier.
+    if(i>=0 && memeContenu(arr[i],obj)){ obj.updatedAt=arr[i].updatedAt; return obj; }
+    obj.updatedAt=new Date().toISOString();    // horodatage : arbitre la fusion entre appareils
     if(i>=0) arr[i]=obj; else arr.push(obj); DB._write(e,arr); return obj; },
   remove(e,id){ delsAdd(e,id);                            // trace la suppression, sinon la fusion la ressuscite
     DB._write(e, DB.all(e).filter(x=>x.id!==id)); },
@@ -3820,7 +3833,8 @@ RENDERERS.reglages=function(){
     <div class="panel"><div class="panel-title">🛡️ Mes données entre mes appareils</div>
       <div id="coherence-panel">${coherenceHtml()}</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">
-        <button class="btn btn-or" onclick="(async()=>{document.getElementById('coherence-panel').innerHTML='<div class=\'td-dim\'>Vérification en cours…</div>';await cloudSyncNow();document.getElementById('coherence-panel').innerHTML=coherenceHtml();})()">🔍 Vérifier maintenant</button>
+        <button class="btn btn-or" id="btn-verifier" onclick="verifierMaintenant()">🔍 Vérifier maintenant</button>
+        <button class="btn btn-ghost" onclick="copierDiagnostic()">📋 Copier le diagnostic</button>
         <button class="btn btn-ghost" onclick="ouvrirHistorique()">🕘 Historique & corbeille</button>
       </div>
       <div class="td-dim" style="margin-top:12px;font-size:12.5px">Chaque version remplacée ou supprimée est conservée <strong>24 mois</strong> sur le serveur, en plus d'une copie complète quotidienne (14 jours).</div>
@@ -4010,14 +4024,48 @@ async function verifierCoherence(opts){
       loc[e]=await empreinteTable(DB.all(e));
       if(loc[e].h!==j.empreintes[e].h) diff.push(e);
     }
+    const detail={}; Object.keys(j.empreintes).forEach(e=>detail[e]={ici:loc[e],serveur:j.empreintes[e]});
     // Une différence juste après un envoi peut venir d'une modif faite ailleurs à l'instant :
     // on récupère, on renvoie, et on revérifie une fois avant de conclure.
     if(diff.length&&!opts.second){ await cloudPull(); await cloudFlushPending(); await attendreCalme(); return verifierCoherence({second:true}); }
-    _coherence={ok:!diff.length, diff, code:await codeGlobal(loc), n:Object.values(loc).reduce((a,x)=>a+x.n,0), at:new Date().toISOString()};
+    _coherence={ok:!diff.length, diff, detail, code:await codeGlobal(loc), codeServeur:await codeGlobal(j.empreintes),
+                n:Object.values(loc).reduce((a,x)=>a+x.n,0), at:new Date().toISOString()};
     peindrePastille();
     const el=document.getElementById('coherence-panel'); if(el) el.innerHTML=coherenceHtml();
     return _coherence;
   }catch(err){ console.error('verifierCoherence',err); return null; }
+}
+/* Bouton « Vérifier maintenant » : envoie ce qui attend, récupère, compare — et le montre */
+async function verifierMaintenant(){
+  const b=document.getElementById('btn-verifier'), p=document.getElementById('coherence-panel');
+  if(b){ b.disabled=true; b.textContent='⏳ Vérification…'; }
+  if(p) p.innerHTML='<div class="td-dim">Envoi de ce qui attend, récupération du serveur, comparaison…</div>';
+  try{
+    if(!cloudUrl()||!cloudAuth()){ toast('Connecte-toi au serveur pour vérifier','err'); return; }
+    await cloudFlushPending();
+    const r=await cloudPull();
+    if(r!=='pulled'&&r!=='init'){ toast('Serveur injoignable — rien n\'a été modifié','err'); return; }
+    await attendreCalme();
+    _coherence=null;
+    const c=await verifierCoherence();
+    if(!c) toast('Vérification impossible pour l\'instant — réessaie dans un instant','err');
+    else toast(c.ok?('✅ Identique au serveur · '+c.code):('⚠️ Différence sur : '+c.diff.map(e=>NOMS_TABLES[e]||e).join(', ')), c.ok?'ok':'err');
+  }finally{
+    if(b){ b.disabled=false; b.textContent='🔍 Vérifier maintenant'; }
+    if(p) p.innerHTML=coherenceHtml();
+    if(typeof RENDERERS[_currentView]==='function'&&_currentView!=='reglages') RENDERERS[_currentView](currentParams);
+  }
+}
+/* Diagnostic à copier : nombres de fiches et empreintes par table — aucune donnée personnelle */
+function copierDiagnostic(){
+  const c=_coherence;
+  if(!c||!c.detail){ toast('Lance d\'abord « Vérifier maintenant »','err'); return; }
+  const app=/iPhone|iPad/.test(navigator.userAgent)?'iPhone/iPad':(/Mac/.test(navigator.userAgent)?'Mac':'autre');
+  const l=['LouisMagie · diagnostic · '+app+' · '+new Date(c.at).toLocaleString('fr-FR'),
+    'Code appareil '+c.code+' · code serveur '+c.codeServeur+' · '+(c.ok?'IDENTIQUE':'DIFFÉRENT'),
+    ...Object.keys(c.detail).sort().map(e=>{ const d=c.detail[e];
+      return (d.ici.h===d.serveur.h?'  ':'✗ ')+e+' : ici '+d.ici.n+' ['+d.ici.h+'] · serveur '+d.serveur.n+' ['+d.serveur.h+']'; })];
+  copierTexte(l.join('\n'),'Diagnostic copié — colle-le dans ta réponse');
 }
 const NOMS_TABLES={demandes:'demandes',devis:'devis',prestations:'agenda',factures:'factures',clients:'clients',relances:'relances',mails:'emails',catalogue:'catalogue',recettes:'recettes',declarations:'déclarations',planifs:'envois planifiés',templates:'modèles',projets:'projets Imagine',magiciens:'magiciens',effets:'effets',segments:'listes',campagnes:'campagnes'};
 function coherenceHtml(){
@@ -4035,7 +4083,8 @@ function coherenceHtml(){
        </div>
        <div class="td-dim" style="margin-top:10px;font-size:12.5px">Pour comparer : clique <strong>« Vérifier maintenant »</strong> sur un appareil, puis tout de suite sur l'autre, sans rien modifier entre les deux. <strong>Même empreinte = exactement les mêmes données.</strong> Le code change dès qu'une fiche est modifiée, sur n'importe quel appareil.</div>`
     : `<div class="alert warning" style="margin:0"><span class="alert-icon">⚠️</span><div><strong>Différence avec le serveur</strong> sur : ${c.diff.map(e=>esc(NOMS_TABLES[e]||e)).join(', ')}.<br>
-         Rien n'est effacé — clique sur « Vérifier maintenant » pour relancer l'échange.</div></div>`;
+         Rien n'est effacé — clique sur « Vérifier maintenant » pour relancer l'échange.</div></div>
+       <div class="td-dim" style="margin-top:10px;font-size:12.5px">${c.diff.map(e=>{ const d=c.detail[e]; return esc(NOMS_TABLES[e]||e)+' : '+d.ici.n+' fiche(s) ici, '+d.serveur.n+' sur le serveur'; }).join('<br>')}</div>`;
 }
 
 /* ─── Historique & corbeille ─────────────────────────────────────────────
