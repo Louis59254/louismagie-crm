@@ -744,9 +744,12 @@ function showApp(){
   document.getElementById('login-screen').style.display='none';
   document.getElementById('app').style.display='flex';
   document.getElementById('topbar-date').textContent='· '+new Date().toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'});
+  resyncDerives();
   updateBadges();
   nav('dashboard');
-  if(cloudUrl()&&sessionStorage.getItem('lm_authh')){ cloudPull().then(()=>{ if(RENDERERS[_currentView])RENDERERS[_currentView](currentParams); updateBadges(); }); }
+  // cloudAuth() lit la session ET la connexion mémorisée : avant, « rester connecté »
+  // empêchait toute récupération au démarrage et chaque appareil restait sur ses données.
+  if(cloudUrl()&&cloudAuth()){ _dernierPull=Date.now(); cloudPull().then(()=>{ if(RENDERERS[_currentView])RENDERERS[_currentView](currentParams); updateBadges(); }); }
 }
 
 /* ───── Navigation ───── */
@@ -1495,21 +1498,45 @@ function propagateClient(c){
   if(n) logActivite('Coordonnées propagées sur '+n+' devis de '+c.nom);
   return n;
 }
-function statutPrestaCible(statutDevis){
-  if(statutDevis==='Refusé') return null;                       // pas dans l'agenda
-  if(statutDevis==='Accepté'||statutDevis==='Acompte reçu') return 'Confirmée'; // créneau bloqué
+/* Statut agenda d'un devis. Un devis SIGNÉ est confirmé même si son statut
+   n'a pas suivi (signature reçue par le serveur puis rapatriée par la synchro). */
+function statutPrestaCible(d){
+  const st=(typeof d==='string')?d:(d&&d.statut);
+  if(st==='Refusé') return null;                                // pas dans l'agenda
+  if(st==='Accepté'||st==='Acompte reçu') return 'Confirmée';   // créneau bloqué
+  if(d&&typeof d==='object'&&(d.signataire||d.signedAt)) return 'Confirmée';
   return 'Option';                                              // Brouillon / Envoyé
 }
-/* Crée / met à jour / supprime la prestation agenda en fonction du statut du devis */
+/* Crée / met à jour / supprime la prestation agenda en fonction du devis.
+   N'écrit que si quelque chose change : appelée à chaque synchro, elle ne doit
+   pas réhorodater (et renvoyer au serveur) des prestations identiques. */
 function syncPrestationDevis(d){
   if(!d||!d.id) return null;
   let p=DB.all('prestations').find(x=>x.idDevis===d.id);
-  if(p&&p.statutRealisation==='Réalisée'){ Object.assign(p,prestaFields(d)); return DB.save('prestations',p); }
-  const cible=statutPrestaCible(d.statut);
+  const champs=prestaFields(d);
+  const change=(cible)=>!p || Object.keys(cible).some(k=>JSON.stringify(p[k])!==JSON.stringify(cible[k]));
+  if(p&&p.statutRealisation==='Réalisée'){
+    if(!change(champs)) return p;
+    Object.assign(p,champs); return DB.save('prestations',p);
+  }
+  const cible=statutPrestaCible(d);
   if(cible===null){ if(p) DB.remove('prestations',p.id); return null; }
+  const voulu=Object.assign({},champs,{statutRealisation:cible});
+  if(p && !change(voulu)) return p;
   if(!p) p={id:uid('PRE'),idDevis:d.id,materielNotes:''};
-  Object.assign(p,prestaFields(d),{statutRealisation:cible});
+  Object.assign(p,voulu);
   return DB.save('prestations',p);
+}
+/* Agenda et fiches clients sont DÉRIVÉS des devis. Un devis modifié ailleurs
+   (autre appareil, signature en ligne reçue par le serveur) arrive par la
+   synchro sans passer par le code qui les met à jour : on les recalcule. */
+function resyncDerives(){
+  try{
+    DB.all('devis').forEach(d=>{
+      syncPrestationDevis(d);
+      if(d.statut==='Accepté'||d.statut==='Acompte reçu'||d.signataire) promouvoirProspect(d);
+    });
+  }catch(err){ console.error('resyncDerives',err); }
 }
 /* compat : ancien nom */
 function creerPrestationPourDevis(d){ return syncPrestationDevis(d); }
@@ -3969,6 +3996,7 @@ async function cloudPull(){ const url=cloudUrl(); if(!url){ setCloudStatus('off'
     });
     aRepublier.forEach(e=>cloudQueueEntity(e));
     if(Array.isArray(j.signatures)) applySignatures(j.signatures);   // ré-applique le journal de signatures (anti-perte)
+    resyncDerives();                                                  // agenda + prospects à partir des devis rapatriés
     if(j.config&&Object.keys(j.config).length){ const cur=DB.config();
       // fusion : le serveur arbitre les clés qu'il connaît, les réglages locaux inédits survivent
       localStorage.setItem(LS_PREFIX+'config', JSON.stringify(Object.assign({},cur,j.config,{passwordHash:j.config.passwordHash||cur.passwordHash}))); }
