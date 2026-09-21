@@ -242,6 +242,10 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
 .cal-evt{background:var(--or-soft);border-left:3px solid var(--or);border-radius:4px;padding:3px 6px;font-size:11px;margin-bottom:4px;cursor:pointer;line-height:1.3}
 .cal-evt:hover{background:var(--or-line)}
 .cal-evt.realisee{border-left-color:var(--ok);background:var(--okl)}
+#cloud-dot{transition:background .3s}
+#cloud-dot.pulse{animation:lmPulse 1.1s ease-in-out infinite}
+@keyframes lmPulse{50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){#cloud-dot.pulse{animation:none}}
 .cal-evt.option{border-left-color:var(--info);background:transparent;border:1px dashed var(--info);opacity:.85}
 .cal-risk{font-size:10px;color:var(--er);font-weight:700;margin-top:2px;cursor:pointer}
 .cal-risk.soft{color:var(--warn)}
@@ -744,12 +748,15 @@ function showApp(){
   document.getElementById('login-screen').style.display='none';
   document.getElementById('app').style.display='flex';
   document.getElementById('topbar-date').textContent='· '+new Date().toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'});
-  resyncDerives();
+  if(!cloudUrl()) resyncDerives();   // avec un serveur : après la récupération (sinon on dériverait de devis périmés)
   updateBadges();
   nav('dashboard');
   // cloudAuth() lit la session ET la connexion mémorisée : avant, « rester connecté »
   // empêchait toute récupération au démarrage et chaque appareil restait sur ses données.
-  if(cloudUrl()&&cloudAuth()){ _dernierPull=Date.now(); cloudPull().then(()=>{ if(RENDERERS[_currentView])RENDERERS[_currentView](currentParams); updateBadges(); }); }
+  if(cloudUrl()&&cloudAuth()){ _dernierPull=Date.now(); cloudPull().then(r=>{
+      if(RENDERERS[_currentView])RENDERERS[_currentView](currentParams); updateBadges();
+      if(r!=='pulled'&&r!=='init') toast('⚠️ Serveur injoignable : tu vois les données de cet appareil. Rien ne sera envoyé tant que la connexion n\'est pas rétablie — tes modifications sont gardées ici.','err');
+    }); }
 }
 
 /* ───── Navigation ───── */
@@ -803,8 +810,15 @@ async function ensureSeed(){
       delaiPaiement:'Paiement sous 1 mois à compter de la date d\'émission, par virement bancaire.',
       tauxUrssaf:23.1, versementLiberatoire:false, tauxImpotLib:2.2,
       urssafUrl:'https://www.autoentrepreneur.urssaf.fr', appsScriptUrl:'', backendToken:'', gmailEnvoi:false };
-    DB.saveConfig(cfg);
+    // Avec un serveur, ces valeurs ne servent qu'à afficher l'app en attendant la
+    // récupération : elles restent locales et le serveur a toujours le dernier mot.
+    if(cloudUrl()) localStorage.setItem(LS_PREFIX+'config', JSON.stringify(cfg));
+    else DB.saveConfig(cfg);
   } else if((cfg.googleReviewUrl||'').includes('VOTRE-ID')){ cfg.googleReviewUrl='https://g.page/r/CaADDh0tfuLFEAE/review'; DB.saveConfig(cfg); }
+  // Appareil vide + serveur : les vraies données arrivent par la synchro. Semer la
+  // démo ici créerait de fausses fiches (DEV-2026-001, FAC-2026-001…) horodatées
+  // « maintenant », qui l'emporteraient sur les vraies de même numéro à la fusion.
+  if(cloudUrl()) return;
   if(!DB.all('catalogue').length) seedCatalogue();
   if(DB.all('clients').length || DB.all('demandes').length) return; // déjà des données
   seedDemo();
@@ -3929,28 +3943,63 @@ function cloudUrl(){ const u=(DB.config().appsScriptUrl||'').trim();
   if(location.protocol.indexOf('http')===0) return location.origin+'/api.php'; // auto : même domaine
   return ''; }                                                 // fichier local : pas de backend
 let _cloudTimers={};
-function setCloudStatus(s){ const el=document.getElementById('cloud-dot'); if(!el)return;
-  const map={off:['#5A5650','Cloud non configuré'],sync:['#E8A13A','Synchronisation…'],ok:['#3FB97A','Synchronisé avec Google'],err:['#E5564B','Erreur de synchro — réessaie']};
-  const m=map[s]||map.off; el.style.background=m[0]; el.title=m[1]; el.dataset.s=s; }
+/* ─── Pastille de synchro ───────────────────────────────────────────────
+   Vert   : rien en attente, tout est sur le serveur.
+   Orange : des modifications ne sont PAS parties et rien n'est en train de les envoyer.
+   Rouge  : le dernier échange a échoué.
+   Un envoi en cours ne change pas la couleur : la pastille pulse, c'est tout. */
+let _volants=0; const _planifies=new Set();
+/* Tant que la première récupération de la session n'a pas réussi, on n'envoie
+   RIEN : les modifications restent en file (et sur l'appareil). Le serveur ne
+   fusionne ainsi qu'avec un appareil qui a vu son état le plus récent. */
+let _pullOk=false, _cfgEnAttente=false;
+function derniereSynchro(){ try{ return localStorage.getItem('lm_lastSync')||''; }catch(_){ return ''; } }
+function setCloudStatus(s){
+  const el=document.getElementById('cloud-dot'); if(!el)return;
+  if(s==='sync') _volants++;
+  else if(s==='ok'||s==='err') _volants=Math.max(0,_volants-1);
+  if(s==='ok'){ try{ localStorage.setItem('lm_lastSync',new Date().toISOString()); }catch(_){} }
+  if(s!=='sync') el.dataset.s=s;
+  peindrePastille();
+}
+function peindrePastille(){
+  const el=document.getElementById('cloud-dot'); if(!el)return;
+  const s=el.dataset.s||'', pend=pendAll(), actif=_volants>0||_planifies.size>0;
+  el.classList.toggle('pulse',actif);
+  const l=derniereSynchro();
+  const h=l?new Date(l).toLocaleString('fr-FR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'';
+  let c,t;
+  if(s==='off'){ c='#5A5650'; t='Serveur non configuré'; }
+  else if(s==='err'&&!actif){ c='#E5564B'; t='La dernière synchronisation a échoué — clique pour réessayer'+(pend.length?' · en attente : '+pend.join(', '):''); }
+  else if(pend.length&&!actif){ c='#E8A13A'; t=pend.length+' élément(s) pas encore envoyé(s) : '+pend.join(', ')+' — clique pour synchroniser'; }
+  else if(l||s==='ok'){ c='#3FB97A'; t=actif?'Synchronisation en cours…':('À jour'+(h?' · dernière synchro '+h:'')); }
+  else { c='#8A8580'; t='Connexion au serveur…'; }
+  el.style.background=c; el.title=t; el.setAttribute('aria-label',t);
+}
 const LS_PEND='lm_pending';
 function pendAll(){ try{ return JSON.parse(localStorage.getItem(LS_PEND))||[]; }catch(_){ return []; } }
 function pendSet(a){ try{ localStorage.setItem(LS_PEND, JSON.stringify([...new Set(a)])); }catch(_){} }
 function pendAdd(e){ const a=pendAll(); if(a.indexOf(e)<0){ a.push(e); pendSet(a); } majPendState(); }
 function pendDel(e){ pendSet(pendAll().filter(x=>x!==e)); majPendState(); }
-function majPendState(){ const el=document.getElementById('cloud-dot'); if(!el)return;
-  const n=pendAll().length;
-  if(n && el.dataset.s!=='sync'){ el.style.background='#E8A13A'; el.title=n+' modification(s) en attente d\'envoi — clique pour synchroniser'; } }
+function majPendState(){ peindrePastille(); }
 /* Rejoue tout ce qui n'a pas pu partir (retour du réseau, retour sur l'app) */
-function cloudFlushPending(){ const a=pendAll(); if(!a.length||!cloudUrl()) return Promise.resolve();
+function cloudFlushPending(){ if(!cloudUrl()) return Promise.resolve();
+  if(!_pullOk) return cloudAuth()?cloudPull():Promise.resolve();   // récupérer d'abord ; le pull renvoie ensuite la file
+  const a=pendAll().filter(e=>!_planifies.has(e));   // déjà programmé par ailleurs → pas de double envoi
+  if(!a.length) return Promise.resolve();
   return Promise.all(a.map(e=>cloudPushEntity(e))); }
 window.addEventListener('online',()=>{ cloudFlushPending(); });
 
-function cloudQueueEntity(entity){ if(!cloudUrl())return; pendAdd(entity);   // marqué avant l'envoi : une fermeture en plein vol ne perd rien
+function cloudQueueEntity(entity){ if(!cloudUrl())return;
+  if(!_pullOk){ pendAdd(entity); return; }     // mémorisé, envoyé juste après la récupération
+  _planifies.add(entity);                      // avant pendAdd : la pastille pulse au lieu de passer à l'orange
+  pendAdd(entity);                             // marqué avant l'envoi : une fermeture en plein vol ne perd rien
   clearTimeout(_cloudTimers[entity]);
-  _cloudTimers[entity]=setTimeout(()=>cloudPushEntity(entity),1500); }
+  _cloudTimers[entity]=setTimeout(()=>{ _planifies.delete(entity); cloudPushEntity(entity); },1500); }
 /* Envoi d'une entité : le serveur fusionne et renvoie le résultat, qu'on
    refusionne en local (une frappe pendant l'aller-retour n'est pas perdue). */
 function cloudPushEntity(entity){
+  if(!_pullOk){ pendAdd(entity); return Promise.resolve({ok:false,differe:true}); }
   const dels=delsAll()[entity]||{};
   return cloudPost({action:'putEntity',entity,rows:DB.all(entity),dels})
     .then(j=>{ if(j&&j.ok){
@@ -3964,7 +4013,9 @@ function cloudPushEntity(entity){
       return j; })
     .catch(err=>{ pendAdd(entity); return {ok:false}; });
 }
-function cloudQueueConfig(){ if(!cloudUrl())return; clearTimeout(_cloudTimers._cfg);
+function cloudQueueConfig(){ if(!cloudUrl())return;
+  if(!_pullOk){ _cfgEnAttente=true; return; }  // une config pas encore fusionnée écraserait les vrais réglages
+  clearTimeout(_cloudTimers._cfg);
   _cloudTimers._cfg=setTimeout(()=>cloudPost({action:'putConfig',config:DB.config()}),1500); }
 function cloudAuth(){ return sessionStorage.getItem('lm_authh')||localStorage.getItem('lm_authh')||''; }
 function cloudPost(payload){ const url=cloudUrl(); if(!url) return Promise.resolve({ok:false});
@@ -3980,10 +4031,11 @@ async function cloudPull(){ const url=cloudUrl(); if(!url){ setCloudStatus('off'
     if(!j||!j.ok||!j.data){ setCloudStatus('err'); return 'err'; }
     const total=ENTITIES.reduce((a,e)=>a+((j.data[e]||[]).length),0);
     if(total===0){
-      if(j.firstRun){ cloudPushAll(); return 'init'; }         // serveur RÉELLEMENT neuf → on l'initialise depuis le local
+      if(j.firstRun){ _pullOk=true; setCloudStatus('ok'); cloudPushAll(); return 'init'; }   // referme le « sync » ouvert plus haut         // serveur RÉELLEMENT neuf → on l'initialise depuis le local
       // serveur vide mais pas neuf (fichiers corrompus/absents après deploy) → ne rien écraser, alerter
       setCloudStatus('err'); toast('⚠️ Serveur vide alors qu\'il ne devrait pas l\'être — synchro suspendue pour protéger tes données. Vérifie le stockage du serveur.','err'); return 'empty-guard';
     }
+    _pullOk=true;                                   // état serveur connu : les envois sont désormais sûrs
     // Fusion par enregistrement : on n'écrase JAMAIS le local en bloc.
     const dels=delsFusion(delsAll(), j.dels||{}); delsSave(dels);
     const aRepublier=[];
@@ -3997,6 +4049,8 @@ async function cloudPull(){ const url=cloudUrl(); if(!url){ setCloudStatus('off'
     aRepublier.forEach(e=>cloudQueueEntity(e));
     if(Array.isArray(j.signatures)) applySignatures(j.signatures);   // ré-applique le journal de signatures (anti-perte)
     resyncDerives();                                                  // agenda + prospects à partir des devis rapatriés
+    cloudFlushPending();                                              // ce qui attendait (hors ligne, avant connexion)
+    if(_cfgEnAttente){ _cfgEnAttente=false; cloudQueueConfig(); }
     if(j.config&&Object.keys(j.config).length){ const cur=DB.config();
       // fusion : le serveur arbitre les clés qu'il connaît, les réglages locaux inédits survivent
       localStorage.setItem(LS_PREFIX+'config', JSON.stringify(Object.assign({},cur,j.config,{passwordHash:j.config.passwordHash||cur.passwordHash}))); }
@@ -4013,13 +4067,17 @@ function archivePdfCloud(doc,kind,filename,year){ if(!cloudUrl())return;
       .then(j=>{ if(j&&j.ok&&j.url) logActivite('PDF archivé dans Drive : '+filename); }); }catch(_){}
 }
 async function saveBackend(){            // sauve les réglages + POUSSE vers le serveur (sans re-tirer = pas d'écrasement)
-  saveParams(); setCloudStatus('sync');
+  saveParams();
   if(cloudUrl()){ const j=await cloudPost({action:'putConfig',config:DB.config()});
     toast(j&&j.ok?'Réglages enregistrés & synchronisés':'Enregistré en local (serveur injoignable)', j&&j.ok?'ok':'err'); }
   else toast('Réglages enregistrés','ok');
   if(_currentView==='reglages') RENDERERS.reglages();
 }
-async function cloudSyncNow(){ const res=await cloudPull(); if(typeof RENDERERS[_currentView]==='function') RENDERERS[_currentView](currentParams); updateBadges();
+async function cloudSyncNow(){
+  await cloudFlushPending();
+  const res=await cloudPull(); if(typeof RENDERERS[_currentView]==='function') RENDERERS[_currentView](currentParams); updateBadges();
+  const reste=pendAll();
+  if(reste.length){ toast('⚠️ Pas encore envoyé au serveur : '+reste.join(', ')+'. Tes données restent sur cet appareil, rien n\'est perdu — réessaie quand la connexion revient.','err'); return; }
   toast(res==='pulled'?'✅ Appareils synchronisés (fusion, aucune perte)':(res==='init'?'Serveur initialisé depuis ce CRM':(res==='off'?'Configure d\'abord l\'URL':'Échec — vérifie la connexion')), res==='err'?'err':'ok'); }
 
 /* ───── Boot ───── */
@@ -4361,7 +4419,7 @@ function briefFlushCloud(){
     navigator.sendBeacon(url, new Blob([payload],{type:'text/plain;charset=utf-8'}));
   }catch(_){}
 }
-function briefSortie(){ if(briefAutoSave()) briefFlushCloud(); }
+function briefSortie(){ if(briefAutoSave()&&_pullOk) briefFlushCloud(); }   // sinon : reste en file, envoyé après la prochaine récupération
 let _dernierPull=Date.now();
 /* Retour sur l'application (déverrouillage du téléphone, changement d'onglet) :
    on pousse ce qui n'était pas parti, puis on récupère le travail des autres appareils. */
@@ -5370,7 +5428,7 @@ function ficheProjetOpen(pid){ const doc=pdfFicheProjet(pid); if(!doc)return; sh
   try{ applyTheme(localStorage.getItem('lm_theme')||'dark'); }catch(_){ applyTheme('dark'); }
   prepareLogo(); appliquerLogos();                       // mesure ratio + variantes claires/sombres pour les PDF
   await ensureSeed();
-  setCloudStatus(cloudUrl()?'sync':'off');
+  if(cloudUrl()) peindrePastille(); else setCloudStatus('off');   // état réel dès l'ouverture, pas un orange par défaut
   // pull se fait après login (showApp), car l'API exige le mot de passe
   if((sessionStorage.getItem('lm_auth')==='1'&&sessionStorage.getItem('lm_authh'))||(localStorage.getItem('lm_auth')==='1'&&localStorage.getItem('lm_authh'))) showApp();
 })();
