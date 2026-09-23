@@ -902,6 +902,14 @@ RENDERERS.dashboard=function(){
     if(f.statut==='Relance 2') return f.dateRelance2&&daysSince(f.dateRelance2)>15;
     return false;
   });
+  // ✍️ Signature reçue en ligne : accusé + appel de l'acompte, avec état de l'agenda
+  devisSignesSansAccuse().forEach(d=>{
+    const c=conflitPourDevis(d);
+    const qui=esc(d.nomClient||''), quand=esc(fmtDateShort(d.dateEvenement));
+    const bouton='<a onclick="mailSignature(\''+d.id+'\')" style="color:inherit;text-decoration:underline;cursor:pointer">Envoyer l\'accusé + acompte</a>';
+    if(c) alrt('sign-'+d.id,'warning','⚠','<strong>'+esc(d.id)+' signé par '+qui+'</strong> ('+quand+') — mais '+(c.niveau==='conflit'?'<strong>chevauchement</strong>':'créneau serré')+' avec '+esc(libelleAutrePresta(c.autre))+' : vérifie l\'agenda avant de confirmer. '+bouton,2);
+    else alrt('sign-'+d.id,'success','✍️','<strong>'+esc(d.id)+' signé en ligne par '+qui+'</strong> ('+quand+') — aucun chevauchement dans ton agenda. '+bouton,2);
+  });
   relancesDues.forEach(f=>{ alrt('relance-'+f.id,'danger','🔔','<strong>Facture '+esc(f.id)+' impayée</strong> ('+fmtEur(f.soldeDu)+' · '+esc(clientNomFacture(f))+') — '+(f.statut==='Émise'?'relance 1':(f.statut==='Relance 1'?'relance 2':'contentieux ?'))+' à envoyer. <a onclick="voirFacture(\''+f.id+'\')" style="color:inherit;text-decoration:underline;cursor:pointer">Ouvrir</a>',3); });
   // Prestations passées jamais clôturées → bloque la facture de solde + la demande d'avis
   prestations.filter(p=>p.statutRealisation==='Confirmée'&&p.dateEvenement&&daysSince(p.dateEvenement)>0&&daysSince(p.dateEvenement)<=45).forEach(p=>{
@@ -1085,6 +1093,8 @@ RENDERERS.demandes=function(){
     <td data-label="Statut">${badge(d.statut)}</td>
     <td data-label=""><div class="td-actions">
       <button class="btn btn-ghost btn-sm" onclick="voirDemande('${d.id}')">Détails</button>
+      ${d.email?`<button class="btn btn-ghost btn-sm" title="Pas disponible à cette date" onclick="reponseDemande('${d.id}','indispo')">🚫</button>
+        <button class="btn btn-ghost btn-sm" title="Demander des précisions / un appel" onclick="reponseDemande('${d.id}','infos')">💬</button>`:''}
       ${d.statut!=='Converti'?`<button class="btn btn-or btn-sm" onclick="nav('devis-create',{demandeId:'${d.id}'})">→ Devis</button>`:''}
     </div></td></tr>`).join('')
     :'<tr><td colspan="7"><div class="empty"><div class="empty-icon">📭</div><div class="empty-text">Aucune demande</div><div class="empty-sub">Les demandes du site arriveront ici.</div></div></td></tr>';
@@ -1126,12 +1136,30 @@ function voirDemande(id){
     <select class="form-control" id="dem-statut">${['Nouveau','En cours','Converti','Ignoré'].map(s=>`<option${s===d.statut?' selected':''}>${s}</option>`).join('')}</select></div>`;
   const cli=d.idClient?DB.get('clients',d.idClient):null;
   const lienCli=cli?`<div class="alert success" style="margin-top:12px"><span class="alert-icon">👤</span><div>Fiche client créée : <strong>${esc(((cli.prenom?cli.prenom+' ':'')+cli.nom).trim())}</strong> (${esc(cli.type)}). <a href="#" onclick="closeModal();voirClient('${cli.id}');return false" style="color:inherit;text-decoration:underline">Ouvrir la fiche</a></div></div>`:'';
+  const repondre=d.email?`<div style="margin-top:16px"><div class="form-label">Répondre en un clic</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-ghost btn-sm" onclick="reponseDemande('${id}','indispo')">🚫 Pas disponible à cette date</button>
+      <button class="btn btn-ghost btn-sm" onclick="reponseDemande('${id}','infos')">💬 Précisions / appel téléphonique</button>
+    </div><div class="td-dim" style="font-size:12px;margin-top:6px">Le message s'ouvre pré-rédigé : tu peux le relire et le modifier avant l'envoi.</div></div>`:'';
   const footer=`<button class="btn btn-danger" onclick="supprimerDemande('${id}')">🗑 Supprimer</button>
     <button class="btn btn-ghost" onclick="closeModal()">Fermer</button>
     ${cli?'':`<button class="btn btn-ghost" onclick="demandeVersClient('${id}')">👤 Ajouter aux contacts</button>`}
     <button class="btn btn-success" onclick="majStatutDemande('${id}')">Enregistrer statut</button>
     ${d.statut!=='Converti'?`<button class="btn btn-or" onclick="closeModal();nav('devis-create',{demandeId:'${id}'})">→ Créer le devis</button>`:''}`;
-  openModal('Demande · '+esc(d.nom),body+lienCli,footer);
+  openModal('Demande · '+esc(d.nom),body+lienCli+repondre,footer);
+}
+/* Réponse rapide à une demande : indisponible, ou demande de précisions/appel */
+function reponseDemande(id,type){
+  const d=DB.get('demandes',id); if(!d) return;
+  if(!d.email){ toast('Cette demande n\'a pas d\'adresse email','err'); return; }
+  const t=type==='indispo'?EMAIL_TPL.demandeIndispo(d):EMAIL_TPL.demandeInfos(d);
+  openMailComposer({ titre:type==='indispo'?'Répondre · date non disponible':'Répondre · demander des précisions',
+    to:t.to, subject:t.subject, body:t.body, kind:'demande', ref:id,
+    onSent:()=>{ const x=DB.get('demandes',id); if(!x) return;
+      x.statut = type==='indispo' ? 'Ignoré' : 'En cours';
+      x.notes=((x.notes||'')+'\n'+(type==='indispo'?'Répondu : date non disponible':'Répondu : demande de précisions / appel')+' le '+fmtDateShort(todayISO())).trim();
+      DB.save('demandes',x); logActivite('Réponse envoyée à '+(x.nom||'')+' ('+(type==='indispo'?'indisponible':'précisions')+')');
+      updateBadges(); if(_currentView==='demandes') RENDERERS.demandes(); } });
 }
 function infoItem(label,val){ return '<div class="info-item"><span class="info-label">'+label+'</span>'+val+'</div>'; }
 /* Ajoute la demande au fichier contacts — en PROSPECT tant qu'elle n'a pas abouti */
@@ -1230,7 +1258,9 @@ function voirDevis(id){
   const signe=d.signataire||d.signatureImg;
   const signBanner=signe?alertHtml('success','✍️',`<strong>Signé en ligne</strong> par ${esc(d.signataire||'le client')}${d.signedAt?' le '+fmtDateShort(d.signedAt.slice(0,10)):''}. <a href="#" onclick="voirSignature('${id}');return false" style="color:var(--or)">Voir la signature</a>`):'';
   const lienBtn=cloudUrl()?`<button class="btn btn-ghost" onclick="copySignLink('${id}')">🔗 Copier le lien de signature</button>`:'';
-  const email=`<button class="btn btn-or" onclick="envoyerDevisMail('${id}')">✉ ${d.statut==='Brouillon'?'Envoyer le devis':'Renvoyer le devis'}</button>${lienBtn}`;
+  const accuse=(d.signataire||d.signedAt)&&!d.mailSignatureFait
+    ? `<button class="btn btn-success" onclick="mailSignature('${id}')">✍️ Accusé de signature + acompte</button>` : '';
+  const email=`<button class="btn btn-or" onclick="envoyerDevisMail('${id}')">✉ ${d.statut==='Brouillon'?'Envoyer le devis':'Renvoyer le devis'}</button>${accuse}${lienBtn}`;
   let manu='';
   if(d.statut==='Brouillon') manu=`<button class="btn btn-ghost" onclick="majDevis('${id}','Envoyé');voirDevis('${id}')">✓ Marquer envoyé</button>`;
   else if(d.statut==='Envoyé') manu=`<button class="btn btn-success" onclick="majDevis('${id}','Accepté');voirDevis('${id}')">✓ Accepté</button><button class="btn btn-warn" onclick="majDevis('${id}','Refusé');voirDevis('${id}')">✗ Refusé</button>`;
@@ -1614,6 +1644,63 @@ function risqueJour(date,excludeId){
     if(r.niveau==='risque') worst={niveau:'risque',r,a:ps[i],b:ps[j]}; }
   return worst;
 }
+/* ─── Signature en ligne : accusé + appel de l'acompte ───────────────────
+   Le créneau du devis signé est comparé aux autres créneaux du même jour :
+   on ne propose l'envoi qu'en connaissance de cause. */
+function conflitPourDevis(d){
+  if(!d||!d.dateEvenement) return null;
+  const mien=DB.all('prestations').find(p=>p.idDevis===d.id);
+  const autres=DB.all('prestations').filter(p=>p.dateEvenement===d.dateEvenement
+    && p.statutRealisation!=='Réalisée' && p.idDevis!==d.id);
+  if(!mien||!autres.length) return null;
+  let pire=null;
+  for(const a of autres){ const r=risqueEntre(mien,a);
+    if(r.niveau==='conflit') return {niveau:'conflit',r,autre:a};
+    if(r.niveau==='risque'&&!pire) pire={niveau:'risque',r,autre:a}; }
+  return pire;
+}
+function libelleAutrePresta(p){
+  const dv=p?DB.get('devis',p.idDevis):null;
+  return (dv?dv.nomClient:'')||(p&&p.lieu)||'autre prestation';
+}
+/* Devis signés en ligne dont l'accusé n'est pas encore parti */
+function devisSignesSansAccuse(){
+  return DB.all('devis').filter(d=>(d.signataire||d.signedAt) && !d.mailSignatureFait
+    && d.statut!=='Refusé' && d.dateEvenement && daysFromNow(d.dateEvenement)>-30);
+}
+function mailSignature(id){
+  const d=DB.get('devis',id); if(!d) return;
+  const t=EMAIL_TPL.signature(d);
+  if(!t.to){ toast('Pas d\'adresse email sur ce devis','err'); return; }
+  const c=conflitPourDevis(d);
+  const suite=()=>openMailComposer({ titre:'Signature reçue — accusé + acompte', to:t.to, subject:t.subject, body:t.body,
+    kind:'signature', ref:id, pdfId:id, pdfType:'Devis',
+    onSent:()=>{ const x=DB.get('devis',id); if(!x) return;
+      x.mailSignatureFait=todayISO(); DB.save('devis',x);
+      logActivite('Accusé de signature envoyé · '+id);
+      updateBadges(); if(typeof RENDERERS[_currentView]==='function') RENDERERS[_currentView](currentParams); } });
+  if(c){
+    const autre=libelleAutrePresta(c.autre);
+    openModal(c.niveau==='conflit'?'⚠️ Chevauchement dans ton agenda':'⏱ Créneau serré ce jour-là',
+      `<div class="alert ${c.niveau==='conflit'?'danger':'warning'}" style="margin:0"><span class="alert-icon">${c.niveau==='conflit'?'⚠':'⏱'}</span><div>
+         Le ${esc(fmtDateFr(d.dateEvenement))}, ce devis ${c.niveau==='conflit'?'<strong>chevauche</strong>':'est très proche de'} une autre prestation : <strong>${esc(autre)}</strong> (${esc(c.r.msg)}).<br>
+         Vérifie avant de confirmer l'option au client — une fois l'acompte demandé, il sera difficile de revenir en arrière.</div></div>`,
+      `<button class="btn btn-ghost" onclick="closeModal();nav('agenda')">📅 Voir l'agenda</button>
+       <button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
+       <button class="btn btn-or" onclick="closeModal();mailSignatureForce('${id}')">Envoyer quand même</button>`);
+    return;
+  }
+  suite();
+}
+function mailSignatureForce(id){ const d=DB.get('devis',id); if(!d) return;
+  const t=EMAIL_TPL.signature(d);
+  openMailComposer({ titre:'Signature reçue — accusé + acompte', to:t.to, subject:t.subject, body:t.body,
+    kind:'signature', ref:id, pdfId:id, pdfType:'Devis',
+    onSent:()=>{ const x=DB.get('devis',id); if(!x) return; x.mailSignatureFait=todayISO(); DB.save('devis',x);
+      logActivite('Accusé de signature envoyé (malgré un chevauchement) · '+id);
+      updateBadges(); if(typeof RENDERERS[_currentView]==='function') RENDERERS[_currentView](currentParams); } });
+}
+
 /* Géocodage (BAN gratuit) pour estimer le trajet entre 2 lieux */
 const _geoCache={};
 async function geocodeLieu(q){ if(!q) return null; if(q in _geoCache) return _geoCache[q];
@@ -3079,6 +3166,20 @@ const EMAIL_TPL={
     const bloc=lien?`\n\n✍️ Pour accepter, signez votre devis en ligne en 1 clic (bon pour accord) :\n${lien}\n`:'';
     return { to:ct.email, subject:'Votre devis LouisMagie — '+d.id,
       body:`Bonjour ${prenomDe(ct.nom||d.nomClient)},\n\nSuite à votre demande, voici votre devis ${d.id} pour la prestation du ${fmtDateFr(d.dateEvenement)} (${d.creneau||''}) à ${d.lieu||''}.\n\nMontant total TTC : ${fmtEur(d.montantTTC)}\nAcompte de réservation (${d.acomptePct||0} %) : ${fmtEur(ac)}\n\nLa date est confirmée et bloquée dès réception de l'acompte. Le devis détaillé est joint en PDF.${bloc}\nJe reste à votre disposition pour toute question.\n\n${sig()}` }; },
+  /* Réponse à une demande : je ne suis pas libre */
+  demandeIndispo(d){ const q=d.dateEvenement?(' du '+fmtDateFr(d.dateEvenement)):'';
+    return { to:d.email||'', subject:'Votre demande'+(d.dateEvenement?(' pour le '+fmtDateShort(d.dateEvenement)):'')+' — LouisMagie',
+      body:`Bonjour ${prenomDe(d.nom)},\n\nMerci pour votre demande${q}.\n\nJe suis désolé : je ne suis pas disponible à cette date, mon agenda est déjà pris.\n\nSi votre date peut bouger, même d'une journée, dites-le-moi : je regarde ce que je peux faire. Et pour un prochain événement, écrivez-moi quand vous voulez.\n\nBelle réussite pour votre événement,\n${sig()}` }; },
+  /* Réponse à une demande : il me manque des éléments / appelons-nous */
+  demandeInfos(d){ const tel=(DB.config().entrepriseTel||'').trim();
+    return { to:d.email||'', subject:'Votre demande'+(d.dateEvenement?(' pour le '+fmtDateShort(d.dateEvenement)):'')+' — quelques précisions',
+      body:`Bonjour ${prenomDe(d.nom)},\n\nMerci pour votre demande${d.dateEvenement?(' pour le '+fmtDateFr(d.dateEvenement)):''}. Elle m'intéresse, et j'aimerais cerner votre projet avant de vous envoyer une proposition juste.\n\nPouvez-vous me préciser :\n• le déroulé de votre événement et le moment où la magie interviendrait ;\n• le nombre d'invités et le lieu exact ;\n• la durée souhaitée ;\n• le budget que vous aviez en tête.\n\nUn appel de dix minutes ira plus vite : donnez-moi deux ou trois créneaux qui vous arrangent${tel?(', ou appelez-moi au '+tel):''}, et je m'adapte.\n\nÀ très vite,\n${sig()}` }; },
+  /* Accusé après signature en ligne : option posée, acompte pour confirmer */
+  signature(d){ const ct=contactDevis(d); const pct=+d.acomptePct||0;
+    const ac=Math.round((+d.montantTTC||0)*pct/100); const cfg=DB.config();
+    const rib=[cfg.iban?('IBAN : '+cfg.iban):'', cfg.bic?('BIC : '+cfg.bic):''].filter(Boolean).join('\n');
+    return { to:ct.email, subject:'Votre signature est bien reçue — '+d.id,
+      body:`Bonjour ${prenomDe(ct.nom||d.nomClient)},\n\nMerci pour votre signature, elle est enregistrée.\n\nJ'ai posé une option sur le ${fmtDateFr(d.dateEvenement)}${d.creneau?(' ('+d.creneau+')'):''}${d.lieu?(' à '+d.lieu):''} : je ne propose plus cette date à personne d'autre.\n\nPour la confirmer, il reste l'acompte de réservation${pct?(' de '+pct+' %'):''} : ${fmtEur(ac)}${rib?('\n\n'+rib):''}\n\nDès réception, la date est à vous et je vous envoie la facture d'acompte. Le solde se règle après la prestation.\n\nUne question d'ici là ? Écrivez-moi.\n\n${sig()}` }; },
   facture(f,nom){ const lbl=f.type==='acompte'?'facture d\'acompte':(f.type==='solde'?'facture de solde':'facture');
     const corps=f.type==='acompte'
       ? `Montant de l'acompte : ${fmtEur(factMontant(f))}\n(acompte de réservation encaissé — le solde sera facturé après la prestation)`
