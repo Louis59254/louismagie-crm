@@ -442,7 +442,7 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
 </div>
 
 <!-- ══ MODAL ══ -->
-<div id="modal-bg" onclick="if(event.target===this)closeModal()">
+<div id="modal-bg" onmousedown="this._d=event.target" onclick="const d=this._d;this._d=null;if(event.target===this&&d===this)closeModal()">
   <div class="modal">
     <div class="modal-head"><div class="modal-title" id="modal-title"></div><button class="modal-close" onclick="closeModal()">×</button></div>
     <div class="modal-body" id="modal-body"></div>
@@ -482,16 +482,21 @@ function rowTs(r){ return String((r&&r.updatedAt)||''); }
 /* Fusionne deux listes : à id égal, la version la plus récente gagne ;
    une ligne absente d'un côté est conservée ; une suppression tracée
    l'emporte sauf si la ligne a été réécrite après. */
-function fusionRows(locales, distantes, dels){
+/* Planifs : mêmes garde-fous que mergeRows côté serveur. La trace d'un envoi réel ou tenté
+   ne s'efface pas, et une ligne traitée ne redevient jamais « prévu » par la synchro. */
+const PLANIF_TRAITEE=['envoi','envoyé','échec','incertain'];
+function suppressionIgnoree(e,r){ return e==='planifs' && !!r && PLANIF_TRAITEE.includes(r.statut); }
+function fusionRows(locales, distantes, dels, e){
   const map=new Map();
   (distantes||[]).forEach(r=>{ if(r&&r.id!=null) map.set(String(r.id), r); });
   (locales||[]).forEach(r=>{ if(!r||r.id==null) return; const k=String(r.id), d=map.get(k);
     if(!d){ map.set(k,r); return; }
+    if(e==='planifs' && r.statut==='prévu' && d.statut!=='prévu') return;   // une planif traitée ne redevient jamais « prévu »
     const tl=rowTs(r), td=rowTs(d);
     if(tl && (!td || tl>td)) map.set(k,r);          // égalité → on garde le distant (convergence stable)
   });
   const del=dels||{}, out=[];
-  map.forEach((r,k)=>{ const t=del[k]; if(t && !(rowTs(r)>t)) return; out.push(r); });
+  map.forEach((r,k)=>{ const t=del[k]; if(t && !(rowTs(r)>t) && !suppressionIgnoree(e,r)) return; out.push(r); });
   return out;
 }
 /* Le journal d'activité n'est pas un référentiel : on garde les plus récents */
@@ -542,6 +547,15 @@ function fmtDateShort(d){ if(!d) return '—'; const x=new Date(d); if(isNaN(x))
   return x.toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit',year:'2-digit'}); }
 /* Dates civiles LOCALES (les 'YYYY-MM-DD' sont parsés en UTC par new Date → décalage d'1 jour une partie de la journée) */
 function todayISO(){ const n=new Date(); return n.getFullYear()+'-'+String(n.getMonth()+1).padStart(2,'0')+'-'+String(n.getDate()).padStart(2,'0'); }
+/* Planification : instant d'envoi en UTC, même format que nowTs() côté serveur */
+const RE_ISO_UTC=/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+function planifEnvoiLe(date,heure){ const [y,m,d]=String(date).split('-').map(Number);
+  const h=/^\d{2}:\d{2}$/.test(heure||'')?heure:'09:00'; const [hh,mm]=h.split(':').map(Number);
+  const x=new Date(y,m-1,d,hh,mm,0,0); return isNaN(x)?'':x.toISOString(); }   // composants numériques : pas de piège de parsing Safari
+function planifInstant(p){ const e=String((p&&p.envoiLe)||''); if(RE_ISO_UTC.test(e)) return e;
+  const d=String((p&&p.date)||''); return /^\d{4}-\d{2}-\d{2}$/.test(d)?d+'T07:00:00.000Z':'9999-12-31T00:00:00.000Z'; }   // même repli que le serveur
+function fmtPlanif(iso){ const x=new Date(iso); if(isNaN(x)||String(iso).startsWith('9999')) return 'date inconnue';
+  return x.toLocaleDateString('fr-FR',{weekday:'short',day:'2-digit',month:'2-digit'})+' à '+x.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}); }
 function daysFromNow(d){ if(!d) return NaN; return Math.round((new Date(String(d).slice(0,10)+'T00:00:00')-new Date(todayISO()+'T00:00:00'))/86400000); }
 function daysSince(d){ return -daysFromNow(d); }
 function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
@@ -551,7 +565,8 @@ function nextId(prefix, entity){
   let max=0; arr.forEach(x=>{ const n=parseInt(x.id.split('-')[2],10); if(n>max)max=n; });
   return prefix+'-'+yr+'-'+String(max+1).padStart(3,'0');
 }
-function uid(p){ return p+'-'+Date.now().toString(36)+Math.floor(Math.random()*1000); }
+let _uidSeq=0;   // compteur de session : deux ids créés dans la même milliseconde restent distincts
+function uid(p){ return p+'-'+Date.now().toString(36)+(++_uidSeq).toString(36)+genToken().slice(0,4); }
 function genToken(){ const a='ABCDEFGHJKMNPQRSTUVWXYZ23456789'; let s=''; const rnd=(window.crypto&&crypto.getRandomValues)?crypto.getRandomValues(new Uint32Array(24)):null;
   for(let i=0;i<24;i++)s+=a[(rnd?rnd[i]:Math.floor(Math.random()*4294967296))%a.length]; return s; }
 /* N'affiche une image de signature que si c'est bien une image en base64 (anti-XSS stocké) */
@@ -563,7 +578,7 @@ function signUrl(d){ const base=cloudUrl(); if(!base) return ''; return base+'?a
 function logoSrc(){ try{ return DB.config().logo || LOGO_B64; }catch(_){ return LOGO_B64; } }
 function emailLogoUrl(){ const b=cloudUrl(); return b?b+'?action=logo':''; }
 /* Enveloppe HTML brandée LouisMagie pour tous les emails (logo + bandeau orange + pied de page) */
-function emailHtml(text){
+function emailHtml(text,opts){
   const cfg=DB.config(), logo=(cfg.logo&&emailLogoUrl())?emailLogoUrl():'';
   const e=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   let txt=String(text||'');
@@ -578,7 +593,7 @@ function emailHtml(text){
   const btn=sign?`<div style="text-align:center;margin:28px 0 10px"><a href="${sign[0]}" style="display:inline-block;background:#FF7700;color:#ffffff;text-decoration:none;font-weight:bold;font-size:13px;letter-spacing:2px;text-transform:uppercase;padding:17px 38px;border-radius:4px;box-shadow:0 4px 20px rgba(255,119,0,.28)">Signer mon devis en ligne&nbsp;&nbsp;→</a><div style="color:#8A8580;font-size:11px;margin-top:12px;letter-spacing:.3px">Signature électronique sécurisée · valeur « Bon pour accord »</div></div>`:'';
   let body=e(txt.trim()).replace(/(https?:\/\/[^\s<]+)/g,'<a href="$1" style="color:#FF7700;word-break:break-all">$1</a>').replace(/\n/g,'<br>');
   if(sign) body=body.replace(TOK,btn);
-  return emailShell(body);
+  return emailShell(body,opts);
 }
 /* Éclaircit une couleur hex vers le blanc (pour le dégradé d'en-tête) */
 function shadeHex(hex,pct){ hex=String(hex||'#FF7700').replace('#',''); if(hex.length===3)hex=hex.split('').map(c=>c+c).join(''); const n=parseInt(hex,16)||0xFF7700;
@@ -622,15 +637,28 @@ async function hmac16(msg,cle){
     return [...new Uint8Array(sig)].map(b=>b.toString(16).padStart(2,'0')).join('').slice(0,16);
   }catch(_){ return ''; }
 }
+/* Secret détenu par le serveur, reçu au pull (jamais la clé publique du formulaire).
+   Le client n'écrit rien pour le désabonnement : ni clé générée, ni putConfig. */
+function desaboPret(){ return !!(cloudUrl() && _desaboKey && window.crypto && crypto.subtle); }
 async function lienDesabo(email){
-  const base=cloudUrl(); if(!base||!email) return '';
-  const cfg=DB.config();
-  let secret=cfg.desaboKey||cfg.formKey;
-  if(!secret){ secret=genToken()+genToken().slice(0,8); const c=DB.config(); c.desaboKey=secret; DB.saveConfig(c);
-    if(cloudUrl()) await cloudPost({action:'putConfig',config:DB.config()}); }   // le serveur doit connaître le même secret
-  const sig=await hmac16(String(email).toLowerCase().trim(),secret);
+  const base=cloudUrl(); if(!base||!email||!desaboPret()) return '';
+  const sig=await hmac16(String(email).toLowerCase().trim(),_desaboKey);
   return sig?(base+'?action=desabo&e='+encodeURIComponent(email)+'&s='+sig):'';
 }
+/* ── Opposition aux emails d'actualité : par ADRESSE, pas par fiche ──
+   Le serveur tient le registre (_desabos.json). On en garde une copie en lecture seule,
+   remplacée à chaque récupération. Aucune écriture dans DB, donc aucun effet sur la synchro. */
+const LS_DESABOS='lm_desabos';
+function normEmail(e){ return String(e||'').trim().toLowerCase(); }
+function desabosServeur(){ try{ const v=JSON.parse(localStorage.getItem(LS_DESABOS)); return (v&&typeof v==='object'&&!Array.isArray(v))?v:{}; }catch(_){ return {}; } }
+function desabosCacheAjouter(email){ try{ const m=desabosServeur(), k=normEmail(email); if(k&&!m[k]){ m[k]={le:new Date().toISOString(),source:'serveur'}; localStorage.setItem(LS_DESABOS,JSON.stringify(m)); } }catch(_){} }
+/* Registre serveur + drapeaux des fiches (compatibilité avec les désabonnements déjà posés).
+   Une adresse levée au registre (leveLe) n'est pas dans le cache : seul un drapeau de fiche peut alors la bloquer. */
+function adressesDesabonnees(){ const s=new Set(Object.keys(desabosServeur()));
+  DB.all('clients').forEach(c=>{ if(c.desabo&&c.email) s.add(normEmail(c.email)); }); return s; }
+function estDesabo(email,set){ const k=normEmail(email); return !!k&&(set||adressesDesabonnees()).has(k); }
+function dateDesabo(email){ const k=normEmail(email), r=desabosServeur()[k]; if(r&&r.le) return r.le;
+  const c=DB.all('clients').find(x=>x.desabo&&normEmail(x.email)===k); return c?(c.desaboLe||''):''; }
 /* Version texte brut (alternative pour les clients sans HTML) */
 function stripHtml(h){ const d=document.createElement('div'); d.innerHTML=String(h||'').replace(/<\/(p|div|h[1-6]|li)>/gi,'\n').replace(/<br\s*\/?>/gi,'\n'); return (d.textContent||d.innerText||'').replace(/\n{3,}/g,'\n\n').trim(); }
 function uploadLogo(input){
@@ -697,12 +725,15 @@ function toast(msg,type){ const t=document.getElementById('toast'); t.textConten
   t.className=(type||''); t.classList.add('show'); clearTimeout(t._t);
   t._t=setTimeout(()=>t.classList.remove('show'),2600); }
 function openModal(title,body,footer){
+  window._modalGuard=null;   // toute nouvelle modale repart sans garde
   document.getElementById('modal-title').innerHTML=title;
   document.getElementById('modal-body').innerHTML=body;
   document.getElementById('modal-footer').innerHTML=footer||'';
   document.getElementById('modal-bg').classList.add('open');
 }
-function closeModal(){
+function closeModal(force){
+  if(!force && typeof window._modalGuard==='function' && !window._modalGuard()) return;   // Louis a refusé d'abandonner son email
+  window._modalGuard=null;
   if(typeof briefAutoSave==='function') briefAutoSave();   // jamais de perte en fermant l'éditeur de brief
   if(typeof _briefAuto==='object'&&_briefAuto) _briefAuto.pid=null;
   document.getElementById('modal-bg').classList.remove('open'); }
@@ -767,7 +798,7 @@ function showApp(){
   // cloudAuth() lit la session ET la connexion mémorisée : avant, « rester connecté »
   // empêchait toute récupération au démarrage et chaque appareil restait sur ses données.
   if(cloudUrl()&&cloudAuth()){ _dernierPull=Date.now(); cloudPull().then(r=>{
-      if(RENDERERS[_currentView])RENDERERS[_currentView](currentParams); updateBadges();
+      if(RENDERERS[_currentView]&&!mktEnSaisie())RENDERERS[_currentView](currentParams); updateBadges();
       if(r==='pulled'||r==='init') verifierCoherence();
       if(r!=='pulled'&&r!=='init') toast('⚠️ Serveur injoignable : tu vois les données de cet appareil. Rien ne sera envoyé tant que la connexion n\'est pas rétablie — tes modifications sont gardées ici.','err');
     }); }
@@ -2397,8 +2428,9 @@ function interPrincipal(idClient,idc){ const c=interCollecte(idClient); if(!c)re
 function interSave(idClient){ const c=interCollecte(idClient); if(!c)return;
   DB.save('clients',c); toast('👥 Interlocuteurs enregistrés','ok'); voirClient(idClient); }
 function clientNomFacture(f){ if(f&&f.billingName) return f.billingName; const c=DB.get('clients',f.idClient); return c?(c.prenom+' '+c.nom).trim():((DB.get('devis',f.idDevis)||{}).nomClient||''); }
-/* Email destinataire d'une facture : override billing → fiche client → devis lié */
+/* Email destinataire d'une facture : adresse saisie par Louis → interlocuteur → copie faite à la création → fiche client → devis lié */
 function factEmailTo(f){ if(!f) return '';
+  if(f.billingEmailManuel&&f.billingEmail) return f.billingEmail;
   const co=f.idContact?contactPour(f.idClient,f.idContact):null;
   return (co&&co.email)||f.billingEmail||(DB.get('clients',f.idClient)||{}).email||(DB.get('devis',f.idDevis)||{}).email||''; }
 function envoyerFactureMail(id){
@@ -2416,7 +2448,7 @@ function voirFacture(id){
       ? alertHtml('info','↩','<strong>Avoir</strong> — annule la facture '+esc(f.avoirDe||'')+'. Montant : '+fmtEur(factMontant(f))+'.')
       : alertHtml('warning','⚠','<strong>Facture annulée</strong> par un avoir. Tu peux refacturer proprement depuis le dossier.');
     const bd=`<div class="info-grid" style="margin-bottom:12px">${infoItem('Type',factTypeLabel(f))}${infoItem('Client / entité',esc(clientNomFacture(f)))}${infoItem('Montant',fmtEur(factMontant(f)))}${infoItem('Date',fmtDateShort(f.dateEmission))}</div>${note}`;
-    openModal('Facture · '+esc(id),bd,`<button class="btn btn-danger" onclick="supprimerFacture('${id}')">🗑 Supprimer</button><button class="btn btn-ghost" onclick="editFacture('${id}')">✎ Modifier le nom</button><button class="btn btn-ghost" onclick="apercuPdf('Facture','${id}')">👁 PDF</button><button class="btn btn-ghost" onclick="closeModal()">Fermer</button>`);
+    openModal('Facture · '+esc(id),bd,`<button class="btn btn-danger" onclick="supprimerFacture('${id}')">🗑 Supprimer</button><button class="btn btn-ghost" onclick="editFacture('${id}')">✎ Facturation</button><button class="btn btn-ghost" onclick="apercuPdf('Facture','${id}')">👁 PDF</button><button class="btn btn-ghost" onclick="closeModal()">Fermer</button>`);
     return;
   }
   const cfg=DB.config(); const nom=clientNomFacture(f); const dev=DB.get('devis',f.idDevis)||{};
@@ -2466,22 +2498,26 @@ function voirFacture(id){
     </div>
     ${action}
     <div class="action-grid">
-      <div class="action-box"><div class="action-box-title">📧 Par email (semi-auto)</div>${emailBtns}</div>
+      <div class="action-box"><div class="action-box-title">📧 Par email (semi-auto)</div><div class="td-dim" style="margin-bottom:8px">→ ${esc(factEmailTo(f)||'aucune adresse')}${f.billingEmailManuel?' (email de facturation)':''}</div>${emailBtns}</div>
       <div class="action-box"><div class="action-box-title">✋ Déjà fait hors CRM</div>${manuBtns}</div>
     </div>`;
   const peutReculer=f.type!=='acompte'&&((f.statut!=='Émise')||f.dateEnvoi||mailDate('facture',id));
-  openModal('Facture · '+esc(id),body,`<button class="btn btn-danger" onclick="supprimerFacture('${id}')">🗑 Supprimer</button><button class="btn btn-ghost" onclick="editFacture('${id}')">✎ Modifier le nom</button><button class="btn btn-ghost" onclick="creerAvoir('${id}')">↩ Avoir</button>${peutReculer?`<button class="btn btn-ghost" onclick="factureBack('${id}')">↩ Étape précédente</button>`:''}<button class="btn btn-ghost" onclick="event.stopPropagation();apercuPdf('Facture','${id}')">👁 Aperçu PDF</button><button class="btn btn-ghost" onclick="closeModal()">Fermer</button>`);
+  openModal('Facture · '+esc(id),body,`<button class="btn btn-danger" onclick="supprimerFacture('${id}')">🗑 Supprimer</button><button class="btn btn-ghost" onclick="editFacture('${id}')">✎ Facturation</button><button class="btn btn-ghost" onclick="creerAvoir('${id}')">↩ Avoir</button>${peutReculer?`<button class="btn btn-ghost" onclick="factureBack('${id}')">↩ Étape précédente</button>`:''}<button class="btn btn-ghost" onclick="event.stopPropagation();apercuPdf('Facture','${id}')">👁 Aperçu PDF</button><button class="btn btn-ghost" onclick="closeModal()">Fermer</button>`);
 }
 /* Édition simple du nom / entité facturé (override propre à cette facture, sans toucher la fiche client) */
 function editFacture(id){
   const f=DB.get('factures',id); if(!f)return; const cli=DB.get('clients',f.idClient)||{};
-  const cur={nom:clientNomFacture(f),email:f.billingEmail||cli.email||'',tel:f.billingTel||cli.tel||'',addr:f.billingAddr||cli.adresse||'',siren:f.billingSiren||cli.siren||''};
-  const body=`<div class="alert info"><span class="alert-icon">✎</span><div>Corrige le <strong>nom / l'entité facturée</strong> de cette facture (affichage + PDF), sans toucher la fiche client. Si la facture a déjà été envoyée au client, préfère un <strong>avoir</strong>.</div></div>
+  // Factures corrigées avec l'ancien code : adresse enregistrée mais jamais utilisée pour l'envoi
+  const co=f.idContact?contactPour(f.idClient,f.idContact):null;
+  const ancien=(!f.billingEmailManuel&&f.billingEmail&&co&&co.email&&f.billingEmail.toLowerCase()!==co.email.toLowerCase())?f.billingEmail:'';
+  const cur={nom:clientNomFacture(f),email:factEmailTo(f),tel:f.billingTel||cli.tel||'',addr:f.billingAddr||cli.adresse||'',siren:f.billingSiren||cli.siren||''};
+  const body=`<div class="alert info"><span class="alert-icon">✎</span><div>Corrige l'entité facturée de cette facture sans toucher la fiche client. L'<strong>email</strong> reçoit la facture et les relances (par exemple la compta de l'agence). Laisse-le vide pour écrire à l'interlocuteur du projet ou à l'email de la fiche client. Si la facture a déjà été envoyée, préfère un <strong>avoir</strong> pour changer le nom.</div></div>
     <div class="form-grid full">
       <div class="form-group"><label class="form-label">Nom / entité facturée</label><input class="form-control" id="ef-nom" value="${esc(cur.nom)}"></div>
       <div class="form-group"><label class="form-label">Adresse</label><input class="form-control" id="ef-addr" value="${esc(cur.addr)}"></div>
       <div class="form-grid" style="grid-template-columns:1fr 1fr">
-        <div class="form-group"><label class="form-label">Email</label><input class="form-control" id="ef-email" value="${esc(cur.email)}"></div>
+        <div class="form-group"><label class="form-label">Email de facturation (reçoit facture et relances)</label><input class="form-control" id="ef-email" value="${esc(cur.email)}">
+          ${ancien?`<div class="td-dim" style="margin-top:4px">Adresse enregistrée sur cette facture mais jamais utilisée pour l'envoi : <button type="button" class="btn btn-ghost btn-sm" data-v="${esc(ancien)}" onclick="document.getElementById('ef-email').value=this.dataset.v">${esc(ancien)}</button></div>`:''}</div>
         <div class="form-group"><label class="form-label">Téléphone</label><input class="form-control" id="ef-tel" value="${esc(cur.tel)}"></div>
       </div>
       <div class="form-group"><label class="form-label">SIREN / SIRET (si entreprise)</label><input class="form-control" id="ef-siren" value="${esc(cur.siren)}"></div>
@@ -2491,9 +2527,15 @@ function editFacture(id){
 }
 function saveFactureBilling(id){
   const f=DB.get('factures',id); if(!f)return; const g=k=>((document.getElementById('ef-'+k)||{}).value||'').trim();
-  f.billingName=g('nom'); f.billingAddr=g('addr'); f.billingEmail=g('email'); f.billingTel=g('tel'); f.billingSiren=g('siren');
-  DB.save('factures',f); logActivite('Facture '+id+' — nom/entité mis à jour ('+f.billingName+')');
-  updateBadges(); toast('✓ Nom de la facture mis à jour','ok'); voirFacture(id);
+  const em=g('email'), avant=factEmailTo(f);
+  if(em && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(em)){ toast('Email de facturation invalide','err'); const el=document.getElementById('ef-email'); if(el){el.style.borderColor='var(--er)'; el.focus();} return; }
+  // Drapeau posé seulement si l'adresse diffère de celle réellement utilisée ; champ vidé = retour à l'automatique
+  const emailChange=em.toLowerCase()!==avant.toLowerCase();
+  if(emailChange){ f.billingEmail=em; f.billingEmailManuel=!!em; }
+  f.billingName=g('nom'); f.billingAddr=g('addr'); f.billingTel=g('tel'); f.billingSiren=g('siren');
+  DB.save('factures',f);
+  logActivite('Facture '+id+' : facturation mise à jour ('+f.billingName+(emailChange?(', emails vers '+(factEmailTo(f)||'aucune adresse')):'')+')');
+  updateBadges(); toast(emailChange?('✓ Facture et relances iront à '+(factEmailTo(f)||'aucune adresse')):'✓ Facturation mise à jour','ok'); voirFacture(id);
 }
 /* Avoir : annule une facture émise et crée l'avoir correspondant (montant négatif), retire l'encaissement si elle était payée */
 function creerAvoir(id){
@@ -2505,7 +2547,8 @@ function creerAvoir(id){
   DB.save('factures',{id:nextId('FAC','factures'),type:'avoir',dateEmission:todayISO(),idDevis:f.idDevis,idClient:f.idClient,idProjet:f.idProjet||'',
     designation:f.designation?('Avoir — '+f.designation):'',
     montantTTC:-(+f.montantTTC||0),montantFacture:-m,acompteVerse:0,soldeDu:0,dateEcheance:todayISO(),statut:'Émise',datePaiement:'',avoirDe:id,
-    billingName:f.billingName||'',billingAddr:f.billingAddr||'',billingEmail:f.billingEmail||'',billingTel:f.billingTel||'',billingSiren:f.billingSiren||''});
+    billingName:f.billingName||'',billingAddr:f.billingAddr||'',billingEmail:f.billingEmail||'',billingTel:f.billingTel||'',billingSiren:f.billingSiren||'',
+    idContact:f.idContact||'',billingEmailManuel:!!f.billingEmailManuel});
   f.statut='Annulée'; f.soldeDu=0; DB.save('factures',f);
   // Annule la recette au livre : les recettes d'acompte sont référencées par le DEVIS, les soldes par la FACTURE
   if(wasPaid){
@@ -2602,7 +2645,7 @@ function pdfFacture(id,returnDoc){
   const titre=f.type==='acompte'?'FACTURE D\'ACOMPTE':(f.type==='avoir'?'AVOIR':(f.type==='solde'?'FACTURE DE SOLDE':'FACTURE'));
   let y=pdfHeader(doc,titre,f.id,[['Émise le',fmtDateShort(f.dateEmission)],['Échéance',fmtDateShort(f.dateEcheance)]]);
   y=pdfBlocs(doc,y,
-    {titre:'FACTURÉ À',nom,lines:[f.billingEmail||cli.email,f.billingTel||cli.tel,f.billingAddr||cli.adresse,(f.billingSiren||cli.siren)?('SIREN '+(f.billingSiren||cli.siren)):'',f.idDevis?('Réf. devis '+f.idDevis):'']},
+    {titre:'FACTURÉ À',nom,lines:[factEmailTo(f),f.billingTel||cli.tel,f.billingAddr||cli.adresse,(f.billingSiren||cli.siren)?('SIREN '+(f.billingSiren||cli.siren)):'',f.idDevis?('Réf. devis '+f.idDevis):'']},
     dev.dateEvenement?{titre:'PRESTATION',lines:['Date : '+fmtDateFr(dev.dateEvenement),dev.creneau?('Créneau : '+dev.creneau):'',dev.horaire?('Horaire : '+dev.horaire):'','Lieu : '+(dev.lieu||'—')]}:null);
   const dateP=dev.dateEvenement?(' — '+fmtDateFr(dev.dateEvenement)):'';
   let body, totaux, totalLabel, totalVal, cond;
@@ -2840,13 +2883,7 @@ function voirClient(id){
         <button class="btn btn-ghost btn-sm" onclick="editInterlocuteurs('${id}')">${its.length?'✎ Gérer':'+ Ajouter'}</button></div>
       ${lignes||`<div class="td-dim" style="font-size:12px">Aucun interlocuteur enregistré. ${c.type==='partenaire'||c.type==='entreprise'?'Utile pour une agence : chaque devis ou email partira au bon chef de projet.':'Utile si tu as plusieurs contacts chez ce client.'}</div>`}`; })()}
   ${prescriHtml}
-  ${c.email?`<div class="panel-title" style="margin-top:16px;font-size:13px">📣 Emails marketing (1 clic)</div>
-    <div style="display:flex;flex-wrap:wrap;gap:7px">
-      <button class="btn btn-ghost btn-sm" onclick="mailMarketing('${id}','mktAnniversaire')">🎂 Anniversaire collaboration</button>
-      <button class="btn btn-ghost btn-sm" onclick="mailMarketing('${id}','mktReprise')">👋 Reprendre contact</button>
-      <button class="btn btn-ghost btn-sm" onclick="mailMarketing('${id}','mktDispos')">📅 Mes disponibilités</button>
-      <button class="btn btn-ghost btn-sm" onclick="mailMarketing('${id}','mktVoeux')">🎉 Vœux</button>
-    </div>`:'<div class="td-dim" style="margin-top:12px">Ajoute un email au client pour activer les envois marketing.</div>'}
+  ${blocActualitesFiche(c)}
   <div class="panel-title" style="margin-top:16px;font-size:13px">Devis (${dv.length})</div>${histDevis}
   <div class="panel-title" style="margin-top:14px;font-size:13px">Factures (${fac.length})</div>${histFac}`;
   openModal('Fiche · '+esc((c.prenom+' '+c.nom).trim()),body,
@@ -2857,12 +2894,87 @@ function voirClient(id){
 function mailMarketing(id,type){
   const c=DB.get('clients',id); if(!c)return;
   const nom=(c.prenom+' '+c.nom).trim();
+  if(estDesabo(c.email)){ const le=dateDesabo(c.email);
+    toast(nom+' ne reçoit plus tes actualités'+(le?' depuis le '+fmtDateShort(le):'')+' : pas d\'email marketing. Devis et factures restent possibles.','err'); return; }
   let tpl;
   if(type==='mktAnniversaire'){ const dv=DB.all('devis').filter(d=>d.idClient===id).sort((a,b)=>new Date(a.dateEvenement||a.dateCreation)-new Date(b.dateEvenement||b.dateCreation));
     const ref=c.date1erDevis||(dv[0]&&(dv[0].dateEvenement||dv[0].dateCreation))||''; tpl=EMAIL_TPL.mktAnniversaire(nom,ref); }
   else tpl=EMAIL_TPL[type](nom);
   tpl.to=c.email||'';
   openMailComposer({titre:'Email marketing · '+nom, ...tpl, kind:'marketing', ref:id});
+}
+/* ── Opposition saisie à la main (« ne m’écrivez plus » reçu par mail ou par téléphone) ──
+   Le serveur écrit le registre (_desabos.json) ; l'app met à jour les drapeaux des fiches par DB.save. */
+function infoDesabo(c){
+  const r=desabosServeur()[normEmail(c.email)]||{};
+  const manuel=r.source==='manuel'||(!r.source&&c.desaboVia==='manuel');
+  return { le:r.le||c.desaboLe||'', via:manuel?'manuel':'lien', note:r.note||c.desaboNote||'' };
+}
+function blocActualitesFiche(c){
+  const id=c.id;
+  if(!c.email) return '<div class="td-dim" style="margin-top:12px">Ajoute un email au client pour activer les envois marketing.</div>';
+  if(estDesabo(c.email)){
+    const d=infoDesabo(c);
+    return `<div class="panel-title" style="margin-top:16px;font-size:13px">Emails d’actualité</div>
+    <div class="td-dim" style="font-size:12px;line-height:1.6">Ne reçoit plus tes actualités${d.le?' depuis le '+fmtDateShort(d.le):''}
+      (${d.via==='manuel'?'demande enregistrée à la main':'lien de désabonnement'})${d.note?' · « '+esc(d.note)+' »':''}.<br>
+      Devis, factures et emails personnels (✉ Email) partent normalement.</div>
+    <button class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="demanderDesabo('${id}',0)">Réabonner (à sa demande)</button>`;
+  }
+  return `<div class="panel-title" style="margin-top:16px;font-size:13px">📣 Emails marketing (1 clic)</div>
+    <div style="display:flex;flex-wrap:wrap;gap:7px">
+      <button class="btn btn-ghost btn-sm" onclick="mailMarketing('${id}','mktAnniversaire')">🎂 Anniversaire collaboration</button>
+      <button class="btn btn-ghost btn-sm" onclick="mailMarketing('${id}','mktReprise')">👋 Reprendre contact</button>
+      <button class="btn btn-ghost btn-sm" onclick="mailMarketing('${id}','mktDispos')">📅 Mes disponibilités</button>
+      <button class="btn btn-ghost btn-sm" onclick="mailMarketing('${id}','mktVoeux')">🎉 Vœux</button>
+    </div>
+    <div class="td-dim" style="font-size:11px;margin-top:8px">${c.reabonneLe?'Réabonné le '+fmtDateShort(c.reabonneLe)+' à sa demande. ':''}On t’a demandé de ne plus écrire à cette adresse ?
+      <a href="#" style="color:var(--gm)" onclick="event.preventDefault();demanderDesabo('${id}',1)">Ne plus lui envoyer d’actualités</a></div>`;
+}
+function demanderDesabo(id,etat){
+  const c=DB.get('clients',id); if(!c||!c.email) return;
+  const em=normEmail(c.email);
+  const autres=DB.all('clients').filter(x=>x.id!==id&&normEmail(x.email)===em).length;
+  const body=etat
+    ? `<div class="alert info" style="margin-top:0"><span class="alert-icon">ℹ️</span><div><strong>${esc(em)}</strong> ne recevra plus tes emails d’actualité (campagnes, vœux, disponibilités, rappels).<br>Devis, factures et échanges personnels continuent.${autres?'<br>'+autres+' autre(s) fiche(s) avec cette adresse suivront.':''}</div></div>
+       <div class="form-group"><label class="form-label">D’où vient la demande ? (facultatif)</label>
+       <textarea class="form-control" id="desabo-note" rows="2" maxlength="200" placeholder="Ex. : appel du 24/09, réponse au mail des vœux"></textarea></div>`
+    : `<div class="alert warning" style="margin-top:0"><span class="alert-icon">⚠</span><div>Réabonne <strong>${esc(em)}</strong> seulement si la personne te l’a demandé.</div></div>
+       <div class="form-group"><label class="form-label">Quand et comment l’a-t-elle demandé ? (obligatoire)</label>
+       <textarea class="form-control" id="desabo-note" rows="2" maxlength="200" placeholder="Ex. : m’a écrit le 24/09 pour recevoir de nouveau mes dates"></textarea></div>`;
+  openModal(etat?'Ne plus envoyer d’actualités':'Réabonner aux actualités', body,
+    `<button class="btn btn-ghost" onclick="voirClient('${id}')">Annuler</button>
+     <button class="btn btn-or" id="desabo-ok" onclick="validerDesabo('${id}',${etat?1:0})">${etat?'Confirmer':'Réabonner'}</button>`);
+}
+async function validerDesabo(id,etat){
+  etat=!!etat;
+  const c=DB.get('clients',id); if(!c||!c.email) return;
+  const em=normEmail(c.email);
+  const note=String((document.getElementById('desabo-note')||{}).value||'').replace(/[\x00-\x1F\x7F]/g,' ').trim().slice(0,200);
+  if(!etat&&!note){ toast('Indique quand et comment la personne a demandé à être réabonnée','err'); return; }
+  const btn=document.getElementById('desabo-ok');
+  if(btn){ if(btn.disabled) return; btn.disabled=true; btn.textContent='Enregistrement…'; }   // anti double clic
+  let e=null, j=null;
+  if(cloudUrl()){
+    j=await cloudPost({action:'desaboManuel',email:em,etat:etat?1:0,note});
+    if(!j||!j.ok){
+      if(btn){ btn.disabled=false; btn.textContent=etat?'Confirmer':'Réabonner'; }
+      toast((j&&j.error)||'Serveur injoignable : rien n’est enregistré. Réessaie une fois connecté.','err'); return; }
+    try{ if(j.desabos&&typeof j.desabos==='object') localStorage.setItem(LS_DESABOS,JSON.stringify(Array.isArray(j.desabos)?{}:j.desabos)); }catch(_){}
+    e=j.entree||null;
+  }
+  const now=new Date().toISOString(); let n=0;
+  DB.all('clients').filter(x=>x.email&&normEmail(x.email)===em).forEach(x=>{
+    if(etat){ if(x.desabo) return;                       // déjà marquée : date d’origine gardée, rien n’est écrit
+      Object.assign(x,{desabo:true, desaboLe:(e&&e.le)||now, desaboVia:(e&&e.source&&e.source!=='manuel')?(e.source==='un-clic'?'un-clic':'lien'):'manuel', desaboNote:(e&&e.note)||note}); }
+    else { if(!x.desabo) return;
+      Object.assign(x,{desabo:false, reabonneLe:(e&&e.leveLe)||now, reabonneNote:(e&&e.leveNote)||note}); }
+    DB.save('clients',x); n++;
+  });
+  if(!n&&!(j&&j.changed)){ toast('Déjà enregistré, rien à changer','ok'); voirClient(id); return; }   // rejouable sans écriture
+  logActivite((etat?'Ne veut plus d’actualités (saisie manuelle) · ':'Réabonné à sa demande · ')+em+(note?' · '+note:''));
+  toast(etat?'Enregistré : plus aucun email d’actualité vers '+em:'Réabonné : '+em+' peut de nouveau recevoir tes actualités','ok');
+  voirClient(id);
 }
 function editClient(id){
   const c=id?DB.get('clients',id):{id:'',nom:'',prenom:'',email:'',tel:'',adresse:'',type:'particulier',sourceInitiale:'',siren:'',naf:''};
@@ -2922,7 +3034,8 @@ function saveClient(id){
   DB.save('clients',c); logActivite((id?'Client modifié':'Client créé')+' · '+c.nom);
   const prop=id?propagateClient(c):0;   // met à jour email/tel/nom sur tous les devis liés
   closeModal(); RENDERERS.clients(); updateBadges();
-  toast((id?'Client modifié ✓':'Client créé ✓')+(prop?' · '+prop+' devis mis à jour':''),'ok');
+  toast((id?'Client modifié ✓':'Client créé ✓')+(prop?' · '+prop+' devis mis à jour':'')
+    +(estDesabo(c.email)?' · adresse désabonnée le '+fmtDateShort(dateDesabo(c.email))+' : exclue des emails d\'actualité':''),'ok');
 }
 /* Écrire à un interlocuteur précis depuis la fiche client */
 /* Rattacher cette fiche à une autre : elle devient un interlocuteur (services, filiales, contacts multiples) */
@@ -3192,7 +3305,7 @@ const EMAIL_TPL={
       body:`Bonjour ${prenomDe(nom)},\n\nSauf erreur de notre part, la facture ${f.id} (solde de ${fmtEur(f.soldeDu)}), arrivée à échéance le ${fmtDateFr(f.dateEcheance)}, reste impayée.\n\nMerci de bien vouloir procéder au règlement dès que possible.\n\nBien cordialement,\n${sig()}` }; },
   relance2(f,nom){ return { to:factEmailTo(f), subject:'2ème rappel — facture '+f.id,
       body:`Bonjour ${prenomDe(nom)},\n\nMalgré notre première relance, la facture ${f.id} (${fmtEur(f.soldeDu)}) demeure impayée.\n\nSans règlement sous 8 jours, nous serons contraints d'engager une procédure de recouvrement.\n\nBien cordialement,\n${sig()}` }; },
-  avis(p,nom){ const url=DB.config().googleReviewUrl||'';
+  avis(p,nom){ const u=(DB.config().googleReviewUrl||'').trim(); const url=/^https?:\/\//i.test(u)?u:'{avisurl}';
     return { to:'', subject:'Merci pour votre confiance — votre avis compte',
       body:`Bonjour ${prenomDe(nom)},\n\nMerci encore pour votre accueil lors de la prestation du ${fmtDateFr(p.dateEvenement)}. J'espère que la magie a opéré !\n\nSi vous avez passé un bon moment, un avis Google m'aiderait énormément :\n${url}\n\nMerci infiniment, et au plaisir.\n\n${sig()}` }; },
   /* ── Marketing ── */
@@ -3226,57 +3339,149 @@ function openMailComposer(opts){
     </div>`;
   let footer='';
   if(opts.pdfId) footer+=`<button class="btn btn-ghost" onclick="pdf${opts.pdfType}('${opts.pdfId}')">⬇ PDF</button>`;
-  footer+=`<button class="btn btn-ghost" onclick="mcPreview()">👁 Aperçu</button>
+  footer+=`<button class="btn btn-ghost" onclick="mcPreview('${opts.kind==='marketing'?'marketing':''}')">👁 Aperçu</button>
     <button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
     <button class="btn btn-or" id="mc-send" onclick="mcSend('${opts.kind||''}','${opts.ref||''}')">${auto?'📤 Envoyer maintenant':'✉ Ouvrir ma messagerie'}</button>`;
   openModal(opts.titre||'Composer un email',body,footer);
   window._mcOnSent=opts.onSent;
   window._mcPdf=opts.pdfId?{id:opts.pdfId,type:opts.pdfType}:null;
+  window._mcPied=null;
+  window._mcMailId=uid('MAIL'); window._mcMailTo='';   // un identifiant par ouverture : tous les essais le réutilisent
+  // Garde : fermer (fond, ×, Annuler) après avoir modifié l'email demande confirmation
+  const champs=['mc-to','mc-subject','mc-body'];
+  const val=id=>{ const el=document.getElementById(id); return el?el.value:null; };
+  const init=champs.map(val);   // lu dans le DOM : le parseur retire le saut de ligne initial d'un textarea
+  window._modalGuard=()=>{
+    if(!document.getElementById('mc-body')) return true;              // la modale ne contient plus le composeur
+    if(champs.every((id,i)=>val(id)===init[i])) return true;          // rien de modifié
+    return confirm('Fermer sans envoyer ? Tes modifications de cet email seront perdues.');
+  };
+  // Mode messagerie : lien préparé à l'avance, pour que window.open reste synchrone dans le geste (Safari iOS bloque un popup ouvert après un await)
+  if(opts.kind==='marketing'&&!auto&&cloudUrl()&&_pullOk&&opts.to){ const t=opts.to;
+    lienDesabo(t).then(l=>{ if(l) window._mcPied={to:normEmail(t),lien:l}; }).catch(()=>{}); }
 }
 /* Aperçu du template HTML brandé avant envoi */
-function mcPreview(){
+function mcPreview(kind){
   const box=document.getElementById('mc-preview'), fr=document.getElementById('mc-pv-frame'), ta=document.getElementById('mc-body');
   if(!box||!fr||!ta)return;
   if(box.style.display==='block'){ box.style.display='none'; return; }   // toggle
-  fr.srcdoc=emailHtml(ta.value);
+  fr.srcdoc=emailHtml(ta.value, kind==='marketing'?{desabo:'#'}:undefined);   // lien factice : l'iframe est en sandbox
   box.style.display='block'; box.scrollIntoView({behavior:'smooth',block:'nearest'});
 }
-async function mcSend(kind,ref){
+async function mcSend(kind,ref,opt){ opt=opt||{};
   const to=document.getElementById('mc-to').value.trim();
   if(!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(to)){
     toast('Destinataire manquant ou invalide — corrige l\'adresse avant d\'envoyer','err');
     const el=document.getElementById('mc-to'); if(el){ el.style.borderColor='var(--er)'; el.focus(); }
     return;
   }
+  const marketing=kind==='marketing';
+  if(marketing){
+    // relu au clic : désabonnement arrivé par la synchro depuis l'ouverture, ou adresse retapée
+    if(estDesabo(to)){ const le=dateDesabo(to), zone=document.getElementById('mc-echec');
+      if(zone) zone.innerHTML=alertHtml('danger','⛔','<strong>Envoi bloqué.</strong> '+esc(to)
+        +' ne reçoit plus tes actualités'+(le?' depuis le '+fmtDateShort(le):'')+'. Aucun email marketing ne peut partir vers cette adresse.');
+      toast('Contact désabonné : envoi marketing bloqué','err'); return; }
+    if(DB.config().gmailEnvoi&&cloudUrl()&&!_pullOk){ toast('Synchronisation pas encore terminée : réessaie dans quelques secondes','err'); return; }
+  }
   const subject=document.getElementById('mc-subject').value;
   const bodyTxt=document.getElementById('mc-body').value;
-  const mailId=uid('MAIL');
-  const done=()=>{ DB.save('mails',{id:mailId,date:new Date().toISOString(),kind,ref,to,subject});
+  if(!subject.trim()||!bodyTxt.trim()){ toast('Objet ou message vide','err'); return; }
+  if(/\{avisurl\}/.test(subject+'\n'+bodyTxt)){ toast('Lien avis Google manquant : renseigne-le dans Réglages ou remplace {avisurl} dans le message','err'); return; }
+  // Même identifiant d'un essai à l'autre : le serveur n'envoie qu'une fois un trackId donné vers une adresse.
+  // Adresse corrigée : nouvel identifiant, l'email part vers la nouvelle adresse.
+  if(!window._mcMailId||(window._mcMailTo&&window._mcMailTo!==to.toLowerCase())) window._mcMailId=uid('MAIL');
+  window._mcMailTo=to.toLowerCase();
+  const mailId=window._mcMailId;
+  const done=(at)=>{ window._modalGuard=null;   // envoi validé : la fermeture qui suit ne demande rien
+    DB.save('mails',{id:mailId,date:at||new Date().toISOString(),kind,ref,to,subject});
     if(typeof window._mcOnSent==='function') window._mcOnSent(); closeModal(); };
   if(DB.config().gmailEnvoi && cloudUrl()){
-    const btn=document.getElementById('mc-send'); if(btn){btn.disabled=true;btn.textContent='Envoi…';}
+    const btn=document.getElementById('mc-send'); if(btn){ if(btn.disabled) return; btn.disabled=true; btn.textContent='Envoi…'; }
+    const zone0=document.getElementById('mc-echec'); if(zone0) zone0.innerHTML='';
+    const secours='<div style="margin-top:8px"><button class="btn btn-ghost btn-sm" onclick="mcMailtoSecours(\''+kind+'\')">✉ Ouvrir ma messagerie</button></div>';
+    let corpsTxt=bodyTxt, htmlOpts;
+    if(marketing){
+      const lien=await lienDesabo(to);            // APRÈS btn.disabled : l'anti double clic reste entier
+      if(!lien){ if(btn){ btn.disabled=false; btn.textContent='📤 Réessayer l\'envoi'; }
+        const zone=document.getElementById('mc-echec');
+        if(zone) zone.innerHTML=alertHtml('danger','⚠','<strong>L\'email n\'est pas parti.</strong> Le lien de désabonnement, obligatoire, n\'a pas pu être créé. Vérifie la connexion au serveur puis réessaie, ou ouvre ta messagerie (la phrase « répondez STOP » sera ajoutée).'+secours);
+        toast('Envoi annulé : lien de désabonnement indisponible','err'); return; }
+      window._mcPied={to:normEmail(to),lien};
+      corpsTxt=bodyTxt+LIGNE_DESABO_TXT+lien;      // partie texte brut
+      htmlOpts={desabo:lien};                       // pied HTML via emailShell (jamais dans le texte passé à emailHtml : l'autolien le doublerait)
+    }
     let attachB64='',attachName='';
     if(window._mcPdf&&window._mcPdf.id){ attachB64=pdfBase64(window._mcPdf.type,window._mcPdf.id); attachName=window._mcPdf.id+'.pdf'; }
-    const j=await cloudPost({action:'sendEmail',to,subject,body:bodyTxt,html:emailHtml(bodyTxt),attachB64,attachName,trackId:mailId});
-    if(j&&j.ok){ logActivite('Email envoyé ('+kind+') → '+to); done(); toast('✅ Email envoyé à '+to,'ok'); }
-    else {
+    const j=await cloudPost({action:'sendEmail',to,subject,body:corpsTxt,html:emailHtml(bodyTxt,htmlOpts),attachB64,attachName,trackId:mailId,marketing:marketing?1:0,
+      ref:(kind&&kind!=='libre'&&ref)?kind+'|'+ref:'', forcer:!!opt.forcer, confirme:!!opt.confirme});
+    if(j&&j.ok){
+      if(j.deja){ logActivite('Email déjà parti ('+kind+') → '+to+' : rien renvoyé'); done(j.at); toast('Cet email était déjà parti : rien n\'a été renvoyé','ok'); }
+      else { logActivite('Email envoyé ('+kind+') → '+to); done(); toast('✅ Email envoyé à '+to,'ok'); }
+      return;
+    }
+    const zone=document.getElementById('mc-echec');
+    const quand=j&&j.at?new Date(j.at).toLocaleString('fr-FR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'';
+    if(j&&j.code==='recent'){                        // même document, même adresse, moins de 24 h : Louis décide
+      if(btn){ btn.disabled=false; btn.textContent='📤 Envoyer maintenant'; }
+      if(confirm((j.s==='incertain'?'Un envoi non confirmé':'Un email')+' pour ce document est parti vers '+to+' le '+quand
+        +(j.sujet?' (« '+j.sujet+' »)':'')+'.\n\nL\'envoyer quand même ? Le client le recevra une deuxième fois.'))
+        return mcSend(kind,ref,{confirme:true});
+      if(zone) zone.innerHTML=alertHtml('info','ℹ','Rien n\'est parti : ce document a déjà été envoyé à '+esc(to)+' le '+esc(quand)+'.');
+      return;
+    }
+    if(j&&j.code==='incertain'){                     // le serveur mail n'a pas confirmé : peut-être reçu
+      if(btn){ btn.disabled=false; btn.textContent='📤 Réessayer l\'envoi'; }
+      logActivite('Envoi incertain → '+to);
+      if(zone) zone.innerHTML=alertHtml('warning','⚠','<strong>Le serveur mail n\'a pas confirmé l\'envoi'+(quand?' du '+esc(quand):'')+'.</strong> Le client l\'a peut-être reçu : demande-lui avant de renvoyer.'
+        +'<div style="margin-top:8px"><button class="btn btn-ghost btn-sm" onclick="mcRenvoyerForce(\''+kind+'\',\''+ref+'\')">Renvoyer quand même</button></div>');
+      toast('Envoi non confirmé : vérifie avant de renvoyer','err');
+      return;
+    }
+    if(!j||j.reseau){                                // réponse perdue : l'email est peut-être parti
+      if(btn){ btn.disabled=false; btn.textContent='🔁 Vérifier / renvoyer'; }
+      logActivite('Envoi sans réponse du serveur → '+to);
+      if(zone) zone.innerHTML=alertHtml('warning','⚠','<strong>Pas de réponse du serveur : l\'email est peut-être parti.</strong> Clique sur « Vérifier / renvoyer » : s\'il est déjà parti, rien ne repart ; sinon il part maintenant. N\'utilise pas ta messagerie à la main avant d\'avoir vérifié.');
+      toast('Pas de réponse du serveur : vérifie avant de renvoyer','err');
+      return;
+    }
+    {
       // Échec : on ne marque SURTOUT pas l'email comme envoyé (sinon devis « Envoyé », relance « faite »,
       // avis « demandé » alors que rien n'est parti, et l'alerte d'impayé disparaît)
-      if(btn){ btn.disabled=false; btn.textContent='📤 Réessayer l\'envoi'; }
       const why=(j&&(j.info||j.error))||'serveur injoignable';
       logActivite('ÉCHEC envoi → '+to+' : '+why);
-      const zone=document.getElementById('mc-echec');
-      if(zone) zone.innerHTML=alertHtml('danger','⚠','<strong>L\'email n\'est pas parti.</strong> '+esc(why)
-        +'<br>Rien n\'a été enregistré : le document garde son statut actuel. Réessaie, ou ouvre ta messagerie pour l\'envoyer à la main.'
-        +'<div style="margin-top:8px"><button class="btn btn-ghost btn-sm" onclick="mailtoOpen(document.getElementById(\'mc-to\').value,document.getElementById(\'mc-subject\').value,document.getElementById(\'mc-body\').value)">✉ Ouvrir ma messagerie</button></div>');
+      if(j&&j.desabo){                               // refus serveur : le désabonnement n'était pas encore arrivé sur cet appareil
+        desabosCacheAjouter(to);
+        if(btn){ btn.disabled=true; btn.textContent='Destinataire désabonné'; }
+        if(zone) zone.innerHTML=alertHtml('danger','⛔','<strong>Envoi bloqué par le serveur :</strong> ce destinataire s\'est désabonné des actualités. Rien n\'a été envoyé ni enregistré.');
+        if(_pullOk) cloudPull();                      // fusion normale : la fiche locale récupère le désabonnement
+      } else {
+        if(btn){ btn.disabled=false; btn.textContent='📤 Réessayer l\'envoi'; }
+        if(zone) zone.innerHTML=alertHtml('danger','⚠','<strong>L\'email n\'est pas parti.</strong> '+esc(why)
+          +'<br>Rien n\'a été enregistré : le document garde son statut actuel. Réessaie, ou ouvre ta messagerie pour l\'envoyer à la main.'+secours);
+      }
       toast('Échec : '+why,'err');
     }
     return;
   }
-  mailtoOpen(to,subject,bodyTxt);
+  let corps=bodyTxt; if(marketing) corps+=mcPiedTxt(to);   // synchrone : aucun await avant window.open
+  mailtoOpen(to,subject,corps);
   logActivite('Email préparé ('+kind+') → '+(to||'—')); done(); toast('Messagerie ouverte — email pré-rempli','ok');
 }
+/* Renvoi explicite après un envoi que le serveur mail n'a pas confirmé */
+function mcRenvoyerForce(kind,ref){ if(confirm('Renvoyer cet email ? Le client pourrait le recevoir deux fois.')) mcSend(kind,ref,{forcer:true}); }
 function mailtoOpen(to,subject,bodyTxt){ window.open('mailto:'+encodeURIComponent(to)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(bodyTxt),'_blank'); }
+/* Pied texte des emails d'actualité : lien signé s'il a été préparé pour CETTE adresse, sinon phrase STOP */
+const LIGNE_DESABO_TXT='\n\n-- \nNe plus recevoir mes actualités : ';
+const LIGNE_STOP_TXT='\n\n-- \nPour ne plus recevoir mes actualités, répondez STOP à cet email.';
+function mcPiedTxt(to){ const p=window._mcPied; return (p&&p.lien&&p.to===normEmail(to))?LIGNE_DESABO_TXT+p.lien:LIGNE_STOP_TXT; }
+function mcMailtoSecours(kind){
+  const to=document.getElementById('mc-to').value.trim(), subject=document.getElementById('mc-subject').value;
+  let corps=document.getElementById('mc-body').value;
+  if(kind==='marketing'){
+    if(estDesabo(to)){ toast('Contact désabonné : envoi marketing bloqué','err'); return; }
+    corps+=mcPiedTxt(to); }
+  mailtoOpen(to,subject,corps); }
 function mailEnvoye(kind,ref){ return DB.all('mails').some(m=>m.kind===kind&&m.ref===ref); }
 function isOpened(id){ try{ return (JSON.parse(localStorage.getItem('lm_opens'))||[]).includes(id); }catch(_){ return false; } }
 
@@ -3459,9 +3664,14 @@ const MKT_CAMPAIGNS=[
   {key:'avis',label:'⭐ Demander un avis',subject:'Votre avis compte beaucoup',
    body:'Bonjour {prenom},\n\nSi vous avez apprécié l\'une de mes prestations, un avis Google m\'aiderait énormément :\n{avisurl}\n\nMerci infiniment !\n{sig}'},
 ];
-function mktApply(str,c){ return str.replace(/{prenom}/g,prenomDe(c?(c.prenom||c.nom):'')).replace(/{sig}/g,sig()).replace(/{avisurl}/g,DB.config().googleReviewUrl||''); }
 
 let _mktFiltre='', _mktTpl='anniv', _mktSearch='', _mktDraft=null, _mktSeg='tous';
+let _mktReset=false, _mktModifie=false, _mktBrT=null, _mktBrRepris='';
+const MKT_BR_KEY='lm_mkt_brouillon', MKT_BR_MAX=100000;   // copie du studio sur CET appareil : hors LS_PREFIX, jamais synchronisée
+// État d'écran du studio : mémoire seule (jamais DB ni localStorage, donc sans effet sur la synchro).
+// Survit aux re-rendus (sync, retour dans l'app, nav, modèle, rappel masqué) ; perdu au rechargement.
+let _mktDecoches=new Set(), _mktDate='', _mktHeure='09:00';
+let _mktTestSig='';                             // mémoire seule : contenu du dernier test réussi
 /* Listes prêtes à l'emploi, calculées depuis les données */
 const MKT_SEGMENTS=[
   {key:'tous',      label:'📋 Tous mes contacts',      f:c=>true},
@@ -3479,7 +3689,9 @@ const MKT_SEGMENTS=[
 /* Contacts d'un segment : joignables, non désabonnés */
 function segContacts(key){
   const perso=(key||'').indexOf('seg:')===0 ? DB.get('segments',key.slice(4)) : null;
-  let liste=DB.all('clients').map(recalcClient).filter(c=>c.email&&!c.desabo);
+  if((key||'').indexOf('seg:')===0&&!perso) return [];      // liste supprimée : personne (jamais « tous »)
+  const D=adressesDesabonnees();
+  let liste=DB.all('clients').map(recalcClient).filter(c=>c.email&&!D.has(normEmail(c.email)));
   if(perso) return liste.filter(c=>(perso.ids||[]).includes(c.id));
   const s=MKT_SEGMENTS.find(x=>x.key===key)||MKT_SEGMENTS[0];
   liste=liste.filter(s.f);
@@ -3488,42 +3700,131 @@ function segContacts(key){
   return liste;
 }
 function segNom(key){
-  if((key||'').indexOf('seg:')===0){ const p=DB.get('segments',key.slice(4)); return p?p.nom:'Liste'; }
+  if((key||'').indexOf('seg:')===0){ const p=DB.get('segments',key.slice(4)); return p?p.nom:'Liste supprimée'; }
   return (MKT_SEGMENTS.find(x=>x.key===key)||MKT_SEGMENTS[0]).label;
 }
+/* Fiches par id, lues une seule fois (= DB.get : 1re fiche si un id existe en double) */
+function mktParId(){ const m=new Map(); DB.all('clients').forEach(c=>{ if(!m.has(c.id)) m.set(c.id,c); }); return m; }
+/* Qui reçoit vraiment : fiche présente, email, non désabonnée, une fois par adresse.
+   SEUL calcul utilisé par les compteurs ET par l'envoi. Lecture seule. */
+function mktCibles(ids,parId,D){
+  parId=parId||mktParId(); D=D||adressesDesabonnees();
+  const r={retenus:[],desabo:0,sansEmail:0,doublons:0}, vus=new Set();
+  (ids||[]).forEach(id=>{ const c=parId.get(id);
+    if(!c||!String(c.email||'').trim()){ r.sansEmail++; return; }   // sans email ou fiche supprimée/fusionnée
+    if(D.has(normEmail(c.email))){ r.desabo++; return; }
+    const k=normEmail(c.email);
+    if(vus.has(k)){ r.doublons++; return; }
+    vus.add(k); r.retenus.push(c); });
+  return r;
+}
+/* Ce que la liste contient mais qui ne partira pas (en-tête du studio) */
+function segExclus(key,parId,D){
+  D=D||adressesDesabonnees();
+  if((key||'').indexOf('seg:')===0){ const p=DB.get('segments',key.slice(4)); if(!p) return {desabo:0,sansEmail:0};
+    const r=mktCibles([...new Set(p.ids||[])],parId,D); return {desabo:r.desabo,sansEmail:r.sansEmail}; }
+  const s=MKT_SEGMENTS.find(x=>x.key===key)||MKT_SEGMENTS[0];
+  return {desabo:DB.all('clients').filter(c=>c.email&&D.has(normEmail(c.email))).map(recalcClient).filter(s.f).length,sansEmail:0};
+}
+/* Libellé du menu pour une liste perso : « 33 » ou « 33 sur 40 » */
+function segNbPerso(sg,parId,D){ const n=mktCibles(sg.ids,parId,D).retenus.length, t=new Set(sg.ids||[]).size; return n===t?String(n):n+' sur '+t; }
 function segEnregistrer(){
   mktCaptureDraft();
-  const ids=[...document.querySelectorAll('#view-marketing .mkt-cb:checked')].map(cb=>cb.value);
-  if(!ids.length){ toast('Coche d\'abord des contacts','err'); return; }
-  const nom=prompt('Nom de cette liste (ex : « Agences Paris », « Mariages 2026 ») :',''); if(!nom) return;
-  const sg=DB.save('segments',{id:uid('SEG'),nom:nom.trim(),ids,createdAt:new Date().toISOString()});
-  _mktSeg='seg:'+sg.id; logActivite('Liste « '+nom.trim()+' » créée ('+ids.length+' contacts)');
-  toast('💾 Liste « '+nom.trim()+' » enregistrée','ok'); RENDERERS.marketing();
+  const sel=mktSelection(); const ids=sel.ids;                 // même règle que l'envoi : lignes visibles ET cochées
+  if(!ids.length){ toast(sel.masques?('Aucun contact visible coché ('+sel.masques+' masqué(s) par la recherche)'):'Coche d\'abord des contacts','err'); return; }
+  const note=sel.masques?('\n\n'+sel.masques+' contact(s) coché(s) mais masqué(s) par la recherche ne seront PAS inclus. Pour les garder, vide la recherche.'):'';
+  const nom=(prompt('Enregistrer '+ids.length+' contact(s) dans une liste.'+note
+    +'\n\nNom de la liste (ex : « Agences Paris », « Mariages 2026 »). Nom d\'une liste existante = ajout à cette liste.','')||'').trim();
+  if(!nom) return;
+  const exist=DB.all('segments').find(s=>(s.nom||'').trim().toLowerCase()===nom.toLowerCase());
+  if(exist){                                                    // ajout sans doublon, rien n'est retiré
+    const avant=exist.ids||[]; const fusion=[...new Set([...avant,...ids])]; const ajout=fusion.length-avant.length;
+    if(!ajout){ toast('Ces '+ids.length+' contact(s) sont déjà dans « '+exist.nom+' »','ok'); return; }
+    if(!confirm('La liste « '+exist.nom+' » existe déjà ('+avant.length+' contact(s)).\n\nY ajouter '+ajout+' contact(s) ? ('+avant.length+' → '+fusion.length+')\nAucun contact n\'en sera retiré.')) return;
+    DB.save('segments',{...exist,ids:fusion});
+    _mktSeg='seg:'+exist.id; mktResetSelection(); logActivite('Liste « '+exist.nom+' » : '+ajout+' contact(s) ajouté(s)');
+    toast('💾 '+ajout+' contact(s) ajouté(s) à « '+exist.nom+' » ('+fusion.length+' au total)','ok'); RENDERERS.marketing(); return;
+  }
+  const sg=DB.save('segments',{id:uid('SEG'),nom,ids,createdAt:new Date().toISOString()});
+  _mktSeg='seg:'+sg.id; mktResetSelection(); logActivite('Liste « '+nom+' » créée ('+ids.length+' contacts)');
+  toast('💾 Liste « '+nom+' » enregistrée : '+ids.length+' contact(s)','ok'); RENDERERS.marketing();
+}
+/* Liste perso affichée : retire les contacts affichés et décochés (y compris ceux masqués par la recherche).
+   Les membres sans ligne (désabonnés, sans email) restent dans la liste. */
+function segRetirerDecoches(){
+  mktCaptureDraft();
+  if(_mktSeg.indexOf('seg:')!==0) return;
+  const sg=DB.get('segments',_mktSeg.slice(4)); if(!sg) return;
+  const decoches=[...document.querySelectorAll('#view-marketing .mkt-row')]
+    .map(l=>l.querySelector('.mkt-cb')).filter(cb=>cb&&!cb.checked).map(cb=>cb.value);
+  const retires=new Set(decoches);
+  const avant=sg.ids||[]; const ids=avant.filter(id=>!retires.has(id));
+  const n=avant.length-ids.length;
+  if(!n){ toast('Décoche d\'abord les contacts à retirer de la liste','err'); return; }
+  const cl=mktParId();
+  const noms=decoches.slice(0,10).map(id=>{ const c=cl.get(id); return '· '+(c?((c.prenom?c.prenom+' ':'')+(c.nom||'')).trim():id); }).join('\n')
+    +(decoches.length>10?('\n… et '+(decoches.length-10)+' autre(s)'):'');
+  if(!confirm('Retirer '+n+' contact(s) de « '+sg.nom+' » ? ('+avant.length+' → '+ids.length+')\n\n'+noms+'\n\nLes fiches ne sont pas supprimées.')) return;
+  DB.save('segments',{...sg,ids});
+  logActivite('Liste « '+sg.nom+' » : '+n+' contact(s) retiré(s)');
+  toast('✏️ « '+sg.nom+' » : '+ids.length+' contact(s)','ok'); RENDERERS.marketing();
 }
 function segSupprimer(){
   mktCaptureDraft();
   if(_mktSeg.indexOf('seg:')!==0) return;
   const sg=DB.get('segments',_mktSeg.slice(4)); if(!sg) return;
   if(!confirm('Supprimer la liste « '+sg.nom+' » ?\n\nLes contacts ne sont pas supprimés.')) return;
-  DB.remove('segments',sg.id); _mktSeg='tous'; toast('Liste supprimée','ok'); RENDERERS.marketing();
+  DB.remove('segments',sg.id); _mktSeg='tous'; mktResetSelection(); toast('Liste supprimée','ok'); RENDERERS.marketing();
 }
 /* ── Studio mailing : contenu d'un modèle (sauvegardé ou intégré) → {subject, html} ── */
 function mktTemplateContent(key){
   if(key&&key.indexOf('tpl:')===0){ const t=DB.get('templates',key.slice(4)); if(t) return {subject:t.subject||'',html:t.html||''}; }
   if(key==='_new') return {subject:'',html:''};
   const t=MKT_CAMPAIGNS.find(x=>x.key===key)||MKT_CAMPAIGNS[0];
-  const body=t.body.replace(/{sig}/g,sig()).replace(/{avisurl}/g,DB.config().googleReviewUrl||'');
+  const u=(DB.config().googleReviewUrl||'').trim();
+  const body=t.body.replace(/{sig}/g,sig()).replace(/{avisurl}/g,/^https?:\/\//i.test(u)?u:'{avisurl}');
   return {subject:t.subject,html:esc(body).replace(/\n/g,'<br>')};
 }
 function mktVars(s,c){ return String(s||'').replace(/{prenom}/g,prenomDe(c.prenom||c.nom)).replace(/{nom}/g,((c.prenom?c.prenom+' ':'')+(c.nom||'')).trim()); }
 function mktCaptureDraft(){ const s=document.getElementById('mkt-subject'), ed=document.getElementById('mkt-editor');
   if(s&&ed) _mktDraft={subject:s.value,html:ed.innerHTML}; }
-function mktLoadTpl(key){ if(key==='_new'){ _mktTpl='_new'; _mktDraft={subject:'',html:'<br>'}; } else { _mktTpl=key; _mktDraft=null; } RENDERERS.marketing(); }
+function mktOnEdit(){ _mktModifie=true; clearTimeout(_mktBrT); _mktBrT=setTimeout(mktBrouillonEcrire,800); }
+function mktBrEtat(txt){ const el=document.getElementById('mkt-br-etat'); if(el) el.textContent=txt||''; }
+function mktBrouillonEcrire(){
+  clearTimeout(_mktBrT); _mktBrT=null;
+  mktCaptureDraft(); if(!_mktModifie||!_mktDraft) return;
+  const json=JSON.stringify({v:1,tpl:_mktTpl,subject:_mktDraft.subject||'',html:_mktDraft.html||'',at:new Date().toISOString()});
+  try{
+    if(json.length>MKT_BR_MAX){ localStorage.removeItem(MKT_BR_KEY); mktBrEtat('Brouillon trop lourd pour être gardé sur l\'appareil (image collée ?)'); return; }
+    localStorage.setItem(MKT_BR_KEY,json);
+    mktBrEtat('Brouillon gardé sur cet appareil · '+new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}));
+  }catch(_){ mktBrEtat('Brouillon non gardé sur l\'appareil (stockage plein)'); }
+}
+function fmtBrouillon(iso){ const d=new Date(iso); return isNaN(d)?'':d.toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit'})+' à '+d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}); }
+function mktBrouillonEffacer(){ clearTimeout(_mktBrT); _mktBrT=null; _mktBrRepris=''; try{ localStorage.removeItem(MKT_BR_KEY); }catch(_){} }
+function mktBrouillonFini(){ _mktModifie=false; mktBrouillonEffacer(); }   // modèle chargé ou enregistré, envoi / planification réussis
+function mktBrouillonRestaurer(){
+  let b=null; try{ b=JSON.parse(localStorage.getItem(MKT_BR_KEY)||'null'); }catch(_){}
+  if(!b||typeof b.html!=='string') return;
+  const t=String(b.tpl||'');
+  const existe=t==='_new'||MKT_CAMPAIGNS.some(x=>x.key===t)||(t.indexOf('tpl:')===0&&!!DB.get('templates',t.slice(4)));
+  _mktTpl=existe?t:'_new';
+  _mktDraft={subject:String(b.subject||''),html:b.html||'<br>'};
+  _mktModifie=true; _mktBrRepris=b.at||new Date().toISOString();
+}
+function mktEnSaisie(){ const a=document.activeElement;   // Louis tape dans un champ du studio (objet, message, recherche, date)
+  return _currentView==='marketing'&&!!a&&!!a.closest&&!!a.closest('#view-marketing')&&(a.isContentEditable||/^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)); }
+function mktLoadTpl(key){
+  if(_mktModifie&&!confirm('Remplacer le message en cours par ce modèle ?\n\nLe texte que tu as écrit sera perdu.')){
+    const s=document.getElementById('mkt-tpl'); if(s) s.value=_mktTpl; return; }
+  mktBrouillonFini();
+  if(key==='_new'){ _mktTpl='_new'; _mktDraft={subject:'',html:'<br>'}; } else { _mktTpl=key; _mktDraft=null; }
+  _mktReset=true; RENDERERS.marketing(); }
 /* Toolbar WYSIWYG */
-function mktExec(cmd,val){ const ed=document.getElementById('mkt-editor'); if(ed)ed.focus(); document.execCommand(cmd,false,val||null); }
+function mktExec(cmd,val){ const ed=document.getElementById('mkt-editor'); if(ed)ed.focus(); document.execCommand(cmd,false,val||null); mktOnEdit(); }
 function mktFont(sel){ if(sel.value)mktExec('fontSize',sel.value); sel.selectedIndex=0; }
 function mktColor(inp,cmd){ const ed=document.getElementById('mkt-editor'); if(ed)ed.focus(); try{document.execCommand('styleWithCSS',false,true);}catch(_){}
-  if(!document.execCommand(cmd,false,inp.value)&&cmd==='hiliteColor') document.execCommand('backColor',false,inp.value); }
+  if(!document.execCommand(cmd,false,inp.value)&&cmd==='hiliteColor') document.execCommand('backColor',false,inp.value); mktOnEdit(); }
 function mktToolbarHtml(){
   const B='border:1px solid #d8d2c8;background:#fff;color:#333;border-radius:6px;height:30px;cursor:pointer;font-size:13px';
   const b=(cmd,label,title)=>`<button type="button" title="${title}" onmousedown="return false" onclick="mktExec('${cmd}')" style="${B};min-width:30px">${label}</button>`;
@@ -3539,7 +3840,7 @@ function mktToolbarHtml(){
     +`</div>`;
 }
 function mktLink(){ const u=prompt('Adresse du lien (https://…) :','https://'); if(u)mktExec('createLink',u); }
-function mktInsertVar(tag){ const ed=document.getElementById('mkt-editor'); if(ed)ed.focus(); document.execCommand('insertText',false,tag); }
+function mktInsertVar(tag){ const ed=document.getElementById('mkt-editor'); if(ed)ed.focus(); document.execCommand('insertText',false,tag); mktOnEdit(); }
 function mktPreview(){ const box=document.getElementById('mkt-pv'), fr=document.getElementById('mkt-pv-frame'), ed=document.getElementById('mkt-editor');
   if(!box||!fr||!ed)return; if(box.style.display==='block'){ box.style.display='none'; return; }
   fr.srcdoc=emailHtmlRich(ed.innerHTML); box.style.display='block'; box.scrollIntoView({behavior:'smooth',block:'nearest'}); }
@@ -3548,23 +3849,28 @@ function mktSaveTemplate(){ mktCaptureDraft(); if(!_mktDraft)return;
   const name=prompt('Nom du modèle :', def||_mktDraft.subject||'Mon modèle'); if(!name)return;
   const id=(_mktTpl&&_mktTpl.indexOf('tpl:')===0)?_mktTpl.slice(4):uid('TPL');
   DB.save('templates',{id,name:name.trim(),subject:_mktDraft.subject,html:_mktDraft.html,updatedAt:new Date().toISOString()});
-  _mktTpl='tpl:'+id; _mktDraft=null; logActivite('Modèle mailing enregistré · '+name.trim()); toast('💾 Modèle « '+name.trim()+' » enregistré','ok'); RENDERERS.marketing(); }
+  _mktTpl='tpl:'+id; _mktDraft=null; mktBrouillonFini(); _mktReset=true; logActivite('Modèle mailing enregistré · '+name.trim()); toast('💾 Modèle « '+name.trim()+' » enregistré','ok'); RENDERERS.marketing(); }
 function mktDeleteTemplate(){ if(!_mktTpl||_mktTpl.indexOf('tpl:')!==0)return; const t=DB.get('templates',_mktTpl.slice(4));
-  if(!confirm('Supprimer le modèle « '+(t?t.name:'')+' » ?'))return; DB.remove('templates',_mktTpl.slice(4)); _mktTpl='anniv'; _mktDraft=null; toast('Modèle supprimé','ok'); RENDERERS.marketing(); }
+  if(!confirm('Supprimer le modèle « '+(t?t.name:'')+' » ?'))return; DB.remove('templates',_mktTpl.slice(4)); _mktTpl='_new'; toast('Modèle supprimé · le texte reste dans l\'éditeur','ok'); RENDERERS.marketing(); }
 function clientDernierEvt(id){ const ds=DB.all('devis').filter(d=>d.idClient===id).map(d=>d.dateEvenement||d.dateCreation).filter(Boolean).sort(); return ds[ds.length-1]||''; }
 function mktRappels(){ // {c, raison, info, key}
   const now=new Date(), mois=now.getMonth(), an=now.getFullYear(); const out=[]; const vus=new Set();
+  const D=adressesDesabonnees();
   const add=(c,raison,info)=>{ const key='mkt-'+raison+'-'+c.id; if(isSnoozed(key))return; out.push({c,raison,info,key}); };
   // anniversaires ce mois (prestation/devis passé, même mois, >=1 an)
   DB.all('devis').forEach(d=>{ if(!d.idClient||!d.dateEvenement)return; if(!['Accepté','Acompte reçu'].includes(d.statut))return; const dt=new Date(d.dateEvenement); if(isNaN(dt))return;
-    const ya=an-dt.getFullYear(); if(dt.getMonth()===mois&&ya>=1){ const c=DB.get('clients',d.idClient); if(c&&c.email&&!c.desabo&&!vus.has('a'+c.id)){ vus.add('a'+c.id); add(c,'anniv','Prestation il y a '+ya+' an'+(ya>1?'s':'')+' ('+fmtDateShort(d.dateEvenement)+')'); } } });
+    const ya=an-dt.getFullYear(); if(dt.getMonth()===mois&&ya>=1){ const c=DB.get('clients',d.idClient); if(c&&c.email&&!D.has(normEmail(c.email))&&!vus.has('a'+c.id)){ vus.add('a'+c.id); add(c,'anniv','Prestation il y a '+ya+' an'+(ya>1?'s':'')+' ('+fmtDateShort(d.dateEvenement)+')'); } } });
   // dormants : dernier devis > 8 mois
-  DB.all('clients').filter(c=>c.email&&!c.desabo).forEach(c=>{ const last=clientDernierEvt(c.id); if(last&&daysSince(last)>240&&!vus.has('a'+c.id)&&!vus.has('d'+c.id)){ vus.add('d'+c.id); add(c,'dormant','Pas de prestation depuis '+Math.round(daysSince(last)/30)+' mois'); } });
+  DB.all('clients').filter(c=>c.email&&!D.has(normEmail(c.email))).forEach(c=>{ const last=clientDernierEvt(c.id); if(last&&daysSince(last)>240&&!vus.has('a'+c.id)&&!vus.has('d'+c.id)){ vus.add('d'+c.id); add(c,'dormant','Pas de prestation depuis '+Math.round(daysSince(last)/30)+' mois'); } });
   return out;
 }
 function dismissRappel(key){ mktCaptureDraft(); const c=DB.config(); c.dismissed=c.dismissed||{}; const u=new Date(); u.setDate(u.getDate()+90); c.dismissed[key]=u.toISOString(); DB.saveConfig(c); RENDERERS.marketing(); updateBadges(); toast('Suggestion masquée','ok'); }
 RENDERERS.marketing=function(){
-  const clients=DB.all('clients').filter(c=>c.email);
+  const reset=_mktReset; _mktReset=false;                  // posé par mktLoadTpl / mktSaveTemplate seulement
+  if(!reset){ mktCaptureDraft(); if(!_mktDraft) mktBrouillonRestaurer(); }
+  const ec=mktEtatsCampagnes();
+  const parId=mktParId(), Dm=adressesDesabonnees();       // une lecture des fiches pour tous les compteurs
+  const joignables=mktCibles([...parId.keys()],parId,Dm).retenus.length;
   const rappels=mktRappels();
   const auto=DB.config().gmailEnvoi&&cloudUrl();
 
@@ -3575,9 +3881,10 @@ RENDERERS.marketing=function(){
     :'<div class="td-dim">Aucun rappel — tu es à jour 👌</div>';
 
   const liste=segContacts(_mktSeg);
-  const desabos=DB.all('clients').filter(c=>c.email&&c.desabo).length;
+  const ex=segExclus(_mktSeg,parId,Dm);
+  const exclTxt=[ex.desabo?ex.desabo+' désabonné(s) exclu(s)':'',ex.sansEmail?ex.sansEmail+' sans email ou supprimé(s)':''].filter(Boolean).join(' · ');
   const cbList=liste.map(c=>`<label class="mkt-row" data-s="${esc((c.prenom+' '+c.nom+' '+c.email).toLowerCase())}" style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--anthr);cursor:pointer">
-      <input type="checkbox" class="mkt-cb" value="${c.id}" checked>
+      <input type="checkbox" class="mkt-cb" value="${c.id}"${_mktDecoches.has(c.id)?'':' checked'}>
       <span style="flex:1">${esc((c.prenom+' '+c.nom).trim())}<span class="td-dim"> · ${esc(c.email)}</span></span>
       <span class="badge ${c.type==='partenaire'?'accepte':c.type==='entreprise'?'nouveau':'brouillon'}">${esc(c.type)}</span></label>`).join('');
 
@@ -3589,11 +3896,12 @@ RENDERERS.marketing=function(){
 
   document.getElementById('view-marketing').innerHTML=`
     <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr)">
-      ${kpi('info','Contacts emailables',clients.length)}
+      ${kpi('info','Adresses joignables',joignables,'hors désabonnés, sans doublon')}
       ${kpi('or','Rappels à faire',rappels.length)}
       ${kpi(auto?'vert':'warn','Envoi',auto?'Gmail auto ✓':'Messagerie',auto?'direct + perso':'mailto groupé')}
     </div>
     ${!auto?alertHtml('warning','✉','Envoi auto Gmail désactivé → l\'envoi groupé ouvrira ta messagerie avec les destinataires en copie cachée (Cci). Active Gmail (Réglages) pour un envoi direct et personnalisé.'):''}
+    ${mktBandeauInterrompues(ec)}
 
     <div class="panel"><div class="panel-title">🔔 Rappels intelligents</div>
       <div class="td-dim" style="margin-bottom:8px">Basés sur tes dates de prestation (anniversaires de collaboration ce mois, clients dormants).</div>
@@ -3608,9 +3916,9 @@ RENDERERS.marketing=function(){
             <optgroup label="Modèles intégrés">${builtinOpts}</optgroup>
             <option value="_new"${_mktTpl==='_new'?' selected':''}>🆕 Nouveau modèle vierge</option></select></div>
         <div class="form-group"><label class="form-label">Liste de destinataires</label>
-          <select class="form-control" onchange="mktCaptureDraft();_mktSeg=this.value;RENDERERS.marketing()">
-            <optgroup label="Listes automatiques">${MKT_SEGMENTS.map(sg=>`<option value="${sg.key}"${sg.key===_mktSeg?' selected':''}>${sg.label} (${segContacts(sg.key).length})</option>`).join('')}</optgroup>
-            ${DB.all('segments').length?`<optgroup label="Mes listes">${DB.all('segments').map(sg=>`<option value="seg:${sg.id}"${_mktSeg==='seg:'+sg.id?' selected':''}>📁 ${esc(sg.nom)} (${(sg.ids||[]).length})</option>`).join('')}</optgroup>`:''}
+          <select class="form-control" onchange="mktCaptureDraft();_mktSeg=this.value;mktResetSelection();RENDERERS.marketing()">
+            <optgroup label="Listes automatiques">${MKT_SEGMENTS.map(sg=>`<option value="${sg.key}"${sg.key===_mktSeg?' selected':''}>${sg.label} (${mktCibles(segContacts(sg.key).map(c=>c.id),parId,Dm).retenus.length})</option>`).join('')}</optgroup>
+            ${DB.all('segments').length?`<optgroup label="Mes listes">${DB.all('segments').map(sg=>`<option value="seg:${sg.id}"${_mktSeg==='seg:'+sg.id?' selected':''}>📁 ${esc(sg.nom)} (${segNbPerso(sg,parId,Dm)})</option>`).join('')}</optgroup>`:''}
           </select></div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
@@ -3619,17 +3927,19 @@ RENDERERS.marketing=function(){
         <button class="btn btn-ghost btn-sm" onclick="mktLoadTpl('_new')">🆕 Vierge</button>
         <button class="btn btn-ghost btn-sm" onclick="mktPreview()">👁 Aperçu</button>
       </div>
+      ${_mktBrRepris?`<div class="td-dim" style="margin:0 0 8px">Brouillon non envoyé du ${esc(fmtBrouillon(_mktBrRepris))} repris · <a style="text-decoration:underline;cursor:pointer" onclick="mktLoadTpl(_mktTpl)">Repartir du modèle</a></div>`:''}
       <div class="form-group"><label class="form-label">Objet <span class="td-dim">({prenom} = prénom auto)</span></label>
-        <input class="form-control" id="mkt-subject" value="${esc(cur.subject)}"></div>
+        <input class="form-control" id="mkt-subject" value="${esc(cur.subject)}" oninput="mktOnEdit()"></div>
       <label class="form-label">Message <span class="td-dim">— mise en forme complète, {prenom} / {nom} personnalisés par contact</span></label>
       <div style="border:1px solid var(--anthr);border-radius:var(--rsm);overflow:hidden;margin-bottom:8px">
         ${mktToolbarHtml()}
-        <div id="mkt-editor" contenteditable="true" style="min-height:220px;max-height:440px;overflow:auto;padding:16px;background:#fff;color:#1a1a1a;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;outline:none"></div>
+        <div id="mkt-editor" contenteditable="true" oninput="mktOnEdit()" style="min-height:220px;max-height:440px;overflow:auto;padding:16px;background:#fff;color:#1a1a1a;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;outline:none"></div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
         <span class="td-dim" style="font-size:12px">Insérer :</span>
         <button class="btn btn-ghost btn-sm" onmousedown="return false" onclick="mktInsertVar('{prenom}')">+ Prénom</button>
         <button class="btn btn-ghost btn-sm" onmousedown="return false" onclick="mktInsertVar('{nom}')">+ Nom complet</button>
+        <span id="mkt-br-etat" class="td-dim" style="font-size:11px;margin-left:auto"></span>
       </div>
       <div id="mkt-pv" style="display:none;margin:12px 0">
         <div class="form-label">Aperçu — ce que reçoit le client</div>
@@ -3637,51 +3947,85 @@ RENDERERS.marketing=function(){
       </div>
 
       <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin:14px 0 4px;flex-wrap:wrap">
-        <div class="td-strong">${esc(segNom(_mktSeg))} — <span id="mkt-count">${liste.length}</span> destinataire(s)${desabos?` <span class="td-dim" style="font-weight:400">· ${desabos} désabonné(s) exclu(s)</span>`:''}</div>
+        <div class="td-strong">${esc(segNom(_mktSeg))} — <span id="mkt-count">${liste.length}</span> destinataire(s)<span id="mkt-count-info" class="td-dim" style="font-weight:400"></span>${exclTxt?` <span class="td-dim" style="font-weight:400">· ${exclTxt}</span>`:''}</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-ghost btn-sm" onclick="mktToggleAll(true)">Tout cocher</button>
           <button class="btn btn-ghost btn-sm" onclick="mktToggleAll(false)">Tout décocher</button>
           <button class="btn btn-ghost btn-sm" onclick="segEnregistrer()">💾 Enregistrer la sélection</button>
-          ${_mktSeg.indexOf('seg:')===0?`<button class="btn btn-ghost btn-sm" onclick="segSupprimer()">🗑 Supprimer la liste</button>`:''}
+          ${_mktSeg.indexOf('seg:')===0?`<button class="btn btn-ghost btn-sm" onclick="segRetirerDecoches()">✏️ Retirer les décochés</button><button class="btn btn-ghost btn-sm" onclick="segSupprimer()">🗑 Supprimer la liste</button>`:''}
         </div>
       </div>
-      <input class="form-control" id="mkt-search" placeholder="🔍 Rechercher un contact (nom, email)…" oninput="mktSearchFilter(this.value)" style="margin-bottom:8px">
-      <div style="max-height:230px;overflow-y:auto;border:1px solid var(--anthr);border-radius:var(--rsm)" onchange="mktCount()">${cbList||'<div class="td-dim" style="padding:10px">Aucun contact trouvé.</div>'}</div>
+      <input class="form-control" id="mkt-search" placeholder="🔍 Rechercher un contact (nom, email)…" value="${esc(_mktSearch)}" oninput="mktSearchFilter(this.value)" style="margin-bottom:8px">
+      <div style="max-height:230px;overflow-y:auto;border:1px solid var(--anthr);border-radius:var(--rsm)" onchange="mktMemoCoches();mktCount()">${cbList||'<div class="td-dim" style="padding:10px">Aucun contact trouvé.</div>'}</div>
 
-      <div id="mkt-progress" class="td-dim" style="margin-top:10px"></div>
+      ${mktBilanHtml()}
+      <div id="mkt-progress" class="td-dim" style="margin-top:10px">${esc(_mktProg)}</div>${mktBoucleActive()?'<div class="td-dim" style="font-size:12px">Garde cette page ouverte et l\'écran allumé. Si l\'envoi s\'arrête, « Reprendre » le termine sans doublon.</div>':''}
       <div class="form-grid" style="margin-top:10px;align-items:end">
-        <div class="form-group"><label class="form-label">📅 Planifier (optionnel — vide = envoi immédiat)</label><input class="form-control" type="date" id="mkt-date" min="${todayISO()}"></div>
+        <div class="form-group"><label class="form-label">📅 Planifier (optionnel, vide = envoi immédiat)</label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <input class="form-control" type="date" id="mkt-date" min="${todayISO()}" value="${esc(_mktDate)}" oninput="mktDateSaisie()" onchange="mktDateSaisie()" style="flex:1 1 150px">
+            <input class="form-control" type="time" id="mkt-heure" value="${esc(_mktHeure||'09:00')}" step="900" aria-label="Heure d'envoi" oninput="mktDateSaisie()" onchange="mktDateSaisie()" style="flex:0 0 110px">
+          </div></div>
         <div style="text-align:right;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
           <button class="btn btn-ghost" onclick="envoyerTest()">🧪 M'envoyer un test</button>
-          <button class="btn btn-or" id="mkt-send" onclick="envoyerCampagne()">📤 Envoyer / Planifier</button></div>
+          <button class="btn btn-or" id="mkt-send" onclick="envoyerCampagne()"${_mktEnvoiEnCours?' disabled':''}>${auto?'📤 Envoyer maintenant':'✉ Ouvrir ma messagerie'}</button></div>
       </div>
       ${!auto?'<div class="td-dim" style="margin-top:6px">Planification + suivi des ouvertures = nécessitent l\'envoi auto Gmail.</div>':''}
     </div>
 
-    ${marketingStatsHtml()}
+    ${marketingStatsHtml(ec)}
     ${planifsHtml()}`;
   const _ed=document.getElementById('mkt-editor'); if(_ed)_ed.innerHTML=cur.html||'<br>';   // contenu injecté après rendu (pas d'injection template-literal)
+  if(_mktSearch) mktSearchFilter(_mktSearch);   // réapplique la recherche (mktSelection ignore les lignes masquées)
+  mktCount(); mktMajBoutonEnvoi();
 };
-function marketingStatsHtml(){
+/* Secondes entre le dernier email d'actualité reçu par cette adresse et son désabonnement (null si inconnu) */
+function desaboDelaiEnvoi(c){
+  const em=normEmail(c.email), t=new Date(c.desaboLe).getTime();
+  if(!em||isNaN(t)) return null;
+  let best=null;
+  const voir=d=>{ const x=new Date(d).getTime(); if(!isNaN(x)&&x<=t+30000&&(best===null||x>best)) best=x; };   // 30 s de marge : horloge de l'iPhone en avance
+  DB.all('mails').forEach(m=>{ if((m.kind==='campagne'||m.kind==='marketing')&&normEmail(m.to)===em) voir(m.date); });
+  DB.all('planifs').forEach(p=>{ if(p.statut==='envoyé'&&normEmail(p.to)===em) voir(p.sentAt); });
+  return best===null?null:Math.max(0,Math.round((t-best)/1000));
+}
+function marketingStatsHtml(ec){
+  ec=ec||mktEtatsCampagnes();
   const sent=DB.all('mails').filter(m=>m.to&&(m.kind==='campagne'||m.kind==='marketing'));
   const opened=sent.filter(m=>isOpened(m.id));
   const taux=sent.length?Math.round(opened.length/sent.length*100):0;
-  const camps=DB.all('campagnes').slice().sort((a,b)=>(b.date||'').localeCompare(a.date||'')).slice(0,6);
-  const lignesCamp=camps.map(c=>{
-    const ouv=(c.mailIds||[]).filter(id=>isOpened(id)).length;
-    const tx=c.envoyes?Math.round(ouv/c.envoyes*100):0;
+  const camps=ec.filter((x,i)=>i<6||x.st.etat==='interrompue');   // une campagne coupée reste visible
+  const fiches=new Map(DB.all('clients').map(x=>[x.id,x]));
+  const lignesCamp=camps.map(({c,servis,st})=>{
+    const ids=new Set([...[...servis.values()].map(m=>m.id),...(c.mailIds||[])]);
+    const ouv=[...ids].filter(id=>isOpened(id)).length;
+    const env=st.envoyes, tx=env?Math.round(ouv/env*100):0, total=(c.idsCibles||[]).length;
+    const etatTxt={ici:' · envoi en cours',ailleurs:' · envoi en cours sur un autre appareil',interrompue:' · interrompue',close:' · close'}[st.etat]||'';
+    const actions=st.etat==='interrompue'?`<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+        <button class="btn btn-or btn-sm" onclick="reprendreCampagne('${esc(c.id)}')">Reprendre (${st.reste})</button>
+        <button class="btn btn-ghost btn-sm" onclick="cloreCampagne('${esc(c.id)}')">Clore</button></div>`:'';
+    const detail=(c.echecsDetail||[]).length?`<details style="margin-top:6px"><summary style="cursor:pointer;color:var(--gm);font-size:12px">Détail des ${c.echecsDetail.length} échec(s)</summary><div class="td-dim" style="font-size:12px;margin-top:6px">${c.echecsDetail.map(e=>{ const f=fiches.get(e.idClient);
+        const nom=f?((f.prenom?f.prenom+' ':'')+(f.nom||'')).trim():'(fiche supprimée)';
+        const etat=e.statut==='inconnu'?(isOpened(e.trackId)?'ouvert, donc reçu':'statut inconnu, peut-être reçu'):'non parti';
+        return esc(nom)+' · '+esc(e.to||'')+' : '+etat+' ('+esc(e.info||'')+')'; }).join('<br>')}</div></details>`:'';
     return `<div style="padding:9px 0;border-bottom:1px solid var(--anthr)">
       <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
         <span style="flex:1;min-width:0"><span class="td-strong" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block">${esc(c.nom||'Campagne')}</span>
-          <span class="td-dim" style="font-size:11px">${fmtDateShort(c.date)} · ${esc(c.segment||'')} · ${c.envoyes||0} envoyé(s)${c.echecs?(' · '+c.echecs+' échec(s)'):''}</span></span>
+          <span class="td-dim" style="font-size:11px">${fmtDateShort(c.date)} · ${esc(c.segment||'')} · ${env}${total&&env<total?'/'+total:''} envoyé(s)${c.echecs?(' · '+c.echecs+' échec(s)'):''}${c.nonTentes?(' · '+c.nonTentes+' non tenté(s)'):''}${c.arret&&st.etat!=='terminée'?(' · arrêtée : '+esc(c.arret)):''}<span style="${st.etat==='interrompue'?'color:var(--warn)':''}">${etatTxt}</span></span></span>
         <span class="td-strong" style="color:${tx>=30?'var(--ok)':tx>=15?'var(--warn)':'var(--gm)'}">${ouv} ouvert${ouv>1?'s':''} · ${tx} %</span></div>
-      <div style="height:5px;background:var(--anthr);border-radius:20px;overflow:hidden;margin-top:6px"><div style="height:100%;width:${Math.min(100,tx)}%;background:var(--or)"></div></div></div>`;
+      <div style="height:5px;background:var(--anthr);border-radius:20px;overflow:hidden;margin-top:6px"><div style="height:100%;width:${Math.min(100,tx)}%;background:var(--or)"></div></div>${detail}${actions}</div>`;
   }).join('')||'<div class="td-dim">Aucune campagne envoyée pour l\'instant.</div>';
   const recent=sent.slice().sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,6);
   const rows=recent.length?recent.map(m=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--anthr)">
       <div style="min-width:0"><div class="td-strong" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(m.subject||'(sans objet)')}</div><div class="td-dim">${esc(m.to)} · ${fmtDateShort(m.date)}</div></div>
       <span class="badge ${isOpened(m.id)?'accepte':'brouillon'}" style="align-self:center">${isOpened(m.id)?'👁 ouvert':'envoyé'}</span></div>`).join(''):'<div class="td-dim">Aucun email envoyé.</div>';
-  const desab=DB.all('clients').filter(c=>c.desabo);
+  const D=adressesDesabonnees(), cls=DB.all('clients'), reg=desabosServeur();
+  const desab=[...D].sort().map(em=>{ const c=cls.find(x=>normEmail(x.email)===em)||null, r=reg[em]||{};
+    return {email:em, c, nom:c?((c.prenom?c.prenom+' ':'')+(c.nom||'')).trim():'', le:dateDesabo(em),
+      confirme:['lien','lien-ancien','un-clic','manuel'].includes(r.source)||!!(c&&c.desaboVia)}; });
+  // ancien lien (GET, sans confirmation) + moins de 5 min après l'envoi : peut-être un antivirus de messagerie
+  const suspect=d=>{ if(d.confirme) return null; const x=desaboDelaiEnvoi({email:d.email,desaboLe:d.le}); return (x!==null&&x<=300)?x:null; };
+  const nbSuspects=desab.filter(d=>suspect(d)!==null).length;
   return `<div class="panel"><div class="panel-title">📈 Résultats des campagnes</div>
     <div class="kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr));margin-bottom:12px">
       ${kpi('info','Emails envoyés',sent.length)}
@@ -3694,26 +4038,247 @@ function marketingStatsHtml(){
       <div style="margin-top:8px">${rows}</div>
       <div class="td-dim" style="font-size:11px;margin-top:8px">Le suivi d'ouverture est indicatif : certains clients mail bloquent le pixel.</div>
     </details>
-    ${desab.length?`<details style="margin-top:8px"><summary style="cursor:pointer;color:var(--gm);font-size:12px">Contacts désabonnés (${desab.length})</summary>
-      <div class="td-dim" style="font-size:12px;margin-top:8px">${desab.map(c=>esc(((c.prenom?c.prenom+' ':'')+c.nom).trim())+' · '+esc(c.email)).join('<br>')}
-      <br><br>Ils sont exclus automatiquement des campagnes. Les emails de devis et factures leur parviennent toujours.</div></details>`:''}
+    ${desab.length?`<details style="margin-top:8px"><summary style="cursor:pointer;color:var(--gm);font-size:12px">Contacts désabonnés (${desab.length}${nbSuspects?' · '+nbSuspects+' à vérifier':''})</summary>
+      <div class="td-dim" style="font-size:12px;margin-top:8px">${desab.map(d=>{ const x=suspect(d);
+        const nom=d.nom?(d.c?`<a href="#" style="color:var(--gc)" onclick="event.preventDefault();voirClient('${esc(d.c.id)}')">${esc(d.nom)}</a>`:esc(d.nom))+' · ':'';
+        const quand=d.le?(' · le '+fmtDateShort(d.le)+' à '+new Date(d.le).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})):'';
+        const robot=x!==null?` · <span style="color:var(--warn)">${x<60?x+' s':Math.round(x/60)+' min'} après l'envoi, sans confirmation : peut-être un antivirus</span>`:'';
+        return nom+esc(d.email)+quand+robot; }).join('<br>')}
+      <br><br>Ils sont exclus automatiquement des campagnes, même si leur fiche est modifiée, fusionnée ou recréée. Les emails de devis et factures leur parviennent toujours.${nbSuspects?'<br>Les lignes « à vérifier » datent de l\'ancien lien, qui désabonnait sans confirmation. En cas de doute, demande au contact s\'il veut toujours recevoir tes actualités.':''}</div></details>`:''}
   </div>`;
 }
+const PLANIF_LIBELLES={'prévu':['Prévu','nouveau'],'envoi':['En cours d\'envoi','envoye'],'envoyé':['Envoyé','accepte'],
+  'échec':['Échec','refuse'],'incertain':['À vérifier','envoye'],'annulé':['Annulé','brouillon']};
+function badgePlanif(p){ let [txt,cls]=PLANIF_LIBELLES[p.statut]||[p.statut||'?','brouillon'];
+  if(p.statut==='envoi' && Date.now()-new Date(p.updatedAt||0).getTime()>15*60000){ txt='Interrompu · à vérifier'; cls='refuse'; }
+  return `<span class="badge ${cls}"${p.info?` title="${esc(p.info)}"`:''}>${esc(txt)}</span>`; }
+function planifRelancable(p){ return p.statut==='échec' && p.typeEchec!=='adresse'; }
 function planifsHtml(){
-  const all=DB.all('planifs').slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  const all=DB.all('planifs').slice().sort((a,b)=>planifInstant(a).localeCompare(planifInstant(b)));
   const prevus=all.filter(p=>p.statut==='prévu');
-  if(!all.length) return '';
-  const row=p=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--anthr)">
-      <div style="min-width:0"><div class="td-strong">${fmtDateShort(p.date)} · ${esc(p.subject||'')}</div><div class="td-dim">${esc(p.to)}${esc(p.client?(' · '+p.client):'')}</div></div>
-      <div style="display:flex;gap:6px;align-items:center">${badge(p.statut==='prévu'?'envoye':(p.statut==='envoyé'?'accepte':'refuse'))}
-        ${p.statut==='prévu'?`<button class="btn btn-ghost btn-sm" onclick="annulerPlanif('${p.id}')">Annuler</button>`:''}</div></div>`;
+  const attente=planifsEnAttente();
+  if(!all.length&&!attente) return '';
+  const limRetard=new Date(Date.now()-30*60000).toISOString();
+  const enRetard=prevus.filter(p=>planifInstant(p)<limRetard), relancables=all.filter(planifRelancable);
+  const row=p=>{ const detail=p.statut==='envoyé'?'':String(p.info||'').slice(0,160);
+    return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--anthr)">
+      <div style="min-width:0;overflow-wrap:anywhere"><div class="td-strong">${esc(fmtPlanif(planifInstant(p)))} · ${esc(p.subject||'')}</div><div class="td-dim">${esc(p.to)}${esc(p.client?(' · '+p.client):'')}</div>
+        ${detail?`<div class="td-dim" style="color:${p.statut==='prévu'?'var(--warn)':'var(--er)'}">${esc(detail)}</div>`:''}</div>
+      <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">${badgePlanif(p)}
+        ${p.statut==='prévu'?`<button class="btn btn-ghost btn-sm" onclick="annulerPlanif('${esc(p.id)}')">Annuler</button>`:''}</div></div>`; };
+  const lots=lotsPlanifs().map(l=>({...l,n:l.lignes.filter(p=>p.statut==='prévu').length})).filter(l=>l.n>1);
+  const lignesLots=lots.map(l=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--anthr);flex-wrap:wrap">
+      <div class="td-strong" style="min-width:0">${esc(fmtPlanif(l.envoiLe))} · ${esc(l.camp?(l.camp.nom||'Campagne'):'Envois sans campagne')} · ${l.n} prévus</div>
+      <button class="btn btn-ghost btn-sm" onclick="annulerLotPlanifs('${esc(l.cle)}')">Annuler les ${l.n} envois restants</button></div>`).join('');
   return `<div class="panel"><div class="panel-title">📅 Planifications (${prevus.length} à venir)</div>
-    <div class="td-dim" style="margin-bottom:6px">Envoyées automatiquement le jour J par le serveur (cron). Voir DEPLOIEMENT.md pour activer la tâche planifiée.</div>
+    <div id="planif-attente" style="${attente?'':'display:none;'}margin:0 0 10px;padding:10px 12px;border-left:3px solid var(--warn);background:var(--warnl);border-radius:var(--rsm);font-size:13px">
+      Le serveur n'a pas encore reçu certaines planifications : il n'enverra rien pour elles. Elles restent sur cet appareil, ne les refais pas.
+      <button class="btn btn-ghost btn-sm" style="margin-left:8px" onclick="transmettrePlanifs()">Transmettre maintenant</button></div>
+    <div class="td-dim" style="margin-bottom:6px">Envoyées par le serveur à l'heure prévue, à 15 minutes près. La tâche planifiée doit tourner toutes les 15 minutes (voir DEPLOIEMENT.md).</div>
+    ${enRetard.length?`<div class="alert warning">${enRetard.length} envoi(s) en retard. ${esc(((enRetard.find(p=>p.info)||{}).info)||'Le serveur ne les a pas encore traités : vérifie la tâche planifiée (DEPLOIEMENT.md).')}</div>`:''}
+    ${relancables.length?`<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 0;flex-wrap:wrap"><span class="td-dim">${relancables.length} échec(s) peuvent repartir</span>
+      <button class="btn btn-ghost btn-sm" onclick="remettreEnFile()">Remettre en file</button></div>`:''}
+    ${all.some(p=>p.statut==='incertain')?`<div class="td-dim">« À vérifier » : le serveur mail n'a pas confirmé la réception. L'email est peut-être parti, il ne repartira jamais tout seul.</div>`:''}
+    ${lignesLots}
     ${all.map(row).join('')}</div>`;
 }
-function mktToggleAll(v){ document.querySelectorAll('#view-marketing .mkt-row').forEach(l=>{ if(l.style.display!=='none') l.querySelector('.mkt-cb').checked=v; }); mktCount(); }
-function mktSearchFilter(q){ q=(q||'').toLowerCase().trim(); document.querySelectorAll('#view-marketing .mkt-row').forEach(l=>{ l.style.display=(!q||(l.dataset.s||'').includes(q))?'':'none'; }); }
-function mktCount(){ const n=document.querySelectorAll('#view-marketing .mkt-cb:checked').length; const el=document.getElementById('mkt-count'); if(el)el.textContent=n; }
+/* Boucle d'envoi immédiat : sert à l'envoi neuf ET à la reprise. La campagne n'est écrite qu'à la fin (finally).
+   Une ligne mails par succès, avec un id déterministe ; poussée tous les 10 envois pour que l'autre appareil suive. */
+async function mktBoucleEnvoi(camp,cibles,onServi){
+  _mktEnvoiEnCours=camp.id; _mktGele=false; _mktDerniereIter=Date.now(); _mktBilan=null; mktWakeOn();
+  const b0=document.getElementById('mkt-send'); if(b0) b0.disabled=true;
+  const nomDe=c=>((c.prenom?c.prenom+' ':'')+(c.nom||'')).trim();
+  let ok=0,deja=0,ecartes=0,suivant=0,arret='',idem=false,refusSuite=0,enCours=null; const echecs=[];
+  try{
+    const tids=cibles.map(c=>mktTrackId(camp.id,c.id));        // lève AVANT le 1er envoi si un id dépasse 64 caractères
+    for(let i=0;i<cibles.length;i++){
+      if(_mktGele){ _mktGele=false;                             // iOS a gelé la page : on resynchronise puis Louis décide
+        mktProg('Reprise après la pause : vérification…');
+        if(await cloudPull()!=='pulled'){ arret='connexion perdue pendant la pause'; break; }
+        const cc=DB.get('campagnes',camp.id);
+        if(!cc||cc.statut==='close'){ arret='campagne close depuis un autre appareil'; break; }
+        const sv=mktServis(camp.id), n=cibles.slice(i).filter(x=>!sv.has(x.id)).length;
+        if(!n){ suivant=cibles.length; break; }
+        if(!confirm('L\'envoi s\'est arrêté pendant que l\'écran était verrouillé : '+sv.size+'/'+(cc.idsCibles||[]).length+' envoyés.\n\nContinuer vers les '+n+' contact(s) restant(s) ?')){ arret='mis en pause'; break; }
+        mktWakeOn();
+      }
+      const c=DB.get('clients',cibles[i].id)||cibles[i], mailId=tids[i];
+      if(!c.email||estDesabo(c.email)){ ecartes++; suivant=i+1; continue; }   // désabonné entre-temps (synchro d'un autre appareil)
+      if(DB.get('mails',mailId)){ deja++; suivant=i+1; if(onServi) onServi(c); continue; }   // déjà servi, ici ou sur l'autre appareil
+      mktProg('Envoi '+(i+1)+'/'+cibles.length+' → '+c.email+' · garde l\'écran allumé');
+      const desabo=await lienDesabo(c.email);
+      if(!desabo){ arret='lien de désabonnement indisponible (obligatoire) : vérifie la connexion au serveur'; break; }   // ce contact reste « non tenté »
+      const subject=mktVars(camp.subjectTpl,c), htmlP=mktVars(camp.bodyHtmlTpl,c);
+      const payload={action:'sendEmail',to:c.email,subject,body:stripHtml(htmlP),html:emailHtmlRich(htmlP,{desabo}),trackId:mailId,kind:'campagne',marketing:true};
+      suivant=i+1; enCours={c,mailId};                         // la requête part : le contact n'est plus « non tenté »
+      let j=await cloudPost(payload);
+      // Réponse perdue : on redemande avec le MÊME identifiant, le registre du serveur répond « déjà envoyé » s'il est parti.
+      // Seulement si ce serveur a déjà prouvé qu'il tient ce registre (idem) : un ancien api.php ne relance jamais.
+      for(let k=0;k<3&&idem&&(!j||j.reseau);k++){ await pause(3000); j=await cloudPost(payload); }
+      enCours=null; _mktDerniereIter=Date.now();
+      if(j&&j.idem) idem=true;
+      const r=mktClasseEnvoi(j);
+      if(r.statut==='envoye'){ if(j.deja) deja++; else ok++; refusSuite=0;
+        if(!DB.get('mails',mailId)) DB.save('mails',{id:mailId,date:new Date().toISOString(),kind:'campagne',ref:c.id,idCampagne:camp.id,to:c.email,subject});
+        if(onServi) onServi(c);                                  // studio : ce contact ne sera plus coché au re-rendu
+        if((ok+deja)%10===0) cloudPushEntity('mails');         // l'autre appareil voit l'avancement même si la page meurt
+        continue; }
+      if(r.statut==='desabo'){ ecartes++; desabosCacheAjouter(c.email); continue; }   // écarté par le serveur, rien d'enregistré
+      echecs.push({idClient:c.id,nom:nomDe(c),to:c.email,info:r.cause,statut:r.statut,adresse:r.adresse,definitif:r.definitif,trackId:mailId});
+      refusSuite=(r.statut==='refuse'&&!r.adresse)?refusSuite+1:0;
+      if(r.arret){ arret=r.cause; break; }
+      if(refusSuite>=3){ arret='3 refus de suite du serveur mail (limite d\'envoi atteinte ou compte bloqué ?) : '+r.cause; break; }
+    }
+  } catch(err){ console.error(err);
+    if(enCours) echecs.push({idClient:enCours.c.id,nom:nomDe(enCours.c),to:enCours.c.email,info:'erreur du CRM pendant l\'envoi',statut:'inconnu',adresse:false,definitif:false,trackId:enCours.mailId});
+    arret=arret||('erreur inattendue dans le CRM : '+((err&&err.message)||err)); }
+  finally{
+    let reste=0, nonTentes=[];
+    try{
+      const cc=DB.get('campagnes',camp.id)||camp, sv=mktServis(camp.id), nouveaux=new Set(echecs.map(e=>e.idClient));
+      const echecsDetail=(cc.echecsDetail||[]).filter(e=>!nouveaux.has(e.idClient))
+        .concat(echecs.map(e=>({idClient:e.idClient,to:e.to,info:String(e.info||'').slice(0,160),statut:e.statut,adresse:!!e.adresse,definitif:!!e.definitif,trackId:e.trackId})))
+        .filter(e=>!sv.has(e.idClient));
+      nonTentes=cibles.slice(suivant).filter(c=>!sv.has(c.id)&&!nouveaux.has(c.id)).map(c=>({idClient:c.id,nom:nomDe(c),to:c.email}));
+      const fin={...cc,echecsDetail}; reste=mktReste(fin,sv).length;
+      const maj={...fin,statut:cc.statut==='close'?'close':(reste?'interrompue':'terminée'),
+        envoyes:sv.size,echecs:echecsDetail.length,nonTentes:nonTentes.length,mailIds:[...sv.values()].map(m=>m.id)};   // envoyes/mailIds : compat anciennes versions
+      if(arret) maj.arret=arret.slice(0,160); else delete maj.arret;
+      DB.save('campagnes',maj);                                  // une seule écriture de la campagne par boucle
+    }catch(e){ console.error(e); }                               // stockage plein : le bilan à l'écran reste juste
+    mktWakeOff(); _mktEnvoiEnCours=false; _mktGele=false; mktProg('');
+    const b=document.getElementById('mkt-send'); if(b) b.disabled=false;
+    const refuses=echecs.filter(e=>e.statut==='refuse').length, inconnus=echecs.filter(e=>e.statut==='inconnu').length;
+    _mktBilan={date:new Date().toISOString(),campId:camp.id,objet:camp.subjectTpl||camp.nom||'Campagne',total:cibles.length,ok,deja,ecartes,echecs,nonTentes,arret,reste};
+    const bilan=ok+' envoyé(s)'+(deja?' · '+deja+' déjà parti(s), non renvoyé(s)':'')+(ecartes?' · '+ecartes+' désabonné(s) écarté(s)':'')
+      +(refuses?' · '+refuses+' refusé(s)':'')+(inconnus?' · '+inconnus+' à vérifier':'')+(nonTentes.length?' · '+nonTentes.length+' non tenté(s)':'');
+    logActivite('Campagne « '+String(camp.subjectTpl||'').slice(0,40)+' » : '+bilan+(arret?' · arrêt : '+arret.slice(0,80):''));
+    const complet=!reste&&!arret&&!refuses&&!inconnus;
+    toast(complet?('✅ '+(ok+deja)+' email(s) envoyé(s)'):(ok||deja)?('⚠ '+(ok+deja)+'/'+cibles.length+' envoyé(s) · voir le bilan'):'⛔ Aucun email parti · voir le bilan', complet?'ok':'err');
+    RENDERERS.marketing();
+    const el=document.getElementById('mkt-bilan'); if(el) el.scrollIntoView({behavior:'smooth',block:'nearest'});
+  }
+}
+/* Reprise : relit le serveur, ne vise que les contacts sans ligne mails (hors refus définitifs et désabonnés),
+   avec les MÊMES identifiants. Rien ne part sans confirmation. */
+async function reprendreCampagne(id){
+  if(_mktEnvoiEnCours){ toast('Un envoi tourne déjà sur cet appareil','err'); return; }
+  if(!(DB.config().gmailEnvoi&&cloudUrl())){ toast('Active l\'envoi automatique (Réglages)','err'); return; }
+  mktCaptureDraft();
+  _mktEnvoiEnCours='prep'; mktProg('Vérification des envois déjà faits…');
+  let camp=null, restants=[];
+  try{
+    if(await cloudPull()!=='pulled'){ toast('Serveur injoignable : reprise impossible pour l\'instant. Rien n\'est parti.','err'); return; }
+    if(!desaboPret()){ toast('Reprise impossible : lien de désabonnement indisponible (obligatoire).','err'); return; }
+    camp=DB.get('campagnes',id);
+    if(!camp||!Array.isArray(camp.idsCibles)||!camp.bodyHtmlTpl){ toast('Cette campagne ne peut pas être reprise : message non conservé','err'); return; }
+    if(camp.statut==='close'){ toast('Campagne close depuis un autre appareil','err'); return; }
+    const D=adressesDesabonnees(), sv=mktServis(id), vus=new Set([...sv.values()].map(m=>String(m.to||'').toLowerCase().trim()));
+    const nbRefus=(camp.echecsDetail||[]).filter(e=>(e.definitif||e.adresse)&&!sv.has(e.idClient)).length;
+    restants=mktReste(camp,sv,null,D).map(cid=>DB.get('clients',cid)).filter(c=>{ const k=c.email.toLowerCase().trim(); if(vus.has(k)) return false; vus.add(k); return true; });
+    const desab=camp.idsCibles.filter(cid=>{ const c=DB.get('clients',cid); return c&&c.email&&estDesabo(c.email,D)&&!sv.has(cid); }).length;
+    if(!restants.length){ DB.save('campagnes',{...camp,statut:'terminée'}); _mktBilan=null; RENDERERS.marketing(); toast('Rien à reprendre : tous les contacts ont été servis','ok'); return; }
+    let der=0; sv.forEach(m=>{ const t=Date.parse(m.date)||0; if(t>der) der=t; });
+    if(!confirm('Reprendre « '+(camp.subjectTpl||camp.nom)+' » ?\n\n· déjà envoyés : '+sv.size+'/'+camp.idsCibles.length
+      +'\n· à envoyer maintenant : '+restants.length
+      +(nbRefus?'\n· refusés ou non confirmés la dernière fois : '+nbRefus+' (non repris)':'')
+      +(desab?'\n· désabonnés depuis : '+desab+' (écartés)':'')
+      +(Date.now()-der<MKT_INACTIF_MS?'\n\nUn autre appareil a envoyé un email de cette campagne il y a moins de 3 min.':'')
+      +'\n\nLe serveur ne renvoie jamais un email déjà parti.')) return;
+    camp=DB.save('campagnes',{...camp,statut:'en cours',repriseLe:new Date().toISOString()});
+    _mktEnvoiEnCours=camp.id;
+  } finally { if(_mktEnvoiEnCours==='prep'){ _mktEnvoiEnCours=false; mktProg(''); } }
+  await mktBoucleEnvoi(camp,restants);
+}
+function cloreCampagne(id){ const c=DB.get('campagnes',id); if(!c) return;
+  if(!confirm('Clore « '+(c.subjectTpl||c.nom)+' » sans écrire aux contacts restants ?\n\nLes emails déjà partis restent comptés.')) return;
+  mktCaptureDraft(); DB.save('campagnes',{...c,statut:'close'}); if(_mktBilan&&_mktBilan.campId===id) _mktBilan=null;
+  RENDERERS.marketing(); toast('Campagne close','ok'); }
+/* Bilan du dernier envoi immédiat : reste affiché jusqu'au clic sur Fermer (survit aux re-rendus) */
+function mktBilanHtml(){
+  const b=_mktBilan; if(!b) return '';
+  const refuses=b.echecs.filter(e=>e.statut==='refuse'), inconnus=b.echecs.filter(e=>e.statut==='inconnu');
+  const complet=!b.reste&&!b.arret&&!refuses.length&&!inconnus.length;
+  const cc=DB.get('campagnes',b.campId), reprenable=b.reste&&cc&&cc.statut!=='close'&&cc.statut!=='terminée';
+  const li=(e,t)=>'<li>'+esc(e.nom||'')+' · '+esc(e.to||'')+(t?' : '+esc(t):'')+'</li>';
+  const bloc=(titre,arr,f)=>arr.length?'<details style="margin-top:6px"><summary style="cursor:pointer">'+titre+' ('+arr.length+')</summary><ul style="margin:6px 0 0 18px;padding:0">'+arr.map(f).join('')+'</ul></details>':'';
+  const h='<strong>'+(complet?'Campagne envoyée':b.arret?'Envoi arrêté':'Envoi terminé avec des échecs')+'</strong> · « '+esc(b.objet)+' » · '
+      +new Date(b.date).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})
+    +'<br>'+b.ok+' envoyé(s) sur '+b.total
+      +(b.deja?' · '+b.deja+' déjà parti(s), non renvoyé(s)':'')
+      +(b.ecartes?' · '+b.ecartes+' désabonné(s) écarté(s)':'')
+      +(refuses.length?' · '+refuses.length+' refusé(s)':'')
+      +(b.nonTentes.length?' · '+b.nonTentes.length+' non tenté(s)':'')
+      +(inconnus.length?' · '+inconnus.length+' à vérifier':'')
+    +(b.arret?'<br>Cause : '+esc(b.arret):'')
+    +bloc('Refusés par le serveur',refuses,e=>li(e,e.info+(e.adresse?' (corrige l\'adresse dans la fiche)':'')))
+    +bloc('Non tentés : ils n\'ont rien reçu',b.nonTentes,e=>li(e,''))
+    +bloc('À vérifier : peut-être reçus',inconnus,e=>li(e,e.info))
+    +(reprenable?'<div style="margin-top:6px">« Reprendre » écrit aux '+b.reste+' contact(s) restant(s). Un email déjà parti ne repart jamais.</div>':'')
+    +'<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">'
+      +(reprenable?`<button class="btn btn-ghost btn-sm" onclick="reprendreCampagne('${esc(b.campId)}')">Reprendre (${b.reste})</button><button class="btn btn-ghost btn-sm" onclick="cloreCampagne('${esc(b.campId)}')">Clore</button>`:'')
+      +'<button class="btn btn-ghost btn-sm" onclick="mktFermerBilan()">Fermer</button></div>';
+  return '<div id="mkt-bilan" style="margin-top:10px">'+alertHtml(complet?'success':(b.ok||b.deja)?'warning':'danger',complet?'✓':'⚠',h)+'</div>';
+}
+function mktFermerBilan(){ _mktBilan=null; const el=document.getElementById('mkt-bilan'); if(el) el.remove(); }   // pas de re-rendu : l'éditeur reste intact
+function mktToggleAll(v){ document.querySelectorAll('#view-marketing .mkt-row').forEach(l=>{ if(l.style.display!=='none') l.querySelector('.mkt-cb').checked=v; }); mktMemoCoches(); mktCount(); }
+function mktSearchFilter(q){ _mktSearch=q||''; q=_mktSearch.toLowerCase().trim(); document.querySelectorAll('#view-marketing .mkt-row').forEach(l=>{ l.style.display=(!q||(l.dataset.s||'').includes(q))?'':'none'; }); mktCount(); }
+function mktCount(){
+  const sel=mktSelection(), r=mktCibles(sel.ids);
+  const el=document.getElementById('mkt-count'); if(el) el.textContent=r.retenus.length;
+  const info=document.getElementById('mkt-count-info'); if(!info) return;
+  info.textContent=[r.desabo+r.sansEmail?(r.desabo+r.sansEmail)+' écarté(s) : désabonné ou sans email':'',
+    r.doublons?r.doublons+' doublon(s) d\'adresse':'',
+    sel.masques?sel.masques+' coché(s) masqué(s) par la recherche, non inclus':''].filter(Boolean).map(t=>' · '+t).join('');
+}
+/* Recopie l'état des cases affichées dans _mktDecoches (les ids hors de la liste affichée ne bougent pas) */
+function mktMemoCoches(){ document.querySelectorAll('#view-marketing .mkt-cb').forEach(cb=>{ if(cb.checked) _mktDecoches.delete(cb.value); else _mktDecoches.add(cb.value); }); }
+/* Nouvelle liste choisie par Louis : tout coché, sans recherche (la date reste) */
+function mktResetSelection(){ _mktDecoches=new Set(); _mktSearch=''; }
+/* adresse normalisée → ids de la sélection qui la portent (une adresse servie décoche toutes ses fiches) */
+function mktIdsParAdresse(ids){ const m={}, p=mktParId(); ids.forEach(i=>{ const x=p.get(i); if(x&&x.email){ const k=normEmail(x.email); (m[k]=m[k]||[]).push(i); } }); return m; }
+function mktDateSaisie(){ const d=document.getElementById('mkt-date'), h=document.getElementById('mkt-heure');
+  if(d) _mktDate=d.value||''; if(h) _mktHeure=h.value||'09:00'; mktMajBoutonEnvoi(); }
+/* Contrôle du contenu AVANT tout confirm : objet, message, variables non remplacées, lien avis manquant */
+const MKT_VARS=['prenom','nom'];               // variables résolues par mktVars
+const MKT_VAR_RESTE=/\{[^{}<>:;\n]{1,30}\}/g;  // ':' et ';' exclus : pas de faux positif sur du CSS collé depuis Word
+function mktControleContenu(subjectTpl,bodyHtmlTpl,c){
+  c=c||{prenom:'Camille',nom:'Moreau'};
+  if(!String(subjectTpl||'').trim()) return 'Objet vide : écris un objet avant d\'envoyer';
+  if(!stripHtml(bodyHtmlTpl).trim() && !/<img\b/i.test(bodyHtmlTpl||'')) return 'Message vide : écris ton message avant d\'envoyer';
+  const txt=mktVars(subjectTpl,c)+'\n'+stripHtml(mktVars(bodyHtmlTpl,c));   // contrôle APRÈS résolution, sur le 1er destinataire
+  const restes=[...new Set(txt.match(MKT_VAR_RESTE)||[])];
+  if(restes.includes('{avisurl}')) return 'Lien avis Google manquant : renseigne-le dans Réglages puis recharge le modèle « Demander un avis »';
+  const coupee=restes.find(v=>MKT_VARS.includes(v.slice(1,-1)));
+  if(coupee) return 'La variable '+coupee+' est coupée par une mise en forme : efface-la et réinsère-la avec le bouton « + »';
+  if(restes.length) return 'Variable non reconnue '+restes.slice(0,3).join(' ')+' : seules {prenom} et {nom} sont remplacées';
+  return '';
+}
+const mktSigContenu=(s,h)=>String(s||'')+'\u0001'+String(h||'');
+/* Texte du confirm d'envoi : ce qui part, à qui, ce qui est écarté */
+function mktTexteConfirm(mode,o){
+  const c0=o.c0||{}, L=[mode==='planif' ? 'Planifier l\'envoi à '+o.n+' contact(s) le '+o.quand+' ?' : 'Envoyer MAINTENANT à '+o.n+' contact(s) ?'];
+  if(o.nDeja) L.push('· '+o.nDeja+' ont déjà reçu cet objet (dernier envoi le '+o.dDeja+') : écartés');
+  if(o.r.desabo+o.r.sansEmail) L.push('· '+(o.r.desabo+o.r.sansEmail)+' écarté(s) : désabonné ou sans email');
+  if(o.r.doublons) L.push('· '+o.r.doublons+' doublon(s) d\'adresse écarté(s)');
+  if(o.sel.masques) L.push('· '+o.sel.masques+' coché(s) mais masqué(s) par la recherche : NON inclus');
+  if(o.nDec) L.push('· '+o.nDec+' décoché(s) dans la liste : NON inclus');
+  L.push('','Liste : '+segNom(_mktSeg));
+  L.push('Objet reçu par '+(((c0.prenom?c0.prenom+' ':'')+(c0.nom||'')).trim()||c0.email||'le 1er contact')+' : '+mktVars(o.subjectTpl,c0));
+  if(_mktTestSig!==mktSigContenu(o.subjectTpl,o.bodyHtmlTpl)) L.push('','⚠ Aucun test envoyé pour ce message');
+  if(mode==='planif') L.push('','Partira automatiquement le '+o.quand+', sans nouvelle confirmation.','Annulable d\'ici là dans « Planifications ».');
+  return L.join('\n');
+}
+function mktMajBoutonEnvoi(){
+  const b=document.getElementById('mkt-send'); if(!b) return;
+  const d=(document.getElementById('mkt-date')||{}).value||'', h=(document.getElementById('mkt-heure')||{}).value||'09:00';
+  const auto=DB.config().gmailEnvoi&&cloudUrl();
+  const e=d?planifEnvoiLe(d,h):'';
+  b.textContent=!d ? (auto?'📤 Envoyer maintenant':'✉ Ouvrir ma messagerie')
+    : (!e||e<=new Date().toISOString()) ? '⚠ Date passée'
+    : auto ? '📅 Planifier le '+d.slice(8,10)+'/'+d.slice(5,7)+' à '+h
+    : '📅 Planifier (envoi auto requis)';
+}
 /* Test : s'envoyer l'email tel qu'il partira, variables résolues sur un vrai contact */
 async function envoyerTest(){
   mktCaptureDraft();
@@ -3725,11 +4290,14 @@ async function envoyerTest(){
   if(!subject.trim()&&!stripHtml(html).trim()){ toast('Écris d\'abord ton message','err'); return; }
   const ids=mktSelection().ids;
   const modele=(ids.length?DB.get('clients',ids[0]):null)||{prenom:'Camille',nom:'Moreau'};
+  const pb=mktControleContenu(subject,html,modele);            // le test part quand même : il sert à voir le problème
   const corps=mktVars(html,modele);
   const desabo=await lienDesabo(moi);
-  const j=await cloudPost({action:'sendEmail',to:moi,subject:'[TEST] '+mktVars(subject,modele),
+  if(!desabo){ toast('Lien de désabonnement indisponible : recharge le CRM une fois connecté au serveur','err'); return; }
+  const j=await cloudPost({action:'sendEmail',kind:'campagne',marketing:false,to:moi,subject:'[TEST] '+mktVars(subject,modele),
     body:stripHtml(corps),html:emailHtmlRich(corps,{desabo})});
-  toast(j&&j.ok?('🧪 Test envoyé à '+moi+' (variables : '+prenomDe(modele.prenom||modele.nom)+')'):'Échec : '+((j&&j.info)||'serveur injoignable'), j&&j.ok?'ok':'err');
+  if(j&&j.ok) _mktTestSig=mktSigContenu(subject,html);
+  toast(j&&j.ok?('🧪 Test envoyé à '+moi+' (variables : '+prenomDe(modele.prenom||modele.nom)+')'+(pb?' · ⚠ '+pb:'')):'Échec : '+((j&&j.info)||'serveur injoignable'), j&&j.ok&&!pb?'ok':'err');
 }
 /* Destinataires réellement sélectionnés : on ignore les lignes masquées par la recherche */
 function mktSelection(){
@@ -3739,87 +4307,272 @@ function mktSelection(){
     .map(l=>l.querySelector('.mkt-cb')).filter(cb=>cb&&cb.checked).length;
   return {ids:coches, masques:masquesCoches};
 }
-let _mktEnvoiEnCours=false;
+let _mktEnvoiEnCours=false;            // false | 'prep' | true (planification) | id de la campagne qui part depuis CET appareil
+let _mktProg='', _mktWake=null, _mktCacheDepuis=0, _mktDerniereIter=0, _mktGele=false;
+let _mktBilan=null;                    // bilan du dernier envoi immédiat : mémoire seule, jamais stocké ni synchronisé
+const MKT_INACTIF_MS=3*60000;          // aucun email depuis 3 min : campagne « interrompue »
+function pause(ms){ return new Promise(r=>setTimeout(r,ms)); }
+function mktBoucleActive(){ return typeof _mktEnvoiEnCours==='string'&&_mktEnvoiEnCours!=='prep'; }
+function mktTrackId(campId,cliId){ const t=('MAIL-'+campId+'-'+cliId).replace(/[^A-Za-z0-9_-]/g,'_');
+  if(t.length>64) throw new Error('identifiant de suivi trop long : '+t); return t; }   // le pixel et le Message-ID refusent au-delà de 64
+function mktProg(t){ _mktProg=t||''; const el=document.getElementById('mkt-progress'); if(el) el.textContent=_mktProg; }   // relu à chaque appel : survit à un re-rendu
+async function mktWakeOn(){ try{ if(navigator.wakeLock&&!_mktWake&&document.visibilityState==='visible'){
+  _mktWake=await navigator.wakeLock.request('screen'); _mktWake.addEventListener('release',()=>{ _mktWake=null; }); } }catch(_){ _mktWake=null; } }
+function mktWakeOff(){ try{ if(_mktWake) _mktWake.release(); }catch(_){} _mktWake=null; }
+/* Classe la réponse de sendEmail. arret : inutile d'insister sur les suivants. definitif : ne pas reprendre ce contact. */
+function mktClasseEnvoi(j){
+  if(j&&j.ok) return {statut:'envoye',arret:false,adresse:false,definitif:false,cause:''};
+  if(j&&j.desabo) return {statut:'desabo',arret:false,adresse:false,definitif:true,cause:'désabonné entre-temps'};
+  if(!j||j.reseau||(!j.info&&!j.error&&!j.code&&!j.type)) return {statut:'inconnu',arret:true,adresse:false,definitif:false,cause:"le serveur n'a pas répondu (réseau coupé, écran verrouillé ou délai dépassé) : l'email est peut-être parti"};
+  if(j.error) return {statut:'refuse',arret:true,adresse:false,definitif:false,cause:j.error==='non autorisé'?'session expirée, reconnecte-toi':String(j.error)};
+  const t=String(j.code||j.type||''), info=String(j.info||'');
+  if(t==='plafond') return {statut:'refuse',arret:true,adresse:false,definitif:false,cause:info||'plafond de sécurité du serveur atteint'};
+  if(t==='incertain') return j.at
+    ? {statut:'inconnu',arret:false,adresse:false,definitif:true,cause:"le serveur mail n'avait pas confirmé un premier envoi : non renvoyé"}
+    : {statut:'inconnu',arret:true,adresse:false,definitif:false,cause:info||"le serveur mail n'a pas confirmé l'envoi : l'email est peut-être parti"};
+  if(['config','connexion','auth','expediteur'].includes(t)) return {statut:'refuse',arret:true,adresse:false,definitif:false,cause:info};
+  if(t==='temp') return {statut:'refuse',arret:true,adresse:false,definitif:false,cause:info+' (refus temporaire, réessaie plus tard)'};
+  if(t==='adresse') return {statut:'refuse',arret:false,adresse:true,definitif:true,cause:info};
+  if(t==='refus') return {statut:'refuse',arret:false,adresse:false,definitif:true,cause:info};
+  // ancien serveur sans type : libellés de smtpSend
+  if(/^(SMTP non configuré|connexion SMTP impossible|TLS échec|authentification SMTP refusée|serveur SMTP indisponible)/.test(info)) return {statut:'refuse',arret:true,adresse:false,definitif:false,cause:info};
+  if(/^(destinataire vide|destinataire invalide|adresse refusée)/.test(info)) return {statut:'refuse',arret:false,adresse:true,definitif:true,cause:info};
+  return {statut:'refuse',arret:false,adresse:false,definitif:true,cause:info||'refusé'};   // libellé inconnu : 3 de suite arrêtent la boucle
+}
+/* Lecture seule : l'état d'une campagne se déduit des lignes mails synchronisées */
+function mktServis(campId){ const m=new Map(); DB.all('mails').forEach(x=>{ if(x.idCampagne===campId&&x.ref) m.set(x.ref,x); }); return m; }
+function mktReste(c,servis,clientsMap,D){
+  const exclus=new Set((c.echecsDetail||[]).filter(e=>e.definitif||e.adresse).map(e=>e.idClient));
+  D=D||adressesDesabonnees();
+  return (c.idsCibles||[]).filter(id=>{ if(servis.has(id)||exclus.has(id)) return false;
+    const cl=clientsMap?clientsMap.get(id):DB.get('clients',id); return !!(cl&&cl.email&&!estDesabo(cl.email,D)); }); }
+function mktEtatCampagne(c,servis,clientsMap,D){
+  if(c.statut==='planifiée') return {etat:'planifiée',envoyes:c.envoyes||0,reste:0};
+  if(!Array.isArray(c.idsCibles)) return {etat:'terminée',envoyes:Math.max(servis.size,c.envoyes||0),reste:0};  // campagnes d'avant le correctif
+  const reste=mktReste(c,servis,clientsMap,D).length, base={envoyes:servis.size,reste};
+  if(_mktEnvoiEnCours===c.id) return {...base,etat:'ici'};
+  if(c.statut==='close') return {...base,etat:'close'};
+  if(!reste) return {...base,etat:'terminée'};
+  let der=Date.parse(c.updatedAt||c.date)||0; servis.forEach(m=>{ const t=Date.parse(m.date)||0; if(t>der) der=t; });
+  if(c.statut==='en cours'&&Date.now()-der<MKT_INACTIF_MS) return {...base,etat:'ailleurs'};
+  return {...base,etat:'interrompue'};
+}
+/* Adresses qui ont reçu, dans les 30 derniers jours, une campagne au même objet modèle (repli sur c.nom pour les anciennes) */
+function mktDejaRecu(subjectTpl){
+  const cle=s=>String(s||'').trim().toLowerCase(), k=cle(subjectTpl), out=new Map();
+  if(!k) return out;
+  const camps=new Set(DB.all('campagnes').filter(c=>cle(c.subjectTpl||c.nom)===k).map(c=>c.id));
+  const lim=new Date(Date.now()-30*86400000).toISOString();
+  DB.all('mails').forEach(m=>{ if(m.kind!=='campagne'||!m.to||!camps.has(m.idCampagne)||String(m.date||'')<lim) return;
+    const e=m.to.toLowerCase().trim(); if(!out.has(e)||out.get(e)<m.date) out.set(e,m.date); });
+  return out;
+}
+function mktEtatsCampagnes(){
+  const parCamp=new Map();
+  DB.all('mails').forEach(m=>{ if(!m.idCampagne||!m.ref) return; if(!parCamp.has(m.idCampagne)) parCamp.set(m.idCampagne,new Map()); parCamp.get(m.idCampagne).set(m.ref,m); });
+  const cm=new Map(DB.all('clients').map(c=>[c.id,c])), D=adressesDesabonnees();
+  return DB.all('campagnes').slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''))
+    .map(c=>{ const servis=parCamp.get(c.id)||new Map(); return {c,servis,st:mktEtatCampagne(c,servis,cm,D)}; });
+}
+function mktBandeauInterrompues(ec){
+  const ici=_mktBilan&&_mktBilan.campId;   // la campagne du bilan affiché a déjà ses boutons
+  return ec.filter(x=>x.st.etat==='interrompue'&&x.c.id!==ici).map(({c,st})=>alertHtml('warning','⏸',
+    'Envoi interrompu : <b>'+esc(c.nom||'Campagne')+'</b> · '+st.envoyes+'/'+(c.idsCibles||[]).length+' envoyés ('+fmtDateShort(c.date)+')'
+    +` <button class="btn btn-or btn-sm" style="margin-left:8px" onclick="reprendreCampagne('${esc(c.id)}')">Reprendre</button>`
+    +` <button class="btn btn-ghost btn-sm" onclick="cloreCampagne('${esc(c.id)}')">Clore</button>`)).join('');
+}
+const PLANIF_ATTENTE_MS=30000;   // au-delà, on dit « pas encore reçu » ; l'envoi continue en arrière-plan
+async function transmettrePlanifs(){
+  if(!_pullOk) await cloudPull();                  // règle _pullOk : récupérer avant d'envoyer
+  const j=_pullOk?await cloudPushNow('planifs'):null;
+  toast(j&&j.ok?'Planifications reçues par le serveur':'Serveur injoignable : les planifications restent sur cet appareil. Réessaie une fois connecté.', j&&j.ok?'ok':'err');
+}
 async function envoyerCampagne(){
   if(_mktEnvoiEnCours){ toast('Envoi déjà en cours…','err'); return; }
   mktCaptureDraft();                                   // A7 : ne pas perdre le message en cours
   const sel=mktSelection(); const ids=sel.ids;
   if(!ids.length){ toast(sel.masques?('Aucun destinataire visible coché ('+sel.masques+' masqué(s) par la recherche)'):'Aucun destinataire coché','err'); return; }
-  const subjectTpl=document.getElementById('mkt-subject').value;
+  const subjectTpl=(document.getElementById('mkt-subject')||{}).value||'';
   const bodyHtmlTpl=(document.getElementById('mkt-editor')||{}).innerHTML||'';
-  const date=(document.getElementById('mkt-date')||{}).value||'';
+  const dEl=document.getElementById('mkt-date'); const date=(dEl||{}).value||'';
+  if(dEl&&dEl.validity&&dEl.validity.badInput){ toast('Date de planification incomplète : complète-la ou vide le champ pour envoyer maintenant','err'); return; }
+  const heure=(document.getElementById('mkt-heure')||{}).value||'09:00';
+  _mktDate=date; _mktHeure=heure;
+  const nDec=document.querySelectorAll('#view-marketing .mkt-cb:not(:checked)').length;
   const auto=DB.config().gmailEnvoi&&cloudUrl();
-  const prog=document.getElementById('mkt-progress');
+  const D=adressesDesabonnees();   // relu au clic : registre du serveur + drapeaux des fiches
+  const r0=mktCibles(ids,null,D);                          // lecture seule
+  const pb=mktControleContenu(subjectTpl,bodyHtmlTpl,r0.retenus[0]);
+  if(pb){ toast(pb,'err'); return; }                        // AVANT tout confirm, toute écriture, tout envoi
 
-  // PLANIFICATION (aujourd'hui inclus : le serveur traite date <= aujourd'hui)
-  if(date && date>=todayISO()){
+  // PLANIFICATION : instant précis ; une date/heure passée est refusée, jamais convertie en envoi immédiat
+  if(date){
+    const envoiLe=planifEnvoiLe(date,heure);
+    if(!envoiLe || envoiLe<=new Date(Date.now()+5*60000).toISOString()){
+      toast('Cette date et cette heure sont déjà passées. Choisis plus tard, ou vide la date pour envoyer maintenant.','err'); return; }
+    const quand=fmtPlanif(envoiLe);
     if(!auto){ toast('Planification = nécessite l\'envoi automatique (Réglages)','err'); return; }
-    let cib=ids.map(i=>DB.get('clients',i)).filter(c=>c&&c.email&&!c.desabo);
-    const vus2=new Set(); cib=cib.filter(c=>{ const k=c.email.toLowerCase().trim(); if(vus2.has(k))return false; vus2.add(k); return true; });
-    if(!cib.length){ toast('Aucun destinataire valide','err'); return; }
-    if(!confirm('Planifier l\'envoi à '+cib.length+' contact(s) le '+fmtDateFr(date)+' ?'
-      +(sel.masques?('\n('+sel.masques+' coché(s) masqué(s) par la recherche : NON inclus)'):''))) return;
+    if(!_pullOk||navigator.onLine===false){ toast('Pas de connexion au serveur : impossible de planifier. Ton message reste dans le studio.','err'); return; }
+    const cib=r0.retenus;                                   // même calcul que le compteur de l'en-tête
+    if(!cib.length){ toast('Aucun destinataire valide (désabonnés ou sans email)','err'); return; }
+    if(!desaboPret()){ toast('Planification impossible : lien de désabonnement indisponible (obligatoire). Recharge le CRM une fois connecté au serveur.','err'); return; }
+    if(!confirm(mktTexteConfirm('planif',{n:cib.length,c0:cib[0],r:r0,sel,nDec,quand,subjectTpl,bodyHtmlTpl}))) return;
     _mktEnvoiEnCours=true;
     try{
-      const lignes=await Promise.all(cib.map(async c=>{           // A4 : on attend l'écriture avant d'annoncer
+      const liens=await Promise.all(cib.map(c=>lienDesabo(c.email)));   // calculés APRÈS _mktEnvoiEnCours : pas de double confirmation
+      if(liens.some(l=>!l)){ toast('Planification annulée : lien de désabonnement impossible à calculer. Rien n\'a été enregistré.','err'); return; }
+      const lignes=cib.map((c,i)=>{
         const htmlP=mktVars(bodyHtmlTpl,c);
-        return {id:uid('PLN'),date,to:c.email,subject:mktVars(subjectTpl,c),body:stripHtml(htmlP),
-          html:emailHtmlRich(htmlP,{desabo:await lienDesabo(c.email)}),trackId:uid('MAIL'),
+        return {id:uid('PLN'),date,envoiLe,to:c.email,subject:mktVars(subjectTpl,c),body:stripHtml(htmlP),
+          html:emailHtmlRich(htmlP,{desabo:liens[i]}),trackId:uid('MAIL'),
           idClient:c.id,client:((c.prenom?c.prenom+' ':'')+c.nom).trim(),statut:'prévu',createdAt:new Date().toISOString()};
-      }));
+      });
+      // Garde-fou : deux lignes au même id, et le serveur n'en garderait qu'une (destinataire perdu)
+      const idsP=lignes.map(l=>String(l.id)), tids=lignes.map(l=>String(l.trackId));
+      const dejaLa=new Set(DB.all('planifs').map(p=>String(p.id)));
+      if(new Set(idsP).size!==idsP.length || new Set(tids).size!==tids.length || idsP.some(i=>dejaLa.has(i))){
+        toast('Planification annulée : identifiants en double. Rien n\'a été enregistré ni envoyé, relance la planification.','err');
+        return;                                   // le finally libère _mktEnvoiEnCours et réaffiche
+      }
+      // Les lignes « prévu » gardent le HTML complet jusqu'à l'envoi et arrivent sur tous les appareils.
+      // 1 000 000 caractères = environ 2 Mio dans Safari iPhone (quota d'environ 5 Mio pour tout le CRM).
+      const attente=DB.all('planifs').filter(p=>p.statut==='prévu');
+      const poids=JSON.stringify(attente.concat(lignes)).length;
+      if(poids>1000000){
+        alert('Planification refusée : trop lourde pour le stockage de l\'iPhone ('+(poids/1e6).toFixed(1).replace('.',',')+' M caractères, '
+          +lignes.length+' email(s)'+(attente.length?' + '+attente.length+' déjà prévu(s)':'')+').\n\n'
+          +'Rien n\'a été planifié. Retire les images collées dans le message, ou attends que les envois déjà prévus soient partis.');
+        return;
+      }
       DB._write('planifs',DB.all('planifs').concat(lignes));      // une seule écriture
-      DB.save('campagnes',{id:uid('CMP'),nom:subjectTpl||'Campagne',date:new Date().toISOString(),dateEnvoiPrevue:date,
+      DB.save('campagnes',{id:uid('CMP'),nom:subjectTpl||'Campagne',date:new Date().toISOString(),dateEnvoiPrevue:date,envoiLe,
         segment:segNom(_mktSeg),cibles:lignes.length,envoyes:0,echecs:0,statut:'planifiée',mailIds:lignes.map(l=>l.trackId)});
-      logActivite('Campagne planifiée : '+lignes.length+' email(s) le '+fmtDateFr(date));
-      toast('📅 '+lignes.length+' email(s) planifié(s) le '+fmtDateShort(date),'ok');
+      logActivite('Campagne planifiée : '+lignes.length+' email(s) le '+quand);
+      const parAdr=mktIdsParAdresse(ids); cib.forEach(c=>(parAdr[normEmail(c.email)]||[]).forEach(i=>_mktDecoches.add(i)));
+      _mktDate='';                                              // un 2e clic ne replanifie pas la même campagne
+      mktBrouillonFini();                                       // les lignes sont enregistrées : la copie locale n'a plus lieu d'être
+      // On n'annonce « planifié » que si le serveur renvoie CHAQUE ligne (id + trackId) : le cron ne lit que lui
+      mktProg('Transmission au serveur…');
+      const j=await Promise.race([cloudPushNow('planifs'), new Promise(r=>setTimeout(()=>r(null),PLANIF_ATTENTE_MS))]);
+      mktProg('');
+      const recus=new Set((j&&j.ok&&Array.isArray(j.rows)?j.rows:[]).map(r=>r.id+'|'+r.trackId));
+      if(lignes.every(l=>recus.has(l.id+'|'+l.trackId)))
+        toast('📅 '+lignes.length+' email(s) planifié(s) le '+quand+', reçus par le serveur','ok');
+      else alert('Le serveur n\'a pas encore reçu cette planification.\n\n'
+        +'Cet appareil la garde et la transmettra au retour du réseau, à la réouverture du CRM, ou quand tu toucheras « Transmettre maintenant » dans Planifications.\n\n'
+        +'Ne la refais pas : tes contacts la recevraient deux fois.\n'
+        +'Tant que le serveur ne l\'a pas, rien ne part le '+quand+'.');
     } finally { _mktEnvoiEnCours=false; RENDERERS.marketing(); }
     return;
   }
 
-  // ENVOI IMMÉDIAT
+  // ENVOI IMMÉDIAT : la campagne garde sa liste et son message, chaque email a un identifiant stable
+  // MAIL-<campagne>-<contact> : une coupure se reprend sans doublon (le serveur refuse de renvoyer un identifiant déjà parti).
   if(auto){
-    let cibles=ids.map(i=>DB.get('clients',i)).filter(c=>c&&c.email&&!c.desabo);
-    // A5 : une même adresse ne reçoit qu'une fois (deux fiches peuvent partager un email)
-    const vus=new Set(); let doublons=0;
-    cibles=cibles.filter(c=>{ const k=c.email.toLowerCase().trim(); if(vus.has(k)){ doublons++; return false; } vus.add(k); return true; });
-    const exclus=ids.length-cibles.length-doublons;
-    if(!cibles.length){ toast('Aucun destinataire valide (désabonnés ou sans email)','err'); return; }
-    if(!confirm('Envoyer MAINTENANT à '+cibles.length+' contact(s) ?'
-      +(exclus?('\n· '+exclus+' écarté(s) : désabonné ou sans email'):'')
-      +(doublons?('\n· '+doublons+' doublon(s) d\'adresse écarté(s)'):'')
-      +(sel.masques?('\n· '+sel.masques+' coché(s) mais masqué(s) par la recherche : NON inclus'):'')
-      +'\n\nListe : '+segNom(_mktSeg)+'\nObjet : '+subjectTpl)) return;
-    _mktEnvoiEnCours=true;
-    const btnEnvoi=document.getElementById('mkt-send'); if(btnEnvoi) btnEnvoi.disabled=true;
+    _mktEnvoiEnCours='prep'; mktProg('Vérification des envois déjà faits…');
+    let camp=null, cibles=[];
     try{
-    const camp=DB.save('campagnes',{id:uid('CMP'),nom:subjectTpl||'Campagne',date:new Date().toISOString(),
-      segment:segNom(_mktSeg),cibles:cibles.length,envoyes:0,echecs:0,mailIds:[]});
-    let ok=0,fail=0;
-    for(let i=0;i<cibles.length;i++){ const c=cibles[i];
-      const mailId=uid('MAIL');
-      if(prog) prog.textContent='Envoi '+(i+1)+'/'+cibles.length+' → '+c.email+'…';
-      const htmlP=mktVars(bodyHtmlTpl,c);
-      const desabo=await lienDesabo(c.email);
-      if(!desabo){ fail++; if(prog) prog.textContent=''; 
-        toast('Envoi interrompu : lien de désabonnement indisponible (obligatoire). Vérifie la connexion au serveur.','err'); break; }
-      const j=await cloudPost({action:'sendEmail',to:c.email,subject:mktVars(subjectTpl,c),
-        body:stripHtml(htmlP),html:emailHtmlRich(htmlP,{desabo}),trackId:mailId});
-      if(j&&j.ok){ ok++; camp.mailIds.push(mailId);
-        DB.save('mails',{id:mailId,date:new Date().toISOString(),kind:'campagne',ref:c.id,idCampagne:camp.id,to:c.email,subject:mktVars(subjectTpl,c)});
-      } else fail++;
-    }
-    camp.envoyes=ok; camp.echecs=fail; DB.save('campagnes',camp);
-    if(prog) prog.textContent='';
-    logActivite('Campagne « '+(subjectTpl||'').slice(0,40)+' » : '+ok+' email(s)'+(fail?', '+fail+' échec(s)':''));
-    toast('✅ '+ok+' envoyé(s)'+(fail?' · '+fail+' échec(s)':''),'ok');
-    } finally { _mktEnvoiEnCours=false; const b=document.getElementById('mkt-send'); if(b) b.disabled=false; RENDERERS.marketing(); }
+      const r=await cloudPull();                     // AVANT le calcul des cibles : désabonnements et envois de l'autre appareil
+      if(r!=='pulled'&&r!=='init'){ toast('Serveur injoignable : impossible de vérifier les envois déjà faits. Rien n\'est parti.','err'); return; }
+      if(!desaboPret()){ toast('Envoi impossible : lien de désabonnement indisponible (obligatoire). Recharge le CRM une fois connecté au serveur.','err'); return; }
+      // A5 : une adresse ne reçoit qu'une fois ; même calcul que le compteur de l'en-tête (relu après la synchro)
+      const cb=mktCibles(ids); cibles=cb.retenus;
+      const deja=mktDejaRecu(subjectTpl), avant=cibles.length;
+      cibles=cibles.filter(c=>!deja.has(c.email.toLowerCase().trim()));
+      const nDeja=avant-cibles.length, dDeja=nDeja?fmtDateShort([...deja.values()].sort().pop()):'';
+      if(!cibles.length){ toast(nDeja?('Ces contacts ont déjà reçu cet objet le '+dDeja+'. Pour finir une campagne coupée, utilise « Reprendre ».'):'Aucun destinataire valide (désabonnés ou sans email)','err'); return; }
+      if(!confirm(mktTexteConfirm('maintenant',{n:cibles.length,c0:cibles[0],r:cb,sel,nDec,nDeja,dDeja,subjectTpl,bodyHtmlTpl}))) return;
+      camp=DB.save('campagnes',{id:uid('CMP'),nom:subjectTpl||'Campagne',date:new Date().toISOString(),mode:'immediat',
+        segment:segNom(_mktSeg),cibles:cibles.length,idsCibles:cibles.map(c=>c.id),subjectTpl,bodyHtmlTpl,
+        statut:'en cours',envoyes:0,echecs:0,mailIds:[]});
+      const jc=await cloudPushEntity('campagnes');   // la campagne doit exister sur le serveur avant le 1er email
+      if(!(jc&&jc.ok&&Array.isArray(jc.rows)&&jc.rows.some(x=>x.id===camp.id))){
+        DB.remove('campagnes',camp.id); toast('Serveur injoignable : rien n\'est parti. Réessaie quand la connexion revient.','err'); return; }
+      _mktEnvoiEnCours=camp.id;
+    } catch(err){ console.error(err); toast('Erreur avant l\'envoi : rien n\'est parti ('+((err&&err.message)||err)+')','err'); return; }
+    finally { if(_mktEnvoiEnCours==='prep'){ _mktEnvoiEnCours=false; mktProg(''); } }
+    const parAdr=mktIdsParAdresse(ids);
+    await mktBoucleEnvoi(camp,cibles,c=>(parAdr[normEmail(c.email)]||[]).forEach(i=>_mktDecoches.add(i)));
+    const bl=_mktBilan;                                         // la copie locale ne part qu'après un envoi complet
+    if(bl&&bl.campId===camp.id&&!bl.reste&&!bl.arret&&!bl.echecs.length&&!bl.nonTentes.length) mktBrouillonFini();
   } else {
-    const emails=ids.map(id=>(DB.get('clients',id)||{}).email).filter(Boolean).join(',');
-    window.open('mailto:?bcc='+encodeURIComponent(emails)+'&subject='+encodeURIComponent(subjectTpl.replace(/\s*{prenom}\s*/g,' ').replace(/\s*{nom}\s*/g,' ').trim())+'&body='+encodeURIComponent(stripHtml(bodyHtmlTpl).replace(/Bonjour\s*{prenom}\s*,?/gi,'Bonjour,').replace(/\s*{prenom}\s*/g,' ').replace(/\s*{nom}\s*/g,' ')),'_blank');
-    toast('Messagerie ouverte ('+ids.length+' contacts en Cci)','ok');
+    const cbM=r0;
+    if(!cbM.retenus.length){ toast('Aucun destinataire valide (désabonnés ou sans email)','err'); return; }
+    const emails=cbM.retenus.map(c=>String(c.email).trim());
+    // En Cci, un lien signé par destinataire est impossible : la phrase STOP sert de moyen d'opposition
+    window.open('mailto:?bcc='+encodeURIComponent(emails.join(','))+'&subject='+encodeURIComponent(subjectTpl.replace(/\s*{prenom}\s*/g,' ').replace(/\s*{nom}\s*/g,' ').trim())+'&body='+encodeURIComponent(stripHtml(bodyHtmlTpl).replace(/Bonjour\s*{prenom}\s*,?/gi,'Bonjour,').replace(/\s*{prenom}\s*/g,' ').replace(/\s*{nom}\s*/g,' ')+LIGNE_STOP_TXT),'_blank');
+    toast('Messagerie ouverte ('+cbM.retenus.length+' adresse(s) en Cci'+(cbM.doublons?', '+cbM.doublons+' doublon(s) retiré(s)':'')+')','ok');
   }
 }
-function annulerPlanif(id){ mktCaptureDraft(); DB.remove('planifs',id); RENDERERS.marketing(); toast('Planification annulée','ok'); }
+/* Annulation d'envois planifiés : le SERVEUR décide, sous le verrou que le cron utilise aussi.
+   Rien n'est supprimé ni écrit en local avant sa réponse : une annulation qui n'a pas atteint
+   le serveur n'arrête pas le cron, on ne l'affiche donc pas comme faite. */
+let _annulPlanifEnCours=false;
+async function annulerPlanifs(ids, quoi){
+  if(_annulPlanifEnCours){ toast('Annulation déjà en cours…','err'); return; }
+  mktCaptureDraft();
+  const set=new Set(ids.map(String));
+  const prevus=DB.all('planifs').filter(p=>set.has(String(p.id))&&p.statut==='prévu');
+  if(!prevus.length){ toast('Plus aucun envoi prévu à annuler','err'); return; }
+  if(!cloudUrl()||!_pullOk){ toast('Connexion au serveur requise pour annuler : rien n\'a été annulé.','err'); return; }
+  /* Des planifications encore en file n'existent pas côté serveur : les annuler là-bas ne trouverait rien,
+     et le prochain envoi de la file les créerait en « prévu ». On les transmet d'abord, sinon on s'arrête. */
+  if(pendAll().includes('planifs')||_planifies.has('planifs')){
+    _annulPlanifEnCours=true; let jp=null;
+    try{ jp=await cloudPushNow('planifs'); } finally { _annulPlanifEnCours=false; }
+    if(!(jp&&jp.ok)){ toast('Le serveur n\'a pas encore reçu ces planifications : rien n\'a été annulé. Touche « Transmettre maintenant », puis annule.','err'); RENDERERS.marketing(); return; }
+  }
+  const dates=[...new Set(prevus.map(p=>fmtPlanif(planifInstant(p))))].join(', ');
+  if(!confirm((prevus.length>1?('Annuler les '+prevus.length+' envois prévus'):('Annuler l\'envoi prévu à '+prevus[0].to))
+    +' le '+dates+(quoi?(' ('+quoi+')'):'')+' ?\n\nLes emails déjà partis restent dans l\'historique.')) return;
+  _annulPlanifEnCours=true;
+  try{
+    const j=await cloudPost({action:'annulerPlanifs',ids:prevus.map(p=>p.id)});
+    if(!j||!j.ok||!Array.isArray(j.rows)){
+      toast('Pas de réponse du serveur : annulation NON confirmée. Réessaie, sans risque de doublon.','err'); return; }
+    DB._writeLocal('planifs', fusionRows(DB.all('planifs'), j.rows, delsAll().planifs, 'planifs'));
+    const c=j.compte||{}, t=[(c.annules||0)+' annulé(s)'];
+    if(c.dejaPartis) t.push(c.dejaPartis+' déjà parti(s)');
+    if(c.enCours) t.push(c.enCours+' en cours d\'envoi, non annulable(s)');
+    if(c.incertains) t.push(c.incertains+' à vérifier');
+    if(c.echecs) t.push(c.echecs+' en échec');
+    if(c.dejaAnnules) t.push(c.dejaAnnules+' déjà annulé(s)');
+    if(c.introuvables) t.push(c.introuvables+' pas encore reçu(s) par le serveur, NON annulé(s)');
+    if(c.annules) logActivite('Envois planifiés annulés : '+c.annules+(c.dejaPartis?(' ('+c.dejaPartis+' déjà partis)'):''));
+    toast(t.join(' · '), (c.dejaPartis||c.enCours||c.introuvables)?'err':'ok');
+  } finally { _annulPlanifEnCours=false; RENDERERS.marketing(); }
+}
+function annulerPlanif(id){ return annulerPlanifs([id]); }
+/* Lots : une campagne = ses lignes (campagnes.mailIds ↔ planifs.trackId) ; sinon, par date prévue.
+   Calcul à l'affichage, aucune écriture. */
+function lotsPlanifs(){
+  const parTrack=new Map(); DB.all('campagnes').forEach(c=>(c.mailIds||[]).forEach(t=>parTrack.set(t,c)));
+  const lots=new Map();
+  DB.all('planifs').forEach(p=>{ const c=parTrack.get(p.trackId); const cle=c?('c:'+c.id):('d:'+(p.date||''));
+    if(!lots.has(cle)) lots.set(cle,{cle,camp:c||null,date:p.date,envoiLe:planifInstant(p),lignes:[]}); lots.get(cle).lignes.push(p); });
+  return [...lots.values()];
+}
+function annulerLotPlanifs(cle){ const l=lotsPlanifs().find(x=>x.cle===cle); if(!l) return;
+  annulerPlanifs(l.lignes.map(p=>p.id), l.camp?('« '+(l.camp.nom||'Campagne')+' »'):''); }
+/* Remise en file des échecs : le serveur décide (compare-and-set), rien n'est écrit en local avant sa réponse */
+let _requeueEnCours=false;
+async function remettreEnFile(){
+  if(_requeueEnCours) return;
+  if(!cloudUrl()||!_pullOk){ toast('Connexion au serveur requise pour remettre des emails en file','err'); return; }
+  const lignes=DB.all('planifs').filter(planifRelancable);
+  if(!lignes.length){ toast('Aucun échec à remettre en file','err'); return; }
+  const apercu=lignes.slice(0,8).map(p=>'· '+p.to+' : '+String(p.info||'échec').slice(0,70)).join('\n');
+  if(!confirm('Remettre '+lignes.length+' email(s) en file ?\n\n'+apercu+(lignes.length>8?'\n… et '+(lignes.length-8)+' autre(s)':'')
+    +'\n\nIls partiront au prochain passage du serveur (tâche planifiée), une seule fois chacun.')) return;
+  _requeueEnCours=true; mktCaptureDraft();
+  try{
+    const j=await cloudPost({action:'requeuePlanifs',ids:lignes.map(p=>p.id)});
+    if(!(j&&j.ok)){ toast('Serveur injoignable : rien n\'a été remis en file','err'); return; }
+    if(Array.isArray(j.rows)&&j.rows.length) DB._writeLocal('planifs', fusionRows(DB.all('planifs'), j.rows, delsAll().planifs, 'planifs'));
+    const autres=lignes.length-(j.remis||0);
+    toast((j.remis||0)+' email(s) remis en file'+(autres?' · '+autres+' déjà traité(s) sur un autre appareil':''),'ok');
+  } finally { _requeueEnCours=false; RENDERERS.marketing(); }
+}
 
 /* ═══════════ VUE : RÉGLAGES & CATALOGUE ═══════════ */
 RENDERERS.reglages=function(){
@@ -3952,6 +4705,7 @@ RENDERERS.reglages=function(){
         <button class="btn btn-or" onclick="saveBackend()">💾 Enregistrer & synchroniser</button>
         <button class="btn btn-ghost" onclick="cloudPushAll()">⬆ Tout envoyer vers Google</button>
         <button class="btn btn-ghost" onclick="cloudSyncNow()">🔄 Récupérer depuis Google</button>
+        <button class="btn btn-ghost" onclick="voirJournalEnvois()">📜 Emails partis du serveur</button>
       </div>
     </div>
 
@@ -3974,7 +4728,7 @@ function addCat(){ const n=DB.all('catalogue').length+1; DB.save('catalogue',{id
 function delCat(id){ DB.remove('catalogue',id); RENDERERS.reglages(); toast('Supprimé','ok'); }
 /* ── Formulaire du site → Demandes du CRM ── */
 function genererCleFormulaire(regen){
-  if(regen&&!confirm('Régénérer la clé ?\n\nL\'ancienne cessera de fonctionner : il faudra remettre le nouveau code sur le site.')) return;
+  if(regen&&!confirm('Régénérer la clé ?\n\nL\'ancienne cessera de fonctionner : il faudra remettre le nouveau code sur le site.\nLes liens de désabonnement de tes emails ne sont pas concernés.')) return;
   const cfg=DB.config(); cfg.formKey=genToken()+genToken().slice(0,8);
   if(!cfg.formOrigins) cfg.formOrigins='https://louismagie.fr,https://www.louismagie.fr';
   DB.saveConfig(cfg);
@@ -4219,6 +4973,7 @@ function rendreHistorique(filtre){
 }
 async function restaurerVersion(i){
   const x=_histo[i]; if(!x) return;
+  if(x.entity==='planifs'){ toast('Un envoi planifié ne se restaure pas : replanifie-le depuis le Studio.','err'); return; }
   const actuelle=DB.get(x.entity,x.id);
   if(!confirm((actuelle?'Remplacer la version actuelle de « ':'Restaurer « ')+(x.libelle||x.id)+' » par celle du '+new Date(x.at).toLocaleString('fr-FR')+' ?'+(actuelle?'\n\nLa version actuelle ne sera pas perdue : elle part à son tour dans l\'historique.':''))) return;
   const j=await cloudPost({action:'historiqueEntree',at:x.at,entity:x.entity,id:x.id});
@@ -4240,7 +4995,7 @@ let _volants=0; const _planifies=new Set();
 /* Tant que la première récupération de la session n'a pas réussi, on n'envoie
    RIEN : les modifications restent en file (et sur l'appareil). Le serveur ne
    fusionne ainsi qu'avec un appareil qui a vu son état le plus récent. */
-let _pullOk=false, _cfgEnAttente=false;
+let _pullOk=false, _cfgEnAttente=false, _desaboKey='';   // _desaboKey : secret des liens de désabonnement, reçu du serveur au pull
 function derniereSynchro(){ try{ return localStorage.getItem('lm_lastSync')||''; }catch(_){ return ''; } }
 function setCloudStatus(s){
   const el=document.getElementById('cloud-dot'); if(!el)return;
@@ -4270,7 +5025,8 @@ function pendAll(){ try{ return JSON.parse(localStorage.getItem(LS_PEND))||[]; }
 function pendSet(a){ try{ localStorage.setItem(LS_PEND, JSON.stringify([...new Set(a)])); }catch(_){} }
 function pendAdd(e){ const a=pendAll(); if(a.indexOf(e)<0){ a.push(e); pendSet(a); } majPendState(); }
 function pendDel(e){ pendSet(pendAll().filter(x=>x!==e)); majPendState(); }
-function majPendState(){ peindrePastille(); }
+function majPendState(){ peindrePastille();
+  const b=document.getElementById('planif-attente'); if(b) b.style.display=planifsEnAttente()?'':'none'; }
 /* Rejoue tout ce qui n'a pas pu partir (retour du réseau, retour sur l'app) */
 function cloudFlushPending(){ if(!cloudUrl()) return Promise.resolve();
   if(!_pullOk) return cloudAuth()?cloudPull():Promise.resolve();   // récupérer d'abord ; le pull renvoie ensuite la file
@@ -4279,6 +5035,10 @@ function cloudFlushPending(){ if(!cloudUrl()) return Promise.resolve();
   return Promise.all(a.map(e=>cloudPushEntity(e))); }
 window.addEventListener('online',()=>{ cloudFlushPending(); });
 
+/* Envoi sans le délai de 1,5 s, quand l'écran doit annoncer ce que le serveur a reçu */
+function cloudPushNow(entity){ clearTimeout(_cloudTimers[entity]); _planifies.delete(entity); return cloudPushEntity(entity); }
+/* Des planifications attendent-elles encore d'être transmises ? (rien d'écrit : calculé depuis la file) */
+function planifsEnAttente(){ return pendAll().includes('planifs') && !_planifies.has('planifs'); }
 function cloudQueueEntity(entity){ if(!cloudUrl())return;
   if(!_pullOk){ pendAdd(entity); return; }     // mémorisé, envoyé juste après la récupération
   _planifies.add(entity);                      // avant pendAdd : la pastille pulse au lieu de passer à l'orange
@@ -4294,7 +5054,7 @@ function cloudPushEntity(entity){
     .then(j=>{ if(j&&j.ok){
         pendDel(entity);
         if(Array.isArray(j.rows)){
-          let m=fusionRows(DB.all(entity), j.rows, delsAll()[entity]);
+          let m=fusionRows(DB.all(entity), j.rows, delsAll()[entity], entity);
           if(entity==='activite') m=capActivite(m);
           DB._writeLocal(entity,m);
         }
@@ -4311,7 +5071,7 @@ function cloudPost(payload){ const url=cloudUrl(); if(!url) return Promise.resol
   setCloudStatus('sync'); payload.token=DB.config().backendToken||''; if(!payload.auth) payload.auth=cloudAuth();
   return fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload)})
     .then(r=>r.json()).then(j=>{ setCloudStatus(j&&j.ok?'ok':'err'); return j; })
-    .catch(()=>{ setCloudStatus('err'); return {ok:false}; }); }
+    .catch(()=>{ setCloudStatus('err'); return {ok:false, reseau:true}; }); }   // reseau : réponse perdue, l'action a pu aboutir
 function cloudPushAll(){ if(!cloudUrl())return; ENTITIES.forEach(e=>cloudPushEntity(e));
   cloudPost({action:'putConfig',config:DB.config()}); toast('Envoi de toutes les données vers le serveur…','ok'); }
 async function cloudPull(){ const url=cloudUrl(); if(!url){ setCloudStatus('off'); return 'off'; }
@@ -4325,12 +5085,14 @@ async function cloudPull(){ const url=cloudUrl(); if(!url){ setCloudStatus('off'
       setCloudStatus('err'); toast('⚠️ Serveur vide alors qu\'il ne devrait pas l\'être — synchro suspendue pour protéger tes données. Vérifie le stockage du serveur.','err'); return 'empty-guard';
     }
     _pullOk=true;                                   // état serveur connu : les envois sont désormais sûrs
+    _desaboKey=String((j.config||{}).desaboKey||'');   // seule source de la clé de signature des liens de désabonnement
     // Fusion par enregistrement : on n'écrase JAMAIS le local en bloc.
     const dels=delsFusion(delsAll(), j.dels||{}); delsSave(dels);
     const aRepublier=[];
-    ENTITIES.forEach(e=>{
+    // planifs d'abord : sur un appareil saturé, c'est la table que le serveur a allégée ; la remplacer libère la place pour les autres
+    ['planifs'].concat(ENTITIES.filter(e=>e!=='planifs')).forEach(e=>{
       const dist=j.data[e]; if(!Array.isArray(dist)) return;
-      let m=fusionRows(DB.all(e), dist, dels[e]);
+      let m=fusionRows(DB.all(e), dist, dels[e], e);
       if(e==='activite') m=capActivite(m);
       DB._writeLocal(e,m);                               // local seul : le re-push est décidé juste après
       if(rowsDiffer(dist,m)) aRepublier.push(e);         // le serveur ignore des lignes d'ici → on les lui rend
@@ -4348,6 +5110,7 @@ async function cloudPull(){ const url=cloudUrl(); if(!url){ setCloudStatus('off'
     const cfgL=DB.config(), cfgS=j.config||{};
     if(cfgL.logoOnDark && cfgS.logoOnDark!==cfgL.logoOnDark) cloudQueueConfig();
     try{ if(Array.isArray(j.opens)) localStorage.setItem('lm_opens', JSON.stringify(j.opens.map(o=>o.m))); }catch(_){}
+    try{ if(j.desabos&&typeof j.desabos==='object') localStorage.setItem(LS_DESABOS, JSON.stringify(Array.isArray(j.desabos)?{}:j.desabos)); }catch(_){}   // registre des oppositions (lecture seule)
     setCloudStatus('ok'); return 'pulled';
   }catch(_){ setCloudStatus('err'); return 'err'; } }
 function archivePdfCloud(doc,kind,filename,year){ if(!cloudUrl())return;
@@ -4361,6 +5124,19 @@ async function saveBackend(){            // sauve les réglages + POUSSE vers le
     toast(j&&j.ok?'Réglages enregistrés & synchronisés':'Enregistré en local (serveur injoignable)', j&&j.ok?'ok':'err'); }
   else toast('Réglages enregistrés','ok');
   if(_currentView==='reglages') RENDERERS.reglages();
+}
+/* Ce qui est réellement parti du serveur (registre _envois.json, lecture seule) */
+async function voirJournalEnvois(){
+  const j=await cloudPost({action:'journalEnvois'});
+  if(!j||!j.ok){ toast('Journal indisponible : '+((j&&j.error)||'serveur injoignable'),'err'); return; }
+  const lib={'envoyé':'Parti','échec':'Refusé','incertain':'Incertain'};
+  const f=d=>new Date(d).toLocaleString('fr-FR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+  const rows=(j.entrees||[]).map(e=>'<tr><td>'+esc(f(e.at))+'</td><td>'+esc(e.to)+'</td><td>'+esc(e.sujet)+'</td><td>'+esc(lib[e.statut]||e.statut)+'</td><td class="td-dim">'+esc(e.origine)+'</td></tr>').join('');
+  openModal('Ce qui est réellement parti du serveur',
+    '<div class="td-dim" style="margin-bottom:10px">'+(j.jour||0)+' email(s) sur les dernières 24 h'+(j.plafond?' · plafond '+j.plafond:'')+'. Les 50 derniers :</div>'
+    +'<div class="table-wrap"><table><thead><tr><th>Date</th><th>Destinataire</th><th>Objet</th><th>Statut</th><th>Origine</th></tr></thead><tbody>'
+    +(rows||'<tr><td colspan="5" class="td-dim">Aucun envoi enregistré depuis la mise à jour.</td></tr>')+'</tbody></table></div>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Fermer</button>');
 }
 async function cloudSyncNow(){
   await cloudFlushPending();
@@ -4723,14 +5499,24 @@ async function cloudReprise(){
   if(Date.now()-_dernierPull < 60000) return;
   _dernierPull=Date.now();
   const r=await cloudPull();
-  if(r==='pulled'&&typeof RENDERERS[_currentView]==='function'){ RENDERERS[_currentView](currentParams); updateBadges(); }
+  if(r==='pulled'&&typeof RENDERERS[_currentView]==='function'){ if(!mktEnSaisie()) RENDERERS[_currentView](currentParams); updateBadges(); }
   if(r==='pulled') verifierCoherence();
 }
 document.addEventListener('visibilitychange',()=>{
-  if(document.visibilityState==='hidden') briefSortie();
-  else cloudReprise();
+  if(document.visibilityState==='hidden'){ _mktCacheDepuis=Date.now(); briefSortie(); }
+  else {
+    if(mktBoucleActive()){
+      // gel seulement si la page est restée cachée plus d'une minute SANS qu'aucun email n'avance (iPhone verrouillé)
+      if(_mktCacheDepuis&&Date.now()-_mktCacheDepuis>60000&&Date.now()-_mktDerniereIter>60000) _mktGele=true;
+      mktWakeOn();                                   // iOS relâche le wakeLock dès que la page est cachée
+    }
+    _mktCacheDepuis=0; cloudReprise();
+  }
 });
+window.addEventListener('beforeunload',e=>{ if(mktBoucleActive()){ e.preventDefault(); e.returnValue=''; return ''; } });
 window.addEventListener('pagehide',briefSortie);
+document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='hidden') mktBrouillonEcrire(); });
+window.addEventListener('pagehide',()=>mktBrouillonEcrire());
 window.addEventListener('beforeunload',briefSortie);
 
 function briefLangue(pid,lang){

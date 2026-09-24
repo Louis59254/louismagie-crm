@@ -1,4 +1,7 @@
 <?php
+// Un avertissement PHP ne doit jamais se glisser devant le JSON : le CRM croirait la réponse perdue.
+// Les erreurs restent lisibles dans les logs du conteneur (Coolify).
+ini_set('display_errors','0'); ini_set('log_errors','1');
 /****************************************************************
  * CRM LouisMagie — Backend PHP (stockage fichiers, SANS base de données)
  * API JSON pour synchroniser le CRM + archiver les PDF.
@@ -35,43 +38,74 @@ $ENTITIES = ['demandes','devis','prestations','factures','clients','relances',
 function out($o){ echo json_encode($o, JSON_UNESCAPED_UNICODE); exit; }
 
 /* Envoi email via SMTP Gmail (mot de passe d'application). 0 dépendance. */
-function smtpSend($to,$subject,$bodyText,$attachName='',$attachB64='',$trackUrl='',$htmlIn=''){
+function smtpSend($to,$subject,$bodyText,$attachName='',$attachB64='',$trackUrl='',$htmlIn='',$opts=[]){
   // SMTP générique : Infomaniak, Gmail, etc. (compat anciennes variables GMAIL_*)
   $host=getenv('SMTP_HOST') ?: 'smtp.gmail.com';
   $port=getenv('SMTP_PORT') ?: '587';
   $user=getenv('SMTP_USER') ?: getenv('GMAIL_USER');
   $pass=getenv('SMTP_PASS') ?: getenv('GMAIL_APP_PASSWORD');
   $from=getenv('SMTP_FROM') ?: (getenv('GMAIL_FROM') ?: $user);
-  if(!$user||!$pass) return [false,'SMTP non configuré (SMTP_USER / SMTP_PASS)'];
-  if(!$to) return [false,'destinataire vide'];
+  if(!$user||!$pass) return [false,'SMTP non configuré (SMTP_USER / SMTP_PASS)','config'];
+  if(!$to) return [false,'destinataire vide','adresse'];
   // Anti-injection d'en-têtes SMTP : rejette tout CRLF dans les adresses / nom de pièce jointe, valide le destinataire
   $to=trim($to); $from=trim($from);
-  if(preg_match('/[\r\n]/', $to.$from.$attachName)) return [false,'adresse ou pièce jointe invalide'];
-  if(!filter_var($to, FILTER_VALIDATE_EMAIL)) return [false,'destinataire invalide'];
+  if(preg_match('/[\r\n]/', $to.$from.$attachName)) return [false,'adresse ou pièce jointe invalide','refus'];
+  if(!filter_var($to, FILTER_VALIDATE_EMAIL)) return [false,'destinataire invalide','adresse'];
   // Infomaniak : force SSL implicite sur 465 (leur 587 STARTTLS rejette nos requêtes anti-pipelining)
   if(strpos($host,'infomaniak')!==false){ $port='465'; }
   $secure = ($port=='465') || (getenv('SMTP_SECURE')==='ssl');   // SSL implicite (évite l'anti-pipelining STARTTLS)
   $ctx=stream_context_create(['ssl'=>['verify_peer'=>false,'verify_peer_name'=>false]]);
   $proto=$secure?'ssl':'tcp';
   $fp=@stream_socket_client("$proto://$host:$port",$en,$es,15,STREAM_CLIENT_CONNECT,$ctx);
-  if(!$fp) return [false,"connexion SMTP impossible ($host:$port): $es"];
+  if(!$fp) return [false,"connexion SMTP impossible ($host:$port): $es",'connexion'];
   stream_set_timeout($fp,20); stream_set_blocking($fp,true);
   $helo = (getenv('SMTP_FROM') && strpos(getenv('SMTP_FROM'),'@')) ? substr(strrchr(getenv('SMTP_FROM'),'@'),1) : 'louismagie.fr';
   // lit une réponse SMTP complète : lignes entières (jusqu'au \n), s'arrête sur la dernière ligne « code<espace> »
-  $read=function() use($fp){ $d=''; while(($l=fgets($fp,8192))!==false){ $d.=$l; if(substr($l,-1)==="\n" && strlen($l)>=4 && $l[3]===' ') break; } return $d; };
-  $cmd=function($c) use($fp,$read){ fwrite($fp,$c."\r\n"); return $read(); };
-  $read();
-  $cmd("EHLO $helo");
+  $read=function() use($fp){ $d=''; while(($l=@fgets($fp,8192))!==false){ $d.=$l; if(substr($l,-1)==="\n" && strlen($l)>=4 && $l[3]===' ') break; } return $d; };
+  // Chaque réponse est lue et son code vérifié : un refus arrête l'échange AVANT l'envoi du corps.
+  // Retour : [ok, info, type] ; type = ok | config | connexion | auth | expediteur | adresse | refus | temp | incertain
+  $cmd=function($c) use($fp,$read){ if(@fwrite($fp,$c."\r\n")===false) return ''; return $read(); };
+  $code=function($r){ return preg_match('/^\s*(\d{3})/',(string)$r,$m) ? (int)$m[1] : 0; };
+  $lu=function($r){ $r=trim(preg_replace('/\s+/',' ',(string)$r)); return $r!=='' ? substr($r,0,300) : 'pas de réponse'; };
+  $fin=function($info,$type,$quit=true) use($fp,$cmd){ if($quit) $cmd('QUIT'); @fclose($fp); return [false,$info,$type]; };
+  $r=$read();            if($code($r)!==220) return $fin('serveur SMTP indisponible : '.$lu($r),'connexion');
+  $r=$cmd("EHLO $helo"); if($code($r)!==250) return $fin('EHLO refusé : '.$lu($r),'connexion');
   if(!$secure){
-    $cmd("STARTTLS");
-    if(!stream_socket_enable_crypto($fp,true,STREAM_CRYPTO_METHOD_TLS_CLIENT)) return [false,'TLS échec'];
-    $cmd("EHLO $helo");
+    $r=$cmd("STARTTLS"); if($code($r)!==220) return $fin('STARTTLS refusé : '.$lu($r),'connexion');
+    if(!@stream_socket_enable_crypto($fp,true,STREAM_CRYPTO_METHOD_TLS_CLIENT)) return $fin('TLS échec','connexion',false);
+    $r=$cmd("EHLO $helo"); if($code($r)!==250) return $fin('EHLO refusé : '.$lu($r),'connexion');
   }
-  $cmd("AUTH LOGIN"); $cmd(base64_encode($user));
-  $r=$cmd(base64_encode($pass));
-  if(strpos($r,'235')===false){ fclose($fp); return [false,'authentification SMTP refusée : '.trim($r)]; }
-  $cmd("MAIL FROM:<$from>"); $cmd("RCPT TO:<$to>"); $cmd("DATA");
-  $h="From: $from\r\nReply-To: $from\r\nTo: $to\r\nSubject: =?UTF-8?B?".base64_encode($subject)."?=\r\nMIME-Version: 1.0\r\n";
+  $r=$cmd("AUTH LOGIN");
+  if($code($r)===334) $r=$cmd(base64_encode($user));
+  if($code($r)===334) $r=$cmd(base64_encode($pass));
+  if($code($r)!==235) return $fin('authentification SMTP refusée : '.$lu($r),'auth');
+  $r=$cmd("MAIL FROM:<$from>"); if($code($r)!==250) return $fin('expéditeur refusé : '.$lu($r),'expediteur');
+  $r=$cmd("RCPT TO:<$to>"); $c=$code($r);
+  if($c!==250 && $c!==251){
+    $t = $c>=500 ? (preg_match('/\b5\.1\.\d{1,3}\b/',$r) ? 'adresse' : 'refus') : 'temp';
+    return $fin(($t==='adresse'?'adresse refusée : ':'destinataire refusé : ').$lu($r), $t);
+  }
+  $r=$cmd("DATA"); $c=$code($r);
+  if($c!==354) return $fin('DATA refusé : '.$lu($r), $c>=500?'refus':'temp');
+  // En-têtes : Date et Message-ID (RFC 5322), nom d'expéditeur, objet plié (RFC 2047),
+  // List-Unsubscribe One-Click (RFC 8058) pour les seuls emails d'actualité.
+  // Ce bloc reste AVANT $html et $bP : ils lisent $bodyText.
+  $dom = strtolower((string)substr((string)strrchr($from,'@'),1)); if (!preg_match('/^[a-z0-9.-]+$/',$dom)) $dom = $helo;
+  $cleMid = (string)($opts['mid'] ?? '');
+  // Message-ID stable par (trackId, destinataire) : si une planif repart après un plantage, la boîte écarte le doublon
+  $mid = preg_match('/^[A-Za-z0-9_-]{1,64}$/',$cleMid) ? $cleMid.'.'.substr(hash('sha256',strtolower($to)),0,10) : bin2hex(random_bytes(12));
+  $nomExp = enteteMime(getenv('SMTP_FROM_NAME') ?: 'Louis · LouisMagie');
+  if ($nomExp !== '' && strpos($nomExp,'=?') !== 0) $nomExp = '"'.addcslashes($nomExp,'"\\').'"';   // nom ASCII : entre guillemets
+  $h = "Date: ".date('r')."\r\nMessage-ID: <$mid@$dom>\r\n"
+     ."From: ".($nomExp !== '' ? "$nomExp <$from>" : $from)."\r\nReply-To: $from\r\nTo: $to\r\n"
+     ."Subject: ".enteteMime($subject)."\r\n";
+  $lienDesabo = (string)($opts['listUnsub'] ?? '');
+  if ($lienDesabo !== '' && preg_match('#^https://[^\s<>"]+$#', $lienDesabo)) {
+    $h .= "List-Unsubscribe: <$lienDesabo>\r\nList-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n";
+    if (strpos($bodyText, 'action=desabo') === false)            // pas de doublon si le CRM a déjà mis le lien dans le texte
+      $bodyText = rtrim($bodyText)."\n\n-- \nNe plus recevoir mes actualités : $lienDesabo\n";
+  }
+  $h .= "MIME-Version: 1.0\r\n";
   // HTML : template fourni par le CRM si présent, sinon repli simple ; pixel de suivi ajouté si tracking
   $html = $htmlIn ?: ($trackUrl ? '<div style="white-space:pre-wrap;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222">'.htmlspecialchars($bodyText).'</div>' : '');
   if ($html && $trackUrl) $html .= "<img src=\"$trackUrl\" width=\"1\" height=\"1\" alt=\"\" style=\"display:none\">";
@@ -92,8 +126,15 @@ function smtpSend($to,$subject,$bodyText,$attachName='',$attachB64='',$trackUrl=
   } else {
     $m=$h."Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n".chunk_split(base64_encode($bodyText));
   }
-  fputs($fp,$m."\r\n.\r\n"); $r=$read(); $cmd("QUIT"); fclose($fp);
-  return [strpos($r,'250')!==false, strpos($r,'250')!==false?'envoyé':('refus: '.trim($r))];
+  // Le corps part : à partir d'ici, le serveur a pu accepter le message.
+  stream_set_timeout($fp,60);   // la RFC 5321 prévoit une attente longue après le point final
+  if(@fwrite($fp,$m."\r\n.\r\n")===false) return $fin("coupure pendant l'envoi : l'email est peut-être parti",'incertain',false);
+  $r=$read(); $c=$code($r);
+  if($c===250){ $cmd('QUIT'); @fclose($fp); return [true,'envoyé','ok']; }
+  if($c>=400 && $c<500) return $fin('refus temporaire : '.$lu($r),'temp');
+  if($c>=500 && $c<600) return $fin('refusé : '.$lu($r),'refus');
+  @fclose($fp);
+  return [false,"pas de confirmation du serveur après l'envoi : l'email est peut-être parti",'incertain'];
 }
 /* Diagnostic SMTP : renvoie la transcription complète du dialogue (pour debug) */
 function smtpDiag($to){
@@ -118,7 +159,7 @@ function smtpDiag($to){
   $r=$cmd(base64_encode($pass),'<base64 pass>');
   if(strpos($r,'235')===false){ fclose($fp); return ['ok'=>false,'steps'=>$T,'info'=>'auth refusée']; }
   $cmd("MAIL FROM:<$from>"); $cmd("RCPT TO:<$to>"); $cmd("DATA");
-  fwrite($fp,"From: $from\r\nTo: $to\r\nSubject: Test SMTP CRM\r\n\r\nTest diagnostic.\r\n.\r\n"); $T[]='C: <corps>'; $T[]='S: '.$read();
+  fwrite($fp,"Date: ".date('r')."\r\nMessage-ID: <".bin2hex(random_bytes(12))."@$helo>\r\nFrom: $from\r\nTo: $to\r\nSubject: Test SMTP CRM\r\n\r\nTest diagnostic.\r\n.\r\n"); $T[]='C: <corps>'; $T[]='S: '.$read();
   $cmd("QUIT"); fclose($fp);
   return ['ok'=>true,'steps'=>$T,'info'=>'ok'];
 }
@@ -129,6 +170,17 @@ function readJson($path){ if(!is_file($path)) return null; $c=file_get_contents(
    applique un journal de suppressions partagé. */
 function nowTs(){ return gmdate('Y-m-d\\TH:i:s.000\\Z'); }   // même format que le new Date().toISOString() du navigateur
 function rowTs($r){ return (string)($r['updatedAt'] ?? ''); }   // `date` est une date métier, pas une date de modification
+/* Instant d'envoi d'une planif (UTC, format nowTs). Ancienne ligne sans envoiLe : 07:00 UTC le jour dit
+   (9 h l'été, 8 h l'hiver à Paris). Ligne sans date lisible : jamais (au lieu de partir tout de suite). */
+function planifInstant($p){
+  $e = (string)($p['envoiLe'] ?? '');
+  if (preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/', $e)) return $e;
+  $d = (string)($p['date'] ?? '');
+  return preg_match('/^\d{4}-\d{2}-\d{2}$/', $d) ? $d.'T07:00:00.000Z' : '9999-12-31T00:00:00.000Z';
+}
+/* Planifs : la trace d'un envoi réel (ou tenté) ne s'efface pas, et une ligne traitée
+   ne redevient jamais « prévu » par la synchro (seul le serveur change ce statut). */
+function planifTraitee($r){ return in_array((string)($r['statut'] ?? ''), ['envoi','envoyé','échec','incertain'], true); }
 function mergeRows($existantes, $entrantes, $dels, $entity){
   $map = [];
   foreach ((array)$existantes as $r) { if (is_array($r) && isset($r['id'])) $map[(string)$r['id']] = $r; }
@@ -136,13 +188,14 @@ function mergeRows($existantes, $entrantes, $dels, $entity){
     if (!is_array($r) || !isset($r['id'])) continue;
     $k = (string)$r['id'];
     if (!isset($map[$k])) { $map[$k] = $r; continue; }
+    if ($entity === 'planifs' && ($r['statut'] ?? '') === 'prévu' && ($map[$k]['statut'] ?? '') !== 'prévu') continue;
     $te = rowTs($r); $tm = rowTs($map[$k]);
     if ($te !== '' && ($tm === '' || strcmp($te, $tm) >= 0)) $map[$k] = $r;   // l'entrant gagne s'il est au moins aussi récent
   }
   $out = [];
   foreach ($map as $k => $r) {
     $t = $dels[$k] ?? null;
-    if ($t !== null && !(strcmp(rowTs($r), (string)$t) > 0)) continue;        // supprimé, sauf réécriture postérieure
+    if ($t !== null && !(strcmp(rowTs($r), (string)$t) > 0) && !($entity === 'planifs' && planifTraitee($r))) continue;   // supprimé, sauf réécriture postérieure ou trace d'envoi
     $out[] = $r;
   }
   if ($entity === 'activite') {   // journal, pas référentiel : on garde les plus récents
@@ -275,6 +328,52 @@ function majTable($DATA_DIR, $e, $fn){
   });
 }
 
+/* Registre des envois (data/_envois.json) : hors ENTITIES, donc hors synchro, empreintes et fusion.
+   Clé = sha256(trackId|destinataire en minuscules). Un même trackId ne part qu'une fois vers une
+   même adresse : un nouvel essai après une réponse perdue répond « déjà envoyé » sans SMTP.
+   Le verrou 'envois' couvre lecture, envoi SMTP et écriture : un second essai simultané attend,
+   puis lit « envoyé ». Ordre des contrôles : envoyé, incertain, même document < 24 h, plafond. */
+function envoisLire($DATA_DIR){ $v = readJson("$DATA_DIR/_envois.json"); return is_array($v) ? $v : []; }
+function plafondJour(){ $v = getenv('SMTP_MAX_JOUR');                                   // absente ou vide : 500 ; "0" : sans plafond
+  return ($v === false || trim($v) === '') ? 500 : max(0, (int)$v); }
+function envoiUnique($DATA_DIR, $m, $envoyer){
+  $to  = strtolower(trim((string)($m['to'] ?? '')));
+  $tid = substr((string)($m['trackId'] ?? ''), 0, 200);
+  $cle = $tid !== '' ? hash('sha256', $tid.'|'.$to) : 'x'.bin2hex(random_bytes(8));   // sans trackId : journalisé, jamais dédoublonné
+  $ref = substr((string)($m['ref'] ?? ''), 0, 120);
+  $max = plafondJour();                                                                  // 0 = sans plafond
+  $iso = function($t){ return gmdate('Y-m-d\\TH:i:s\\Z', (int)$t); };
+  return sousVerrou($DATA_DIR, 'envois', function() use ($DATA_DIR, $m, $envoyer, $to, $tid, $cle, $ref, $max, $iso) {
+    $reg = envoisLire($DATA_DIR); $now = time(); $e = $reg[$cle] ?? null;
+    if ($e && ($e['s'] ?? '') === 'envoyé')
+      return ['ok'=>true, 'deja'=>true, 'type'=>'ok', 'at'=>$iso($e['t'] ?? 0), 'info'=>'déjà envoyé, rien renvoyé'];
+    if ($e && ($e['s'] ?? '') === 'incertain' && empty($m['forcer']))
+      return ['ok'=>false, 'code'=>'incertain', 'type'=>'incertain', 'at'=>$iso($e['t'] ?? 0), 'info'=>"le serveur mail n'a pas confirmé le premier envoi"];
+    if ($ref !== '' && empty($m['confirme'])) foreach ($reg as $k => $x) {      // même document, même destinataire, autre essai, < 24 h
+      if ($k !== $cle && ($x['ref'] ?? '') === $ref && ($x['to'] ?? '') === $to
+          && in_array($x['s'] ?? '', ['envoyé','incertain'], true) && ($x['t'] ?? 0) > $now - 86400)
+        return ['ok'=>false, 'code'=>'recent', 'type'=>'recent', 'at'=>$iso($x['t']), 's'=>$x['s'], 'sujet'=>$x['sujet'] ?? '',
+                'info'=>'ce document est déjà parti vers cette adresse il y a moins de 24 h'];
+    }
+    $n = 0; foreach ($reg as $x) if (($x['s'] ?? '') !== 'échec' && ($x['t'] ?? 0) > $now - 86400) $n++;
+    if ($max > 0 && $n >= $max) { alertePlafond($DATA_DIR, $max);
+      return ['ok'=>false, 'code'=>'plafond', 'type'=>'plafond', 'info'=>"plafond de sécurité atteint : $max emails sur 24 h"]; }
+    $r = $envoyer(); $ok = !empty($r[0]); $info = (string)($r[1] ?? ''); $type = (string)($r[2] ?? ($ok ? 'ok' : 'refus'));
+    $incertain = !$ok && $type === 'incertain';
+    $reg[$cle] = ['s'=>$ok ? 'envoyé' : ($incertain ? 'incertain' : 'échec'), 't'=>$now, 'to'=>$to, 'tid'=>$tid, 'ref'=>$ref,
+      'sujet'=>mb_substr((string)($m['subject'] ?? ''), 0, 80), 'pj'=>(int)($m['pj'] ?? 0), 'o'=>(string)($m['origine'] ?? ''), 'info'=>mb_substr($info, 0, 160)];
+    foreach ($reg as $k => $x) if (($x['t'] ?? 0) < $now - 90*86400) unset($reg[$k]);   // 90 jours
+    writeJson("$DATA_DIR/_envois.json", $reg);
+    return ['ok'=>$ok, 'info'=>$info, 'type'=>$type] + ($incertain ? ['code'=>'incertain'] : []);
+  });
+}
+function alertePlafond($DATA_DIR, $max){   // une alerte par jour, adressée à Louis lui-même
+  $f = "$DATA_DIR/.alerte-plafond"; if (@file_get_contents($f) === gmdate('Y-m-d')) return;
+  @file_put_contents($f, gmdate('Y-m-d'));
+  $moi = getenv('SMTP_FROM') ?: getenv('SMTP_USER');
+  if ($moi) @smtpSend($moi, "CRM : plafond d'envoi atteint", "Le serveur a bloqué un envoi : $max emails partis sur les dernières 24 h.\nSi ce n'est pas toi, change le mot de passe du CRM.\nDétail : Réglages, bouton « Emails partis du serveur ».");
+}
+
 /* Historique : toute version remplacée ou supprimée est conservée (journal
    mensuel en ajout seul). Une modification n'est photographiée qu'une fois
    par quart d'heure et par fiche — sinon l'enregistrement automatique d'un
@@ -346,6 +445,160 @@ function writeJson($path,$val){ // écriture atomique (tmp + rename), jamais de 
   if ($n !== strlen($json)) { @unlink($tmp); return false; }   // écriture partielle (disque plein) → abandon
   if (!@rename($tmp, $path)) { @unlink($tmp); return false; }
   return true; }
+
+/* En-tête MIME (RFC 2047) : ASCII imprimable tel quel, sinon mots encodés de 42 octets UTF-8 au plus,
+   pliés par CRLF+espace. Tout caractère de contrôle devient un espace : aucune injection d'en-tête. */
+function enteteMime($s){
+  $s = trim(preg_replace('/[\x00-\x1F\x7F]+/', ' ', (string)$s));   // pas de /u : jamais null sur de l'UTF-8 invalide
+  if ($s === '') return '';
+  if (!preg_match('/[\x80-\xFF]/', $s) && strpos($s, '=?') === false && strlen($s) <= 900) return $s;
+  $car = preg_split('//u', $s, -1, PREG_SPLIT_NO_EMPTY);
+  if ($car === false) $car = [$s];                                     // UTF-8 invalide : un seul mot, comme avant
+  $mots = []; $cur = '';
+  foreach ($car as $c) { if ($cur !== '' && strlen($cur) + strlen($c) > 42) { $mots[] = $cur; $cur = ''; } $cur .= $c; }
+  $mots[] = $cur;
+  return implode("\r\n ", array_map(function($m){ return '=?UTF-8?B?'.base64_encode($m).'?='; }, $mots));
+}
+
+/* ═══ Clé des liens de désabonnement ═══
+   Propre au serveur, jamais la formKey publique du formulaire du site. Créée une fois, jamais remplacée.
+   desaboInit ne prend aucun verrou (appelée dans putConfig, sous le verrou 'config').
+   Ne JAMAIS appeler desaboCles sous le verrou 'config' : flock n'est pas réentrant. */
+function desaboInit(array &$cfg){
+  $modif = false;
+  if (!is_string($cfg['desaboKey'] ?? null) || $cfg['desaboKey'] === '') {
+    $cfg['desaboKey'] = bin2hex(random_bytes(24)); $modif = true;
+  }
+  if (!array_key_exists('desaboLegacy', $cfg)) {        // clé qui signait les liens envoyés avant cette version
+    $cfg['desaboLegacy'] = (string)($cfg['formKey'] ?? '');
+    $cfg['desaboLegacyJusqua'] = date('Y-m-d', strtotime('+1 year'));
+    $modif = true;
+  }
+  return $modif;
+}
+function desaboCles($DATA_DIR){
+  return sousVerrou($DATA_DIR, 'config', function() use ($DATA_DIR) {
+    $f = "$DATA_DIR/config.json"; $cfg = readJson($f);
+    if (!is_array($cfg)) { if (is_file($f)) return ''; $cfg = []; }   // config illisible : on n'écrase rien
+    $avant = (string)($cfg['desaboKey'] ?? '');
+    if (desaboInit($cfg) && !writeJson($f, $cfg)) return $avant;      // écriture ratée : seule une clé déjà enregistrée sert
+    return (string)$cfg['desaboKey'];
+  });
+}
+/* Même calcul que hmac16 du CRM : HMAC-SHA256 de l'adresse en minuscules, 16 caractères hexadécimaux */
+function desaboSig($em, $cle){ return substr(hash_hmac('sha256', strtolower(trim((string)$em)), (string)$cle), 0, 16); }
+/* 'lien' (clé serveur), 'lien-ancien' (formKey d'avant, vrai destinataire, moins de 12 mois) ou '' */
+function desaboVerifier($DATA_DIR, $cfg, $em, $sig){
+  if ($em === '' || $sig === '') return '';
+  $cle = (string)($cfg['desaboKey'] ?? '');
+  if ($cle !== '' && hash_equals(desaboSig($em, $cle), $sig)) return 'lien';
+  $anc = array_key_exists('desaboLegacy', $cfg) ? (string)$cfg['desaboLegacy'] : (string)($cfg['formKey'] ?? '');
+  $jusqua = (string)($cfg['desaboLegacyJusqua'] ?? '');
+  if ($anc === '' || ($jusqua !== '' && date('Y-m-d') > $jusqua)) return '';
+  if (!hash_equals(desaboSig($em, $anc), $sig)) return '';
+  foreach (['mails', 'planifs'] as $t) {             // la formKey est publique : seuls les vrais destinataires passent
+    $rows = readJson("$DATA_DIR/$t.json"); if (!is_array($rows)) continue;
+    foreach ($rows as $r) {
+      if (is_array($r) && strtolower(trim((string)($r['to'] ?? ''))) === $em
+          && ($t === 'planifs' || ($r['kind'] ?? '') === 'campagne')) return 'lien-ancien';
+    }
+  }
+  return '';
+}
+/* URL One-Click (RFC 8058) calculée par le serveur pour le destinataire réel. https forcé :
+   derrière Traefik, $_SERVER['HTTPS'] est vide. CRM_PUBLIC_URL (facultatif) prime. */
+function urlDesabo($DATA_DIR, $to){
+  static $cle = null;
+  $to = trim((string)$to);
+  if (!filter_var($to, FILTER_VALIDATE_EMAIL)) return '';
+  if ($cle === null) {
+    $cfg = readJson("$DATA_DIR/config.json");
+    $cle = is_array($cfg) ? (string)($cfg['desaboKey'] ?? '') : '';
+    if ($cle === '' && is_file("$DATA_DIR/config.json")) $cle = desaboCles($DATA_DIR);   // jamais sur un serveur neuf
+  }
+  if ($cle === '') return '';
+  $base = getenv('CRM_PUBLIC_URL') ?: ('https://'.($_SERVER['HTTP_HOST'] ?? '').($_SERVER['SCRIPT_NAME'] ?? '/api.php'));
+  if (!preg_match('#^https://[A-Za-z0-9.-]+(:\d+)?/[A-Za-z0-9._/-]*$#', $base)) return '';
+  return $base.'?action=desabo&e='.rawurlencode($to).'&s='.desaboSig($to, $cle);
+}
+
+/* ═══ Registre des oppositions (désabonnements), par ADRESSE ═══
+   Fichier du serveur, hors $ENTITIES : aucun appareil ne l'écrit. Ni la fusion par updatedAt,
+   ni un DB.remove, ni un appareil en retard ne peuvent l'effacer.
+   Forme : {"adresse@minuscules": {"le": ISO, "source": "lien|lien-ancien|un-clic|manuel|fiche|sauvegarde|historique",
+            "note"?: texte, "leveLe"?: ISO, "leveNote"?: texte}}
+   Une entrée reste active tant qu'aucune levée postérieure n'existe.
+   Ne jamais appeler desabosAmorcer ni desabosSet depuis un sousVerrou('desabos') : flock n'est pas réentrant.
+   Sous ce verrou, utiliser desabosUnion, qui ne verrouille et n'écrit rien. */
+function desaboNorm($e){ return strtolower(trim((string)$e)); }
+function desaboUtc($v){ $v = (string)$v; $t = ($v === '') ? false : strtotime($v);
+  return $t === false ? $v : gmdate('Y-m-d\\TH:i:s.000\\Z', $t); }            // même format que nowTs()
+function desabosLire($DATA_DIR){ $v = readJson("$DATA_DIR/_desabos.json"); return is_array($v) ? $v : []; }
+function desaboActif($x){ return is_array($x) && (empty($x['leveLe']) || strcmp((string)($x['le'] ?? ''), (string)$x['leveLe']) > 0); }
+/* Une seule fois : reprend les drapeaux actuels, les copies du jour (_bak, 14 j) et l'historique
+   (_historique, 24 mois) pour retrouver les désabonnements déjà effacés par une synchro. */
+function desabosAmorcer($DATA_DIR){
+  if (is_file("$DATA_DIR/_desabos.json")) return;
+  sousVerrou($DATA_DIR, 'desabos', function() use ($DATA_DIR) {
+    if (is_file("$DATA_DIR/_desabos.json")) return;                // un autre appel l'a fait entre-temps
+    $reg = [];
+    $note = function($c, $src) use (&$reg) {
+      if (!is_array($c) || empty($c['desabo']) || empty($c['email'])) return;
+      $em = desaboNorm($c['email']); if ($em === '' || isset($reg[$em])) return;
+      $le = desaboUtc($c['desaboLe'] ?? '');
+      $reg[$em] = ['le' => $le !== '' ? $le : nowTs(), 'source' => $src];
+    };
+    foreach ((array)readJson("$DATA_DIR/clients.json") as $c) $note($c, 'fiche');
+    foreach ((array)@glob("$DATA_DIR/_bak/clients-*.json") as $f) foreach ((array)readJson($f) as $c) $note($c, 'sauvegarde');
+    foreach ((array)@glob("$DATA_DIR/_historique/*.jsonl") as $f) {
+      $h = @fopen($f, 'r'); if (!$h) continue;
+      while (($l = fgets($h)) !== false) {
+        if (strpos($l, '"entity":"clients"') === false || strpos($l, '"desabo":true') === false) continue;
+        $x = json_decode($l, true); if (is_array($x)) $note($x['avant'] ?? null, 'historique');
+      }
+      fclose($h);
+    }
+    writeJson("$DATA_DIR/_desabos.json", $reg ?: new stdClass());
+  });
+}
+/* Ajout idempotent : une opposition active garde sa date d'origine et le fichier n'est pas réécrit */
+function desaboAjouter($DATA_DIR, $em, $source){
+  $em = desaboNorm($em); if ($em === '' || strpos($em, '@') === false) return false;
+  desabosAmorcer($DATA_DIR);
+  return sousVerrou($DATA_DIR, 'desabos', function() use ($DATA_DIR, $em, $source) {
+    $r = desabosLire($DATA_DIR);
+    if (desaboActif($r[$em] ?? null)) return true;
+    $r[$em] = array_merge(is_array($r[$em] ?? null) ? $r[$em] : [], ['le' => nowTs(), 'source' => $source]);
+    unset($r[$em]['note']);                                        // la note d'une ancienne opposition manuelle ne suit pas
+    return writeJson("$DATA_DIR/_desabos.json", $r);
+  });
+}
+/* Adresses opposées, à partir d'un registre déjà lu : registre actif + drapeaux de clients.json
+   absents du registre (appli en cache). Aucun verrou, aucune écriture. */
+function desabosUnion($DATA_DIR, $reg){
+  $out = [];
+  foreach ((array)$reg as $em => $x) if (desaboActif($x)) $out[$em] = $x;
+  foreach ((array)readJson("$DATA_DIR/clients.json") as $c) {
+    if (!is_array($c) || empty($c['desabo']) || empty($c['email'])) continue;
+    $em = desaboNorm($c['email']);
+    if ($em !== '' && !isset($reg[$em]) && !isset($out[$em])) $out[$em] = ['le' => desaboUtc($c['desaboLe'] ?? ''), 'source' => 'fiche'];
+  }
+  return $out;
+}
+/* Idem, en amorçant le registre si besoin. $persister : inscrit au registre les drapeaux qui n'y sont pas,
+   pour qu'une synchro ne puisse plus les effacer. Une adresse levée (leveLe) ne revient pas par un vieux drapeau. */
+function desabosSet($DATA_DIR, $persister = false){
+  desabosAmorcer($DATA_DIR);
+  $reg = desabosLire($DATA_DIR);
+  $out = desabosUnion($DATA_DIR, $reg);
+  $manq = []; foreach ($out as $em => $x) if (!isset($reg[$em])) $manq[$em] = $x;
+  if ($persister && $manq) sousVerrou($DATA_DIR, 'desabos', function() use ($DATA_DIR, $manq) {
+    $r = desabosLire($DATA_DIR); $n = 0;
+    foreach ($manq as $em => $x) if (!isset($r[$em])) { $r[$em] = $x; $n++; }
+    if ($n) writeJson("$DATA_DIR/_desabos.json", $r);
+  });
+  return $out;
+}
 
 $raw = file_get_contents('php://input');
 // Les pages publiques (code d'accès d'un brief, accusé de lecture, formulaire agence)
@@ -1003,16 +1256,19 @@ if ($action === 'imagine') {
   exit;
 }
 
-/* ===== Désabonnement des emails marketing (public, obligation légale) ===== */
+/* ===== Désabonnement des emails marketing (public, obligation légale) =====
+   GET = page de confirmation, AUCUNE écriture : les passerelles de sécurité ouvrent les liens des emails reçus.
+   Seul un POST (bouton « Confirmer » ou One-Click RFC 8058 envoyé par la messagerie) désabonne.
+   L'opposition va d'abord au registre du serveur (_desabos.json), puis sur les fiches pour l'affichage. */
 if ($action === 'desabo') {
-  $em = strtolower(trim((string)($_GET['e'] ?? ($_POST['e'] ?? ''))));
+  $em = desaboNorm($_GET['e'] ?? ($_POST['e'] ?? ''));
   $sig = (string)($_GET['s'] ?? ($_POST['s'] ?? ''));
   $cfgD = readJson("$DATA_DIR/config.json"); if(!is_array($cfgD)) $cfgD=[];
-  $secret = (string)($cfgD['desaboKey'] ?? $cfgD['formKey'] ?? 'louismagie-desabo');
-  $attendu = substr(hash_hmac('sha256', $em, $secret), 0, 16);
   header('Content-Type: text/html; charset=utf-8');
+  header('Cache-Control: no-store');
   $H = function($x){ return htmlspecialchars((string)$x, ENT_QUOTES, 'UTF-8'); };
-  $page = function($titre,$txt,$ok=true) use ($H) {
+  $page = function($titre,$txt,$form='') use ($H) {
+    $mail = $H($GLOBALS['__mailLouis'] ?? 'contact@louismagie.fr');
     return '<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
       .'<meta name="robots" content="noindex,nofollow"><title>'.$H($titre).' — LouisMagie</title>'
       .'<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
@@ -1022,17 +1278,47 @@ if ($action === 'desabo') {
       .'.l{font-family:Syne,sans-serif;font-weight:800;font-size:22px;letter-spacing:-.4px;margin-bottom:20px}.l span{color:#FF7700}'
       .'h1{font-family:Syne,sans-serif;font-weight:800;font-size:19px;margin-bottom:10px}'
       .'p{font-size:14.5px;color:#5A5650;line-height:1.7}'
-      .'a{display:inline-block;margin-top:22px;background:#FF7700;color:#fff;text-decoration:none;font-family:Syne,sans-serif;font-weight:700;font-size:11px;letter-spacing:2px;text-transform:uppercase;padding:14px 28px;border-radius:4px}</style></head>'
+      .'a{display:inline-block;margin-top:22px;background:#FF7700;color:#fff;text-decoration:none;font-family:Syne,sans-serif;font-weight:700;font-size:11px;letter-spacing:2px;text-transform:uppercase;padding:14px 28px;border-radius:4px}'
+      .'button{display:inline-block;margin-top:22px;background:#FF7700;color:#fff;border:0;cursor:pointer;font-family:Syne,sans-serif;font-weight:700;font-size:11px;letter-spacing:2px;text-transform:uppercase;padding:14px 28px;border-radius:4px}'
+      .'a.d{display:block;background:none;color:#5A5650;padding:0;margin-top:18px;font-family:"DM Sans",Arial,sans-serif;font-weight:400;font-size:13px;letter-spacing:0;text-transform:none;text-decoration:underline}</style></head>'
       .'<body><div class="c"><div class="l">Louis<span>Magie</span></div><h1>'.$H($titre).'</h1><p>'.$txt.'</p>'
-      .'<a href="mailto:'.$H($GLOBALS['__mailLouis'] ?? 'contact@louismagie.fr').'">Écrire à Louis</a></div></body></html>';
+      .$form
+      .($form !== '' ? '<a class="d" href="mailto:'.$mail.'">Une question ? Écrire à Louis</a>' : '<a href="mailto:'.$mail.'">Écrire à Louis</a>')
+      .'</div></body></html>';
   };
   $GLOBALS['__mailLouis'] = $cfgD['emailLouis'] ?? 'contact@louismagie.fr';
-  if ($em === '' || !hash_equals($attendu, $sig)) { echo $page('Lien invalide','Ce lien de désabonnement n\'est pas valide.'); exit; }
-  majTable($DATA_DIR, 'clients', function(&$cls) use ($em) {
-    $t = false;
-    foreach ($cls as &$c) { if (strtolower(trim((string)($c['email'] ?? ''))) === $em) { $c['desabo'] = true; $c['desaboLe'] = date('c'); $c['updatedAt'] = nowTs(); $t = true; } }
+  $via = desaboVerifier($DATA_DIR, $cfgD, $em, $sig);   // 'lien', 'lien-ancien' ou ''
+  if ($via === '') { echo $page('Lien invalide','Ce lien de désabonnement n\'est pas ou plus valide. Pour ne plus recevoir d\'emails, écrivez à Louis avec le bouton ci-dessous.'); exit; }
+  $memeAdresse = function($c) use ($em) { return is_array($c) && desaboNorm($c['email'] ?? '') === $em; };
+  $unClic = (string)($_POST['List-Unsubscribe'] ?? '') === 'One-Click';
+  $confirme = ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && ((string)($_POST['confirm'] ?? '') === '1' || $unClic);
+  if (!$confirme) {   // GET, HEAD, POST vide ou JSON : on n'écrit RIEN
+    $dejaOpp = desabosUnion($DATA_DIR, desabosLire($DATA_DIR));   // lecture seule, sans verrou
+    if (isset($dejaOpp[$em])) {
+      echo $page('C\'est déjà fait', 'L\'adresse <strong>'.$H($em).'</strong> ne reçoit plus d\'email d\'actualité.'); exit;
+    }
+    $q = '?action=desabo&e='.rawurlencode($em).'&s='.rawurlencode($sig);
+    echo $page('Confirmer le désabonnement',
+      'Un dernier clic : l\'adresse <strong>'.$H($em).'</strong> ne recevra plus d\'email d\'actualité de LouisMagie.<br><br>Les échanges liés à vos devis, factures et prestations continueront normalement.',
+      '<form method="post" action="'.$H($q).'"><input type="hidden" name="confirm" value="1"><button type="submit">Confirmer le désabonnement</button></form>');
+    exit;
+  }
+  $source = $unClic ? 'un-clic' : $via;
+  if (!desaboAjouter($DATA_DIR, $em, $source)) {
+    echo $page('Un souci technique', 'Votre demande n\'a pas pu être enregistrée. Écrivez-moi avec le bouton ci-dessous et je vous retire de la liste moi-même.');
+    exit;
+  }
+  // Fiches : drapeau pour l'affichage et pour une appli restée en cache. Idempotent : une fiche déjà
+  // désabonnée garde sa date et son updatedAt ; sans fiche à changer, majTable n'écrit rien.
+  majTable($DATA_DIR, 'clients', function(&$cls) use ($memeAdresse, $unClic, $via) {
+    $besoin = false; $ts = nowTs();
+    foreach ($cls as &$c) {
+      if (!$memeAdresse($c) || !empty($c['desabo'])) continue;
+      $c['desabo'] = true; $c['desaboLe'] = $ts; $c['desaboVia'] = $unClic ? 'un-clic' : 'lien'; $c['desaboPar'] = $via; $c['updatedAt'] = $ts;
+      $besoin = true;
+    }
     unset($c);
-    return $t;
+    return $besoin;
   });
   echo $page('C\'est fait', 'L\'adresse <strong>'.$H($em).'</strong> ne recevra plus d\'email d\'actualité.<br><br>Les échanges liés à vos devis, factures et prestations continueront normalement.');
   exit;
@@ -1327,47 +1613,101 @@ if ($action === 'sign' || $action === 'signSubmit') {
 /* ===== Envoi planifié (déclenché par cron Coolify, protégé par CRON_KEY) ===== */
 if ($action === 'runScheduled') {
   $__ck=getenv('CRON_KEY'); if (!$__ck || !hash_equals($__ck, (string)($_GET['key'] ?? ''))) out(['ok'=>false,'error'=>'cron key invalide']);
-  @set_time_limit(0);
-  // Verrou : deux exécutions simultanées du cron enverraient les emails en double
+  @set_time_limit(0); ignore_user_abort(true);   // un curl coupé ne doit pas arrêter PHP entre l'envoi et son inscription
+  // Verrou : deux exécutions simultanées du cron enverraient les emails en double (la réservation
+  // ligne par ligne ci-dessous protège aussi le cas où ce verrou n'a pas pu s'ouvrir)
   $lockF = $DATA_DIR.'/_cron.lock'; $lock = @fopen($lockF,'c');
   if ($lock && !@flock($lock, LOCK_EX | LOCK_NB)) out(['ok'=>false,'error'=>'envoi déjà en cours']);
+  // Allège les envois déjà traités (anciennes campagnes comprises) : une écriture au plus, aucune si rien à faire.
+  // La version complète reste dans _historique (historiser, appelé par majTable).
+  $alleges = (int)majTable($DATA_DIR, 'planifs', function(&$t) {
+    $n = 0;
+    foreach ($t as &$x) {
+      if (!is_array($x)) continue;
+      $st = (string)($x['statut'] ?? '');
+      if (($st === 'envoyé' || $st === 'annulé') && ((string)($x['html'] ?? '') !== '' || (string)($x['body'] ?? '') !== '')) {
+        $x['html'] = ''; $x['body'] = ''; $x['updatedAt'] = nowTs(); $n++;
+      }
+    }
+    unset($x);
+    return $n > 0 ? $n : false;
+  });
   $f=$DATA_DIR.'/planifs.json'; $arr=readJson($f); if(!is_array($arr))$arr=[];
   // Adresses désabonnées : à ne jamais servir, même si la planification est antérieure
-  $desab=[]; $cl=readJson($DATA_DIR.'/clients.json');
-  if(is_array($cl)) foreach($cl as $c){ if(!empty($c['desabo']) && !empty($c['email'])) $desab[strtolower(trim($c['email']))]=1; }
-  $today=date('Y-m-d'); $sent=0; $fail=0; $skip=0;
-  // Mise à jour d'UNE ligne dans le fichier relu sous verrou (id, ou trackId en secours) :
-  // un envoi d'appareil arrivé pendant la campagne n'est pas écrasé.
-  $majPlanif = function($p, $champs) use ($DATA_DIR) {
+  $desab = desabosSet($DATA_DIR);   // registre des oppositions + drapeaux des fiches, clés en minuscules
+  $now=nowTs(); $sent=0; $fail=0; $skip=0; $sautes=0; $reportes=0; $incertains=0; $perimes=0; $arret=''; $serie=0; $plafond=false;
+  $limRetard=gmdate('Y-m-d\\TH:i:s.000\\Z', time()-3*86400);   // plus de 3 jours de retard : Louis doit confirmer
+  // Change le statut d'UNE ligne relue sous le verrou de la table (id, ou trackId en secours).
+  // $de = statut exigé (null = n'importe lequel). Renvoie la ligne écrite, ou false si elle a
+  // disparu, n'a plus ce statut, ou si l'écriture a échoué. $reinsere : ligne disparue → on la
+  // remet depuis la copie, pour garder la trace d'un email réellement parti.
+  $transition = function($p, $de, $champs, $reinsere = false) use ($DATA_DIR) {
     $pid = (string)($p['id'] ?? ''); $tid = (string)($p['trackId'] ?? '');
-    majTable($DATA_DIR, 'planifs', function(&$t) use ($pid, $tid, $champs) {
+    return majTable($DATA_DIR, 'planifs', function(&$t) use ($p, $pid, $tid, $de, $champs, $reinsere) {
       foreach ($t as &$x) {
         if (($pid !== '' && (string)($x['id'] ?? '') === $pid) || ($pid === '' && $tid !== '' && (string)($x['trackId'] ?? '') === $tid)) {
+          if ($de !== null && (string)($x['statut'] ?? '') !== $de) return false;
           foreach ($champs as $k => $v) $x[$k] = $v;
-          return true;
+          return $x;
         }
       }
-      return false;
+      unset($x);
+      if (!$reinsere) return false;
+      $y = array_merge($p, $champs); $t[] = $y; return $y;
     });
   };
-  foreach ($arr as $i => $p) {
-    if (($p['statut']??'')==='prévu' && ($p['date']??'9999') <= $today) {
-      if (isset($desab[strtolower(trim((string)($p['to'] ?? '')))])) {
-        $majPlanif($p, ['statut'=>'annulé', 'info'=>'destinataire désabonné', 'updatedAt'=>nowTs()]); $skip++;
-        continue;
-      }
-      $tu='';
-      if(!empty($p['trackId'])){ $base=(isset($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off'?'https':'http').'://'.$_SERVER['HTTP_HOST'].$_SERVER['SCRIPT_NAME']; $tu=$base.'?action=track&m='.rawurlencode($p['trackId']); }
-      list($ok,$info)=smtpSend($p['to']??'',$p['subject']??'',$p['body']??'','','',$tu,$p['html']??'');
-      // persistance immédiate : une coupure ne fait pas réexpédier le lot ; updatedAt empêche
-      // un appareil en retard de réécrire « prévu » par-dessus
-      $majPlanif($p, ['statut'=>$ok?'envoyé':'échec', 'sentAt'=>date('c'), 'info'=>$info, 'updatedAt'=>nowTs()]);
-      $ok?$sent++:$fail++;
-      usleep(350000);              // cadence douce, pour ne pas se faire limiter par le serveur SMTP
+  foreach ($arr as $p) {                       // la copie ne sert qu'à repérer les candidates
+    if (($p['statut'] ?? '') !== 'prévu' || strcmp(planifInstant($p), $now) > 0) continue;
+    if (!empty($p['reessaiApres']) && strcmp((string)$p['reessaiApres'], $now) > 0) continue;   // nouvel essai pas encore dû
+    if (isset($desab[strtolower(trim((string)($p['to'] ?? '')))])) {
+      if ($transition($p, 'prévu', ['statut'=>'annulé', 'info'=>'destinataire désabonné', 'html'=>'', 'body'=>'', 'updatedAt'=>nowTs()]) !== false) $skip++;
+      continue;
     }
+    if (strcmp(planifInstant($p), $limRetard) < 0) {
+      if ($transition($p, 'prévu', ['statut'=>'échec','typeEchec'=>'retard','info'=>'Non envoyé : plus de 3 jours de retard sur la date prévue. « Remettre en file » si le message est encore d’actualité.','updatedAt'=>nowTs()]) !== false) $perimes++;
+      continue;
+    }
+    // Réservation : la ligne ne part que si elle vaut ENCORE « prévu » sous verrou.
+    // Annulée, supprimée, prise par un autre passage ou écriture impossible → pas d'envoi.
+    $r = $transition($p, 'prévu', ['statut'=>'envoi', 'info'=>'envoi en cours', 'updatedAt'=>nowTs()]);
+    if (!is_array($r)) { $sautes++; continue; }
+    $tu = '';
+    if (!empty($r['trackId'])) { $base=(isset($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off'?'https':'http').'://'.$_SERVER['HTTP_HOST'].$_SERVER['SCRIPT_NAME']; $tu=$base.'?action=track&m='.rawurlencode($r['trackId']); }
+    $lu = (($r['kind'] ?? 'campagne') === 'campagne') ? urlDesabo($DATA_DIR, $r['to'] ?? '') : '';   // les planifs actuelles sont des campagnes
+    // Passage par le registre : une planif remise « prévu » après une coupure ne repart pas si son email est déjà parti
+    $er = envoiUnique($DATA_DIR, ['trackId'=>$r['trackId'] ?? '', 'to'=>$r['to'] ?? '', 'subject'=>$r['subject'] ?? '', 'origine'=>'planif'],
+      function() use ($r, $tu, $lu) { return smtpSend($r['to']??'', $r['subject']??'', $r['body']??'', '', '', $tu, $r['html']??'', ['listUnsub'=>$lu, 'mid'=>(string)($r['trackId']??'')]); });
+    if (($er['code'] ?? '') === 'plafond') {     // la ligne revient « prévu » : le passage suivant reprend
+      $transition($r, 'envoi', ['statut'=>'prévu','info'=>'Pas parti : '.($er['info'] ?? 'plafond atteint').'. Nouvel essai au prochain passage.','updatedAt'=>nowTs()]);
+      $plafond = true; $arret = (string)($er['info'] ?? 'plafond'); break;
+    }
+    $ok = !empty($er['ok']); $type = (string)($er['type'] ?? ($ok ? 'ok' : 'refus'));
+    $info = !empty($er['deja']) ? 'déjà envoyé (reprise après coupure)' : (string)($er['info'] ?? '');
+    $tent = (int)($r['tentatives'] ?? 0) + 1;
+    if ($ok) {                                   // parti : écrit sans condition, ligne réinsérée si effacée entre-temps
+      $transition($r, null, ['statut'=>'envoyé','sentAt'=>date('c'),'info'=>$info,'tentatives'=>$tent,'reessaiApres'=>'','typeEchec'=>'','html'=>'','body'=>'','updatedAt'=>nowTs()], true);
+      $sent++; $serie=0;
+    } elseif ($type === 'incertain') {           // peut-être parti : jamais relancé automatiquement
+      $transition($r, null, ['statut'=>'incertain','sentAt'=>date('c'),'info'=>$info,'tentatives'=>$tent,'updatedAt'=>nowTs()], true);
+      $incertains++; $serie=0;
+    } elseif (in_array($type, ['config','connexion','auth','expediteur'], true)) {
+      // compte ou serveur en panne : aucune tentative comptée, les lignes suivantes ne sont pas touchées
+      $transition($r, 'envoi', ['statut'=>'prévu','info'=>'Pas parti ('.gmdate('d/m H:i').' UTC) : '.$info.'. Nouvel essai au prochain passage.','updatedAt'=>nowTs()]);
+      $arret = $info; break;
+    } elseif ($type === 'temp' && $tent < 3) {
+      $transition($r, 'envoi', ['statut'=>'prévu','tentatives'=>$tent,'reessaiApres'=>gmdate('Y-m-d\\TH:i:s.000\\Z', time()+3600*$tent),
+        'info'=>'Essai '.$tent.'/3 refusé temporairement : '.$info,'updatedAt'=>nowTs()]);
+      $reportes++; $serie++;
+    } else {                                     // refus, adresse, ou 3e refus temporaire
+      $transition($r, 'envoi', ['statut'=>'échec','typeEchec'=>(string)$type,'tentatives'=>$tent,'sentAt'=>date('c'),'info'=>$info,'updatedAt'=>nowTs()]);
+      $fail++; if ($type !== 'adresse') $serie++;
+    }
+    if ($serie >= 3) { $arret = '3 refus d’affilée, dernier : '.$info; break; }   // quota ou contenu refusé : le reste attend
+    if (empty($er['deja'])) usleep(350000);   // cadence douce, pour ne pas se faire limiter par le serveur SMTP
   }
   if ($lock) { @flock($lock, LOCK_UN); @fclose($lock); }
-  out(['ok'=>true,'sent'=>$sent,'fail'=>$fail,'desabonnes'=>$skip,'total'=>count($arr)]);
+  out(['ok'=>$arret==='','sent'=>$sent,'fail'=>$fail,'reportes'=>$reportes,'incertains'=>$incertains,'perimes'=>$perimes,
+       'desabonnes'=>$skip,'sautes'=>$sautes,'alleges'=>$alleges,'arret'=>$arret,'plafond'=>$plafond,'total'=>count($arr)]);
 }
 
 /* ===== Diagnostic SMTP (clé requise) ===== */
@@ -1377,8 +1717,8 @@ if ($action === 'smtptest') {
   if (isset($_GET['full'])) {  // teste le VRAI chemin : multipart + PDF joint + HTML/tracking
     $tu = (isset($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off'?'https':'http').'://'.$_SERVER['HTTP_HOST'].$_SERVER['SCRIPT_NAME'].'?action=track&m=diagfull';
     $att = base64_encode(str_repeat("Faux PDF de test pour diagnostic SMTP. ", 600)); // ~23 Ko
-    list($ok,$info)=smtpSend($to,'Test SMTP CRM (PDF+HTML)',"Bonjour,\n\nCeci est un test d'envoi complet avec pièce jointe et HTML.\n\nLouisMagie",'test.pdf',$att,$tu);
-    out(['ok'=>$ok,'info'=>$info,'mode'=>'complet (multipart + pièce jointe + HTML)']);
+    list($ok,$info,$type)=smtpSend($to,'Test SMTP CRM (PDF+HTML)',"Bonjour,\n\nCeci est un test d'envoi complet avec pièce jointe et HTML.\n\nLouisMagie",'test.pdf',$att,$tu);
+    out(['ok'=>$ok,'info'=>$info,'type'=>$type,'mode'=>'complet (multipart + pièce jointe + HTML)']);
   }
   out(smtpDiag($to));
 }
@@ -1406,14 +1746,19 @@ switch ($action) {
 
   case 'getAll': {
     $data = []; foreach ($ENTITIES as $e) { $v = readJson("$DATA_DIR/$e.json"); $data[$e] = is_array($v) ? $v : []; }
-    $config = readJson("$DATA_DIR/config.json"); if(!is_array($config)) $config = [];
-    $opens = readJson($DATA_DIR.'/_opens.json'); if(!is_array($opens)) $opens = [];
-    $sigs  = readJson($DATA_DIR.'/_signatures.json'); if(!is_array($sigs)) $sigs = [];
-    // firstRun : serveur RÉELLEMENT neuf (aucun fichier de données ni config) → autorise l'initialisation depuis un appareil
+    // firstRun : serveur RÉELLEMENT neuf (aucun fichier de données ni config) → autorise l'initialisation depuis un appareil.
+    // Calculé AVANT toute écriture : créer config.json ici ferait passer un serveur neuf pour un serveur vidé.
     $firstRun = !is_file("$DATA_DIR/config.json");
     if ($firstRun) foreach ($ENTITIES as $e) { if (is_file("$DATA_DIR/$e.json")) { $firstRun = false; break; } }
+    $cleDesabo = $firstRun ? '' : desaboCles($DATA_DIR);   // créée une seule fois, sous verrou
+    $config = readJson("$DATA_DIR/config.json"); if(!is_array($config)) $config = [];
+    unset($config['desaboLegacy'], $config['desaboLegacyJusqua']);   // restent sur le serveur
+    if ($cleDesabo === '') unset($config['desaboKey']); else $config['desaboKey'] = $cleDesabo;
+    $opens = readJson($DATA_DIR.'/_opens.json'); if(!is_array($opens)) $opens = [];
+    $sigs  = readJson($DATA_DIR.'/_signatures.json'); if(!is_array($sigs)) $sigs = [];
+    $desabos = $firstRun ? [] : desabosSet($DATA_DIR, true);   // registre des oppositions (les drapeaux de fiche y sont inscrits)
     out(['ok'=>true, 'data'=>$data, 'config'=>$config, 'opens'=>$opens, 'signatures'=>$sigs,
-         'dels'=>delsRead($DATA_DIR), 'firstRun'=>$firstRun]);
+         'desabos'=>($desabos ?: new stdClass()), 'dels'=>delsRead($DATA_DIR), 'firstRun'=>$firstRun]);
   }
 
   case 'putEntity': {
@@ -1439,6 +1784,61 @@ switch ($action) {
     });
     if ($res === null) out(['ok'=>false,'error'=>'écriture impossible']);
     out(['ok'=>true, 'entity'=>$e, 'n'=>count($res), 'rows'=>$res]);
+  }
+
+  case 'annulerPlanifs': {
+    // Annule SANS rien supprimer : seules les lignes encore « prévu » passent à « annulé »,
+    // relues sous le même verrou que la réservation du cron. Rejouer ne change rien.
+    $ids = [];
+    foreach ((array)($req['ids'] ?? []) as $v) if (is_scalar($v) && (string)$v !== '') $ids[(string)$v] = true;
+    if (!$ids) out(['ok'=>false,'error'=>'aucun envoi indiqué']);
+    $c = ['annules'=>0,'dejaAnnules'=>0,'enCours'=>0,'dejaPartis'=>0,'incertains'=>0,'echecs'=>0,'introuvables'=>0];
+    $rows = [];
+    $res = majTable($DATA_DIR, 'planifs', function(&$t) use ($ids, &$c, &$rows) {
+      $ts = nowTs(); $vus = [];
+      foreach ($t as &$x) {
+        $k = (string)($x['id'] ?? ''); if (!isset($ids[$k])) continue;
+        $vus[$k] = true;
+        switch ((string)($x['statut'] ?? '')) {
+          case 'prévu':     $x['statut']='annulé'; $x['info']='annulé par Louis'; $x['annuleAt']=$ts; $x['updatedAt']=$ts; $c['annules']++; break;
+          case 'annulé':    $c['dejaAnnules']++; break;
+          case 'envoi':     $c['enCours']++; break;
+          case 'envoyé':    $c['dejaPartis']++; break;
+          case 'incertain': $c['incertains']++; break;
+          default:          $c['echecs']++;
+        }
+        $rows[] = $x;
+      }
+      unset($x);
+      $c['introuvables'] = count($ids) - count($vus);
+      return $c['annules'] > 0 ? true : false;       // rien à changer → aucune écriture
+    });
+    if ($res === false && $c['annules'] > 0) out(['ok'=>false,'error'=>'écriture impossible : rien n\'a été annulé']);
+    out(['ok'=>true, 'compte'=>$c, 'rows'=>$rows]);
+  }
+
+  case 'requeuePlanifs': {
+    // Remise en file demandée par Louis. Seules les lignes encore « échec » CÔTÉ SERVEUR sont touchées
+    // (compare-and-set) : un second clic, ou un clic depuis un autre appareil, ne change plus rien.
+    // Jamais les « incertain » (peut-être partis) ni les adresses refusées.
+    $ids = [];
+    foreach ((array)($req['ids'] ?? []) as $v) if (is_scalar($v) && (string)$v !== '') $ids[(string)$v] = 1;
+    if (!$ids) out(['ok'=>false,'error'=>'aucune ligne']);
+    $remis = 0; $rows = []; $jour = gmdate('Y-m-d'); $at = nowTs();
+    $w = majTable($DATA_DIR, 'planifs', function(&$t) use ($ids, &$remis, &$rows, $jour, $at) {
+      foreach ($t as &$x) {
+        if (!isset($ids[(string)($x['id'] ?? '')])) continue;
+        if (($x['statut'] ?? '') === 'échec' && ($x['typeEchec'] ?? '') !== 'adresse') {
+          $x['statut']='prévu'; $x['date']=$jour; $x['envoiLe']=$at; $x['tentatives']=0; $x['reessaiApres']=''; $x['typeEchec']='';
+          $x['info']='remis en file le '.gmdate('d/m').' par Louis'; $x['updatedAt']=$at; $remis++;
+        }
+        $rows[] = $x;          // ligne COMPLÈTE (html compris) : une version allégée effacerait le contenu à envoyer
+      }
+      unset($x);
+      return $remis ? true : false;   // rien à remettre : aucune écriture
+    });
+    if ($remis && $w === false) out(['ok'=>false,'error'=>'écriture impossible']);
+    out(['ok'=>true,'remis'=>$remis,'rows'=>$rows]);
   }
 
   case 'empreintes': {
@@ -1483,8 +1883,13 @@ switch ($action) {
 
   case 'putConfig': {
     $entrant = is_array($req['config'] ?? null) ? $req['config'] : [];
-    $ok = sousVerrou($DATA_DIR, 'config', function() use ($DATA_DIR, $entrant) {
+    $graine = $entrant['desaboKey'] ?? null;          // copie détenue par un appareil (reprise après perte du serveur)
+    unset($entrant['desaboKey'], $entrant['desaboLegacy'], $entrant['desaboLegacyJusqua']);   // seul le serveur les pose
+    $ok = sousVerrou($DATA_DIR, 'config', function() use ($DATA_DIR, $entrant, $graine) {
       $actuel = readJson("$DATA_DIR/config.json"); if (!is_array($actuel)) $actuel = [];
+      if (empty($actuel['desaboKey']) && is_string($graine) && preg_match('/^[A-Za-z0-9]{16,128}$/', $graine))
+        $actuel['desaboKey'] = $graine;               // seulement si le serveur n'a aucune clé
+      desaboInit($actuel);                            // AVANT la fusion : fige la formKey qui a signé les liens déjà envoyés
       // fusion par clé : un appareil qui ignore un réglage récent ne l'efface plus
       return writeJson("$DATA_DIR/config.json", array_merge($actuel, $entrant));
     });
@@ -1512,10 +1917,68 @@ switch ($action) {
   }
 
   case 'sendEmail': {
+    ignore_user_abort(true);   // si le téléphone coupe, PHP finit l'envoi ET son inscription au registre
+    // Toutes les réponses portent idem:true : le CRM sait qu'il peut redemander avec le même trackId sans risque de doublon.
+    // Jamais d'email d'actualité vers une adresse du registre, même depuis un appareil qui n'a pas
+    // encore récupéré le désabonnement. Sans le champ (appli en cache), un email qui porte
+    // un lien de désabonnement compte comme email d'actualité. Refus : aucun appel SMTP, aucune écriture.
+    $estMkt = array_key_exists('marketing', $req) ? !empty($req['marketing'])
+            : (strpos((string)($req['html'] ?? ''), 'action=desabo') !== false);
+    if ($estMkt) { $ds = desabosSet($DATA_DIR);
+      if (isset($ds[desaboNorm($req['to'] ?? '')])) out(['ok'=>false, 'desabo'=>true, 'idem'=>true, 'info'=>'destinataire désabonné des actualités : email non envoyé']); }
     $tu='';
     if(!empty($req['trackId'])){ $base=(isset($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off'?'https':'http').'://'.$_SERVER['HTTP_HOST'].$_SERVER['SCRIPT_NAME']; $tu=$base.'?action=track&m='.rawurlencode($req['trackId']); }
-    list($ok,$info)=smtpSend($req['to']??'', $req['subject']??'', $req['body']??'', $req['attachName']??'', $req['attachB64']??'', $tu, $req['html']??'');
-    out(['ok'=>$ok, 'info'=>$info]);
+    // List-Unsubscribe : campagnes, tests de campagne et emails d'actualité « 1 clic », jamais devis ni factures
+    $lu = ($estMkt || in_array((string)($req['kind'] ?? ''), ['campagne','marketing'], true)) ? urlDesabo($DATA_DIR, $req['to'] ?? '') : '';
+    $res = envoiUnique($DATA_DIR, [
+        'trackId'=>$req['trackId'] ?? '', 'to'=>$req['to'] ?? '', 'subject'=>$req['subject'] ?? '', 'ref'=>$req['ref'] ?? '',
+        'forcer'=>!empty($req['forcer']), 'confirme'=>!empty($req['confirme']),
+        'pj'=>(int)(strlen((string)($req['attachB64'] ?? ''))*3/4), 'origine'=>($estMkt ? 'crm-actualité' : 'crm')],
+      function() use ($req, $tu, $lu) {
+        return smtpSend($req['to']??'', $req['subject']??'', $req['body']??'', $req['attachName']??'', $req['attachB64']??'', $tu, $req['html']??'',
+                        ['listUnsub'=>$lu, 'mid'=>(string)($req['trackId']??'')]);
+      });
+    out($res + ['idem'=>true]);
+  }
+
+  case 'journalEnvois': {   // lecture seule : ce qui est réellement parti du serveur (50 dernières lignes)
+    $reg = envoisLire($DATA_DIR); $now = time();
+    uasort($reg, function($a, $b){ return ($b['t'] ?? 0) <=> ($a['t'] ?? 0); });
+    $o = []; foreach ($reg as $x) { $o[] = ['at'=>gmdate('Y-m-d\\TH:i:s\\Z', (int)($x['t'] ?? 0)), 'to'=>$x['to'] ?? '', 'sujet'=>$x['sujet'] ?? '',
+      'statut'=>$x['s'] ?? '', 'origine'=>$x['o'] ?? '', 'info'=>$x['info'] ?? '']; if (count($o) >= 50) break; }
+    $n = 0; foreach ($reg as $x) if (($x['s'] ?? '') !== 'échec' && ($x['t'] ?? 0) > $now - 86400) $n++;
+    out(['ok'=>true, 'entrees'=>$o, 'jour'=>$n, 'plafond'=>plafondJour()]);
+  }
+
+  case 'desaboManuel': {
+    // Opposition (etat=1) ou réabonnement (etat=0) saisi par Louis. Écrit seulement _desabos.json :
+    // les fiches n'ont qu'un écrivain (l'appli, via DB.save). Rejouer la même demande n'écrit rien.
+    $em = desaboNorm($req['email'] ?? '');
+    if ($em === '' || !filter_var($em, FILTER_VALIDATE_EMAIL)) out(['ok'=>false,'error'=>'adresse email invalide']);
+    $etat = !empty($req['etat']);
+    $note = mb_substr(trim(preg_replace('/[\x00-\x1F\x7F]/u', ' ', (string)($req['note'] ?? ''))), 0, 200);
+    if (!$etat && $note === '') out(['ok'=>false,'error'=>'réabonnement : indique quand et comment la personne l’a demandé']);
+    desabosAmorcer($DATA_DIR);                                      // hors verrou, idempotent
+    $res = sousVerrou($DATA_DIR, 'desabos', function() use ($DATA_DIR, $em, $etat, $note) {
+      $r = desabosLire($DATA_DIR);
+      $x = (isset($r[$em]) && is_array($r[$em])) ? $r[$em] : null;
+      $st = desabosUnion($DATA_DIR, $r)[$em] ?? null;               // registre actif + drapeau de fiche hors registre
+      if ($etat) {
+        if (desaboActif($x)) return ['changed'=>false, 'entree'=>$x]; // déjà opposé : date et note d'origine gardées
+        $flag = ($x === null && $st !== null);                        // connu seulement par un drapeau : on garde sa date
+        $r[$em] = array_merge($x ?: [], ['le'=>($flag && !empty($st['le'])) ? desaboUtc($st['le']) : nowTs(),
+                                        'source'=>$flag ? 'fiche' : 'manuel', 'note'=>$note]);
+      } else {
+        if ($st === null) return ['changed'=>false, 'entree'=>$x];   // rien à lever côté serveur
+        $r[$em] = array_merge(['le'=>(string)($st['le'] ?? ''), 'source'=>(string)($st['source'] ?? 'fiche')], $x ?: [],
+                              ['leveLe'=>nowTs(), 'leveNote'=>$note]);   // entrée gardée : historique, et un vieux drapeau ne revient pas
+        $r[$em]['le'] = desaboUtc($r[$em]['le']);                    // anciens date('c') à +02:00 : comparaison le/leveLe fiable
+      }
+      return writeJson("$DATA_DIR/_desabos.json", $r) ? ['changed'=>true, 'entree'=>$r[$em]] : null;
+    });
+    if ($res === null) out(['ok'=>false,'error'=>'écriture impossible']);
+    $ds = desabosUnion($DATA_DIR, desabosLire($DATA_DIR));
+    out(['ok'=>true, 'changed'=>$res['changed'], 'entree'=>$res['entree'], 'desabos'=>($ds ?: new stdClass())]);
   }
 
   default: out(['ok'=>false, 'error'=>'action inconnue: '.$action]);
