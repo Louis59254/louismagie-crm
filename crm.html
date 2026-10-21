@@ -798,7 +798,7 @@ function showApp(){
   // cloudAuth() lit la session ET la connexion mémorisée : avant, « rester connecté »
   // empêchait toute récupération au démarrage et chaque appareil restait sur ses données.
   if(cloudUrl()&&cloudAuth()){ _dernierPull=Date.now(); cloudPull().then(r=>{
-      if(RENDERERS[_currentView]&&!mktEnSaisie())RENDERERS[_currentView](currentParams); updateBadges();
+      if(RENDERERS[_currentView]&&!vueEnSaisie())RENDERERS[_currentView](currentParams); updateBadges();
       if(r==='pulled'||r==='init') verifierCoherence();
       if(r!=='pulled'&&r!=='init') toast('⚠️ Serveur injoignable : tu vois les données de cet appareil. Rien ne sera envoyé tant que la connexion n\'est pas rétablie — tes modifications sont gardées ici.','err');
     }); }
@@ -945,8 +945,10 @@ RENDERERS.dashboard=function(){
   // Prestations passées jamais clôturées → bloque la facture de solde + la demande d'avis
   prestations.filter(p=>p.statutRealisation==='Confirmée'&&p.dateEvenement&&daysSince(p.dateEvenement)>0&&daysSince(p.dateEvenement)<=45).forEach(p=>{
     alrt('cloture-'+p.id,'warning','🎬','<strong>Prestation passée</strong> ('+fmtDateShort(p.dateEvenement)+' · '+esc(p.typePrestation)+') — bien passée ? <a onclick="marquerRealisee(\''+p.id+'\')" style="color:inherit;text-decoration:underline;cursor:pointer">✓ Marquer réalisée</a> pour débloquer la facture de solde et l\'avis Google.',2); });
-  const devisVieux=devis.filter(d=>d.statut==='Envoyé'&&daysSince(d.dateEnvoi)>7);
-  devisVieux.forEach(d=>{ alrt('dvieux-'+d.id,'warning','⏳','<strong>Devis '+esc(d.id)+' sans réponse</strong> ('+esc(d.nomClient)+', envoyé le '+fmtDateShort(d.dateEnvoi)+'). <a onclick="voirDevis(\''+d.id+'\')" style="color:inherit;text-decoration:underline;cursor:pointer">Ouvrir</a>',3); });
+  devisARelancer().forEach(d=>{ const n=(d.relances||[]).length;
+    alrt('dvieux-'+d.id+'-'+n,'warning','⏳','<strong>Devis '+esc(d.id)+' sans réponse</strong> ('+esc(d.nomClient)+', '+(n?('relancé le '+fmtDateShort(d.relances[n-1])):('envoyé le '+fmtDateShort(d.dateEnvoi)))+'). '
+      +'<a onclick="relancerDevis(\''+d.id+'\')" style="color:inherit;text-decoration:underline;cursor:pointer">'+(n?'Faire la 2ᵉ relance':'Relancer')+'</a> · '
+      +'<a onclick="voirDevis(\''+d.id+'\')" style="color:inherit;text-decoration:underline;cursor:pointer">Ouvrir</a>',3); });
   const prestaProches=prestations.filter(p=>p.statutRealisation==='Confirmée'&&daysFromNow(p.dateEvenement)>=0&&daysFromNow(p.dateEvenement)<=7);
   prestaProches.forEach(p=>{ const j=daysFromNow(p.dateEvenement);
     alrt('presta-'+p.id,'info','📅','<strong>Prestation '+(j===0?"aujourd'hui":'J-'+j)+'</strong> · '+esc(p.typePrestation)+' — '+esc(p.lieu)+' ('+esc(p.horaire||p.creneau)+'). Contact : '+esc(p.contactSurPlace||'—'),2); });
@@ -1179,6 +1181,28 @@ function voirDemande(id){
     ${d.statut!=='Converti'?`<button class="btn btn-or" onclick="closeModal();nav('devis-create',{demandeId:'${id}'})">→ Créer le devis</button>`:''}`;
   openModal('Demande · '+esc(d.nom),body+lienCli+repondre,footer);
 }
+/* ─── Relance des devis sans réponse ─── */
+function delaiRelanceDevis(){ return +DB.config().delaiRelanceDevis||7; }
+function derniereNouvelleDevis(d){ const r=(d.relances||[]).slice(-1)[0]; return r||d.dateEnvoi||''; }
+/* Devis envoyés, sans réponse depuis le délai, événement à venir, 2 relances max */
+function devisARelancer(){
+  return DB.all('devis').filter(d=>d.statut==='Envoyé'&&!d.signataire&&d.email!==undefined
+    &&derniereNouvelleDevis(d)&&daysSince(derniereNouvelleDevis(d))>=delaiRelanceDevis()
+    &&(d.relances||[]).length<2&&(!d.dateEvenement||daysFromNow(d.dateEvenement)>=0));
+}
+function relancerDevis(id){
+  const d=DB.get('devis',id); if(!d) return;
+  const n=(d.relances||[]).length+1;
+  const t=EMAIL_TPL.relanceDevis(d,n);
+  if(!t.to){ toast('Pas d\'adresse email sur ce devis','err'); return; }
+  openMailComposer({ titre:'Relance '+n+' · devis '+id, to:t.to, subject:t.subject, body:t.body,
+    kind:'relance-devis', ref:id, pdfId:id, pdfType:'Devis',
+    onSent:()=>{ const x=DB.get('devis',id); if(!x) return;
+      x.relances=(x.relances||[]).concat(todayISO()); DB.save('devis',x);
+      logActivite('Relance '+x.relances.length+' envoyée · devis '+id);
+      updateBadges(); if(typeof RENDERERS[_currentView]==='function') RENDERERS[_currentView](currentParams); } });
+}
+
 /* Réponse rapide à une demande : indisponible, ou demande de précisions/appel */
 function reponseDemande(id,type){
   const d=DB.get('demandes',id); if(!d) return;
@@ -1291,7 +1315,9 @@ function voirDevis(id){
   const lienBtn=cloudUrl()?`<button class="btn btn-ghost" onclick="copySignLink('${id}')">🔗 Copier le lien de signature</button>`:'';
   const accuse=(d.signataire||d.signedAt)&&!d.mailSignatureFait
     ? `<button class="btn btn-success" onclick="mailSignature('${id}')">✍️ Accusé de signature + acompte</button>` : '';
-  const email=`<button class="btn btn-or" onclick="envoyerDevisMail('${id}')">✉ ${d.statut==='Brouillon'?'Envoyer le devis':'Renvoyer le devis'}</button>${accuse}${lienBtn}`;
+  const relance=d.statut==='Envoyé'&&!d.signataire
+    ? `<button class="btn btn-ghost" onclick="relancerDevis('${id}')">🔔 Relancer${(d.relances||[]).length?' ('+(d.relances||[]).length+' déjà)':''}</button>` : '';
+  const email=`<button class="btn btn-or" onclick="envoyerDevisMail('${id}')">✉ ${d.statut==='Brouillon'?'Envoyer le devis':'Renvoyer le devis'}</button>${relance}${accuse}${lienBtn}`;
   let manu='';
   if(d.statut==='Brouillon') manu=`<button class="btn btn-ghost" onclick="majDevis('${id}','Envoyé');voirDevis('${id}')">✓ Marquer envoyé</button>`;
   else if(d.statut==='Envoyé') manu=`<button class="btn btn-success" onclick="majDevis('${id}','Accepté');voirDevis('${id}')">✓ Accepté</button><button class="btn btn-warn" onclick="majDevis('${id}','Refusé');voirDevis('${id}')">✗ Refusé</button>`;
@@ -1352,6 +1378,7 @@ function timelineDevis(id){
   const mailsDevis=DB.all('mails').filter(m=>m.ref===id&&m.kind==='devis');
   mailsDevis.forEach(m=>{ add(m.date,'✉️','Devis envoyé à '+(m.to||'—'),'#2980B9'); if(isOpened(m.id)) add(m.date,'👁️','Email ouvert par le client','#E67E22'); });
   if(!mailsDevis.length&&d.dateEnvoi) add(d.dateEnvoi,'✉️','Devis envoyé','#2980B9');
+  (d.relances||[]).forEach((r,i)=>add(r,'🔔','Relance '+(i+1)+' envoyée','#E67E22'));
   if(d.signataire||d.signatureImg) add(d.signedAt||d.dateAcceptation,'✍️','Signé en ligne'+(d.signataire?' par '+d.signataire:''),'#27AE60');
   else if(d.dateAcceptation) add(d.dateAcceptation,'✅','Devis accepté','#27AE60');
   DB.all('recettes').filter(r=>r.ref===id).forEach(r=>add(r.date,'💰',(r.type||'Acompte')+' encaissé · '+fmtEur(r.montant),'#C4973A'));
@@ -3097,6 +3124,40 @@ function exportClientsCSV(){
 
 /* ═══════════ VUE : CRÉER UN DEVIS ═══════════ */
 let DV={};
+/* ─── Brouillon du devis en cours de saisie ───
+   Gardé sur l'appareil à chaque frappe : une synchro, un retour dans l'app ou un
+   changement d'écran ne fait plus perdre un devis non enregistré. */
+const LS_DV='lm_dv_brouillon'; let _dvCle='';
+function dvCleDe(params){ params=params||{}; return params.id?('id:'+params.id):('nouveau:'+(params.demandeId||params.clientId||'')); }
+function dvCapture(){
+  if(_currentView!=='devis-create'||!document.getElementById('dv-nomClient')) return false;
+  const g=id=>{ const e=document.getElementById('dv-'+id); return e?e.value:''; };
+  DV.nomClient=g('nomClient'); DV.email=g('email'); DV.tel=g('tel');
+  DV.typeEvenement=g('type'); DV.dateEvenement=g('dateEvenement'); DV.creneau=g('creneau'); DV.horaire=g('horaire');
+  DV.lieu=g('lieu'); DV.distanceKm=+g('distanceKm')||0; DV.nbInvites=g('nbInvites'); DV.notes=g('notes');
+  DV.remise=+g('remise')||0; DV.acomptePct=+g('acomptePct')||0;
+  return true;
+}
+function dvBrouillonSauver(){
+  if(!dvCapture()) return;
+  try{ const {_calc,...x}=DV; localStorage.setItem(LS_DV,JSON.stringify({cle:_dvCle,ts:new Date().toISOString(),d:x}));
+    const el=document.getElementById('dv-etat'); if(el) el.textContent='Brouillon gardé sur cet appareil · '+new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}); }catch(_){}
+}
+function dvBrouillonLire(cle){ try{ const b=JSON.parse(localStorage.getItem(LS_DV)); return b&&b.cle===cle&&b.d?b:null; }catch(_){ return null; } }
+function dvBrouillonEffacer(){ try{ localStorage.removeItem(LS_DV); }catch(_){} }
+function dvRepartirDeZero(){ if(!confirm('Effacer le brouillon et repartir de zéro ?')) return; dvBrouillonEffacer(); RENDERERS['devis-create'](currentParams); }
+let _dvT=null;
+function dvSuivreSaisie(){
+  const v=document.getElementById('view-devis-create'); if(!v||v.dataset.dvAuto) return; v.dataset.dvAuto='1';
+  const tic=()=>{ clearTimeout(_dvT); _dvT=setTimeout(dvBrouillonSauver,600); };
+  v.addEventListener('input',tic); v.addEventListener('change',tic);
+  v.addEventListener('click',e=>{ if(e.target.closest('button')) setTimeout(dvBrouillonSauver,50); });   // ajout/suppression de ligne, catalogue
+}
+document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='hidden'&&_currentView==='devis-create') dvBrouillonSauver(); });
+window.addEventListener('pagehide',()=>{ if(_currentView==='devis-create') dvBrouillonSauver(); });
+/* Vues de saisie à ne jamais redessiner automatiquement (synchro, retour dans l'app) */
+function vueEnSaisie(){ return mktEnSaisie()||_currentView==='devis-create'; }
+
 RENDERERS['devis-create']=function(params){
   const cfg=DB.config();
   let d;
@@ -3108,6 +3169,10 @@ RENDERERS['devis-create']=function(params){
     if(params.clientId){ const c=DB.get('clients',params.clientId); if(c){
       Object.assign(d,{idClient:c.id,nomClient:(c.prenom+' '+c.nom).trim(),email:c.email,tel:c.tel,lieu:c.adresse}); } }
   }
+  _dvCle=dvCleDe(params);
+  const brouillon=dvBrouillonLire(_dvCle);
+  const restaure=brouillon&&(!params.id||!d.updatedAt||brouillon.ts>d.updatedAt);
+  if(restaure) d=Object.assign({},d,brouillon.d);
   if(!d.prestations||!d.prestations.length) d.prestations=[{label:'',prix:0,duree:''}];
   DV=d;
   const clients=DB.all('clients');
@@ -3168,6 +3233,15 @@ RENDERERS['devis-create']=function(params){
       <button class="btn btn-or" onclick="dvSave(true)">${d.id?'Enregistrer':'Enregistrer le brouillon'}</button>
     </div></div>`;
   dvRenderLines(); dvRecalc();
+  // Indicateur d'enregistrement local + bandeau si un brouillon a été restauré
+  const vue=document.getElementById('view-devis-create'), boite=vue&&vue.firstElementChild;
+  if(boite){
+    boite.insertAdjacentHTML('afterbegin', restaure
+      ? `<div class="alert info" style="margin-bottom:14px"><span class="alert-icon">💾</span><div style="flex:1">Brouillon du ${esc(new Date(brouillon.ts).toLocaleString('fr-FR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}))} restauré : rien n'a été perdu. <a onclick="dvRepartirDeZero()" style="color:inherit;text-decoration:underline;cursor:pointer">Repartir de zéro</a></div></div>`
+      : '');
+    boite.insertAdjacentHTML('beforeend','<div id="dv-etat" class="td-dim" style="font-size:12px;margin-top:8px;text-align:right">Enregistrement automatique sur cet appareil</div>');
+  }
+  dvSuivreSaisie();
 };
 function searchEntrepriseDevis(){ return entLookup('dv-ent-q','dv-ent-results','pickEntrepriseDevis'); }
 function pickEntrepriseDevis(i){
@@ -3261,6 +3335,8 @@ function dvSave(go){
   }
   const {_calc,siren,naf,entreprise,...clean}=DV;
   DB.save('devis',clean);
+  dvBrouillonEffacer();                       // le devis est en base : le brouillon local n'a plus lieu d'être
+  _dvCle=dvCleDe({id:DV.id});
   syncPrestationDevis(clean);
   if(DV.idDemandeOrigine){ const dem=DB.get('demandes',DV.idDemandeOrigine); if(dem&&dem.statut!=='Converti'){ dem.statut='Converti'; DB.save('demandes',dem); } }
   logActivite('Devis '+DV.id+' enregistré · '+DV.nomClient);
@@ -3279,6 +3355,21 @@ const EMAIL_TPL={
     const bloc=lien?`\n\n✍️ Pour accepter, signez votre devis en ligne en 1 clic (bon pour accord) :\n${lien}\n`:'';
     return { to:ct.email, subject:'Votre devis LouisMagie — '+d.id,
       body:`Bonjour ${prenomDe(ct.nom||d.nomClient)},\n\nSuite à votre demande, voici votre devis ${d.id} pour la prestation du ${fmtDateFr(d.dateEvenement)} (${d.creneau||''}) à ${d.lieu||''}.\n\nMontant total TTC : ${fmtEur(d.montantTTC)}\nAcompte de réservation (${d.acomptePct||0} %) : ${fmtEur(ac)}\n\nLa date est confirmée et bloquée dès réception de l'acompte. Le devis détaillé est joint en PDF.${bloc}\nJe reste à votre disposition pour toute question.\n\n${sig()}` }; },
+  /* Formule d'appel : prénom d'une personne, jamais le premier mot d'une raison sociale */
+  bonjour(d){ const c=clientDeDevis(d)||{}; const i=d.idContact&&typeof interlocuteur==='function'?interlocuteur(c.id,d.idContact):null;
+    const pi=i&&(i.prenom||'').trim(); if(pi) return 'Bonjour '+pi+',';
+    const RS=/^(mairie|ville|commune|sarl|sas|sa|eurl|association|agence|soci[ée]t[ée]|h[ôo]tel|ch[âa]teau|restaurant|domaine|cabinet|groupe|office|c[ce]as?)\b/i;
+    const pro=['entreprise','partenaire','collectivite','collectivité','agence','association'].includes(String(c.type||'').toLowerCase())||!!c.siren
+      ||RS.test(d.nomClient||'')||RS.test(((c.prenom||'')+' '+(c.nom||'')).trim());   // « Mairie » enregistré comme prénom par un ancien découpage
+    if(pro) return 'Bonjour,';
+    if((c.prenom||'').trim()) return 'Bonjour '+c.prenom.trim()+',';
+    const p=prenomDe(d.nomClient); return p?('Bonjour '+p+','):'Bonjour,'; },
+  /* Relance d'un devis resté sans réponse */
+  relanceDevis(d,n){ const ct=contactDevis(d); const cfg=DB.config();
+    const tel=(cfg.entrepriseTel||'').trim()||'06 46 89 08 87';
+    const lien=signUrl(d);
+    return { to:ct.email, subject:(n>1?'Petit rappel · ':'')+'Votre devis '+d.id+(d.dateEvenement?(' pour le '+fmtDateShort(d.dateEvenement)):''),
+      body:`${EMAIL_TPL.bonjour(d)}\n\nJe reviens vers vous au sujet du devis ${d.id} que je vous ai envoyé${d.dateEnvoi?(' le '+fmtDateFr(d.dateEnvoi)):''}${d.dateEvenement?(' pour votre événement du '+fmtDateFr(d.dateEvenement)):''}.\n\nAvez-vous pu le consulter ? N'hésitez pas à me contacter pour en savoir plus au ${tel}, ou simplement en répondant à ce mail.${n>1?'\n\nLa date reste libre pour l\'instant, mais je ne peux pas la garder indéfiniment.':''}${lien?('\n\nSi la proposition vous convient, vous pouvez la signer en ligne :\n'+lien):''}\n\nLe devis est joint à ce message.\n\n${sig()}` }; },
   /* Réponse à une demande : je ne suis pas libre */
   demandeIndispo(d){ const q=d.dateEvenement?(' du '+fmtDateFr(d.dateEvenement)):'';
     return { to:d.email||'', subject:'Votre demande'+(d.dateEvenement?(' pour le '+fmtDateShort(d.dateEvenement)):'')+' — LouisMagie',
@@ -3292,7 +3383,7 @@ const EMAIL_TPL={
     const ac=Math.round((+d.montantTTC||0)*pct/100); const cfg=DB.config();
     const rib=[cfg.iban?('IBAN : '+cfg.iban):'', cfg.bic?('BIC : '+cfg.bic):''].filter(Boolean).join('\n');
     return { to:ct.email, subject:'Votre signature est bien reçue — '+d.id,
-      body:`Bonjour ${prenomDe(ct.nom||d.nomClient)},\n\nMerci pour votre signature, elle est enregistrée.\n\nJ'ai posé une option sur le ${fmtDateFr(d.dateEvenement)}${d.creneau?(' ('+d.creneau+')'):''}${d.lieu?(' à '+d.lieu):''} : je ne propose plus cette date à personne d'autre.\n\nPour la confirmer, il reste l'acompte de réservation${pct?(' de '+pct+' %'):''} : ${fmtEur(ac)}${rib?('\n\n'+rib):''}\n\nDès réception, la date est à vous et je vous envoie la facture d'acompte. Le solde se règle après la prestation.\n\nUne question d'ici là ? Écrivez-moi.\n\n${sig()}` }; },
+      body:`${EMAIL_TPL.bonjour(d)}\n\nMerci pour votre signature, elle est enregistrée.\n\nJ'ai posé une option sur le ${fmtDateFr(d.dateEvenement)}${d.creneau?(' ('+d.creneau+')'):''}${d.lieu?(' à '+d.lieu):''} : je ne propose plus cette date à personne d'autre.\n\nPour la confirmer, il reste l'acompte de réservation${pct?(' de '+pct+' %'):''} : ${fmtEur(ac)}${rib?('\n\n'+rib):''}\n\nDès réception, la date est à vous et je vous envoie la facture d'acompte. Le solde se règle après la prestation.\n\nUne question d'ici là ? Écrivez-moi.\n\n${sig()}` }; },
   facture(f,nom){ const lbl=f.type==='acompte'?'facture d\'acompte':(f.type==='solde'?'facture de solde':'facture');
     const corps=f.type==='acompte'
       ? `Montant de l'acompte : ${fmtEur(factMontant(f))}\n(acompte de réservation encaissé — le solde sera facturé après la prestation)`
@@ -4908,7 +4999,7 @@ async function verifierMaintenant(){
   }finally{
     if(b){ b.disabled=false; b.textContent='🔍 Vérifier maintenant'; }
     if(p) p.innerHTML=coherenceHtml();
-    if(typeof RENDERERS[_currentView]==='function'&&_currentView!=='reglages') RENDERERS[_currentView](currentParams);
+    if(typeof RENDERERS[_currentView]==='function'&&_currentView!=='reglages'&&!vueEnSaisie()) RENDERERS[_currentView](currentParams);
   }
 }
 /* Diagnostic à copier : nombres de fiches et empreintes par table — aucune donnée personnelle */
@@ -5140,7 +5231,7 @@ async function voirJournalEnvois(){
 }
 async function cloudSyncNow(){
   await cloudFlushPending();
-  const res=await cloudPull(); if(typeof RENDERERS[_currentView]==='function') RENDERERS[_currentView](currentParams); updateBadges();
+  const res=await cloudPull(); if(typeof RENDERERS[_currentView]==='function'&&!vueEnSaisie()) RENDERERS[_currentView](currentParams); updateBadges();
   const reste=pendAll();
   if(!reste.length && (res==='pulled'||res==='init')){
     const c=await verifierCoherence();
@@ -5499,7 +5590,7 @@ async function cloudReprise(){
   if(Date.now()-_dernierPull < 60000) return;
   _dernierPull=Date.now();
   const r=await cloudPull();
-  if(r==='pulled'&&typeof RENDERERS[_currentView]==='function'){ if(!mktEnSaisie()) RENDERERS[_currentView](currentParams); updateBadges(); }
+  if(r==='pulled'&&typeof RENDERERS[_currentView]==='function'){ if(!vueEnSaisie()) RENDERERS[_currentView](currentParams); updateBadges(); }
   if(r==='pulled') verifierCoherence();
 }
 document.addEventListener('visibilitychange',()=>{
