@@ -536,6 +536,7 @@ function icsEvenement($uid, $date, $horaire, $titre, $lieu, $desc, $option, $sta
   if (trim((string)$desc) !== '') $l[] = 'DESCRIPTION:'.icsTexte($desc);
   $l[] = 'STATUS:'.($option ? 'TENTATIVE' : 'CONFIRMED');
   $l[] = 'TRANSP:'.($option ? 'TRANSPARENT' : 'OPAQUE');
+  $l[] = 'COLOR:tomato';                               // RFC 7986 : rouge tomate des événements magie
   $l[] = 'END:VEVENT';
   return implode('', array_map('icsLigne', $l));
 }
@@ -1537,7 +1538,7 @@ if ($action === 'agenda') {
   header('Content-Disposition: inline; filename="louismagie.ics"');
   header('Cache-Control: no-cache');
   echo "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//LouisMagie//CRM//FR\r\nCALSCALE:GREGORIAN\r\nMETHOD:PUBLISH\r\n"
-     ."X-WR-CALNAME:LouisMagie · Prestations\r\nX-WR-TIMEZONE:Europe/Paris\r\nX-PUBLISHED-TTL:PT1H\r\nREFRESH-INTERVAL;VALUE=DURATION:PT1H\r\n"
+     ."X-WR-CALNAME:LouisMagie · Prestations\r\nX-WR-TIMEZONE:Europe/Paris\r\nX-PUBLISHED-TTL:PT1H\r\nREFRESH-INTERVAL;VALUE=DURATION:PT1H\r\nCOLOR:tomato\r\nX-APPLE-CALENDAR-COLOR:#FF6347\r\n"
      .$tz.$ev."END:VCALENDAR\r\n";
   exit;
 }
