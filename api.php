@@ -485,6 +485,61 @@ function desaboCles($DATA_DIR){
     return (string)$cfg['desaboKey'];
   });
 }
+/* ═══ Flux d'agenda (iCal) pour Apple Calendar, Family Wall, Google… ═══
+   Lien secret : ?action=agenda&k=CLE. La clé ne vit QUE sur le serveur (jamais renvoyée
+   par getAll, jamais acceptée par putConfig) : la régénérer coupe aussitôt l'ancien lien. */
+function agendaCle($DATA_DIR, $renouveler = false){
+  return sousVerrou($DATA_DIR, 'config', function() use ($DATA_DIR, $renouveler) {
+    $f = "$DATA_DIR/config.json"; $cfg = readJson($f);
+    if (!is_array($cfg)) { if (is_file($f)) return ''; $cfg = []; }
+    if ($renouveler || !is_string($cfg['agendaKey'] ?? null) || strlen($cfg['agendaKey']) < 24) {
+      $cfg['agendaKey'] = bin2hex(random_bytes(20));
+      if (!writeJson($f, $cfg)) return '';
+    }
+    return (string)$cfg['agendaKey'];
+  });
+}
+function icsTexte($t){   // RFC 5545 : échappement des valeurs texte
+  return str_replace(["\\", ";", ",", "\r\n", "\n", "\r"], ["\\\\", "\;", "\\,", "\\n", "\\n", ""], (string)$t);
+}
+function icsLigne($l){   // pliage à 75 octets sans couper un caractère UTF-8
+  $out = ''; while (strlen($l) > 75) {
+    $n = 75; while ($n > 1 && (ord($l[$n]) & 0xC0) === 0x80) $n--;
+    $out .= substr($l, 0, $n)."\r\n "; $l = substr($l, $n);
+  }
+  return $out.$l."\r\n";
+}
+/* « 20h-23h », « 21h45 - 23h45 », « 20:00 » → [debut, fin] en minutes ; fin peut être null */
+function icsHoraire($h){
+  if (!preg_match_all('/(\d{1,2})\s*[h:]\s*(\d{2})?/u', (string)$h, $m, PREG_SET_ORDER)) return null;
+  $t = array_map(function($x){ return min(23, (int)$x[1]) * 60 + (isset($x[2]) && $x[2] !== '' ? min(59, (int)$x[2]) : 0); }, $m);
+  return [$t[0], $t[1] ?? null];
+}
+function icsEvenement($uid, $date, $horaire, $titre, $lieu, $desc, $option, $stamp){
+  if (!preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', (string)$date, $d)) return '';
+  $l = ['BEGIN:VEVENT', 'UID:'.$uid.'@louismagie', 'DTSTAMP:'.$stamp];
+  $h = icsHoraire($horaire);
+  if ($h) {
+    $deb = $h[0]; $fin = $h[1] !== null ? $h[1] : $deb + 120;      // sans heure de fin : 2 h
+    $j0 = mktime(0, 0, 0, (int)$d[2], (int)$d[3], (int)$d[1]);
+    if ($fin <= $deb) $fin += 1440;                                 // 22h-1h : finit le lendemain
+    $jf = $fin >= 1440 ? $j0 + 86400 : $j0;
+    $l[] = 'DTSTART;TZID=Europe/Paris:'.date('Ymd', $j0).sprintf('T%02d%02d00', intdiv($deb, 60), $deb % 60);
+    $l[] = 'DTEND;TZID=Europe/Paris:'.date('Ymd', $jf).sprintf('T%02d%02d00', intdiv($fin % 1440, 60), $fin % 60);
+  } else {
+    $j0 = mktime(0, 0, 0, (int)$d[2], (int)$d[3], (int)$d[1]);
+    $l[] = 'DTSTART;VALUE=DATE:'.date('Ymd', $j0);
+    $l[] = 'DTEND;VALUE=DATE:'.date('Ymd', $j0 + 86400);
+  }
+  $l[] = 'SUMMARY:'.icsTexte(($option ? '[OPTION] ' : '').$titre);
+  if (trim((string)$lieu) !== '') $l[] = 'LOCATION:'.icsTexte($lieu);
+  if (trim((string)$desc) !== '') $l[] = 'DESCRIPTION:'.icsTexte($desc);
+  $l[] = 'STATUS:'.($option ? 'TENTATIVE' : 'CONFIRMED');
+  $l[] = 'TRANSP:'.($option ? 'TRANSPARENT' : 'OPAQUE');
+  $l[] = 'END:VEVENT';
+  return implode('', array_map('icsLigne', $l));
+}
+
 /* Même calcul que hmac16 du CRM : HMAC-SHA256 de l'adresse en minuscules, 16 caractères hexadécimaux */
 function desaboSig($em, $cle){ return substr(hash_hmac('sha256', strtolower(trim((string)$em)), (string)$cle), 0, 16); }
 /* 'lien' (clé serveur), 'lien-ancien' (formKey d'avant, vrai destinataire, moins de 12 mois) ou '' */
@@ -1430,6 +1485,63 @@ if ($action === 'newDemande') {
 }
 
 /* ===== Logo public (sert le logo configuré pour l'en-tête des emails) ===== */
+/* ===== Flux d'agenda (public, protégé par la clé secrète du lien) ===== */
+if ($action === 'agenda') {
+  $cfgA = readJson("$DATA_DIR/config.json"); if (!is_array($cfgA)) $cfgA = [];
+  $cle = (string)($cfgA['agendaKey'] ?? '');
+  if ($cle === '' || !hash_equals($cle, (string)($_GET['k'] ?? ''))) { http_response_code(404); header('Content-Type: text/plain'); echo 'Agenda introuvable'; exit; }
+  $discret = !empty($cfgA['agendaDiscret']);            // famille : pas de nom de client ni de téléphone
+  $avecOptions = ($cfgA['agendaOptions'] ?? true) !== false;
+  $depuis = date('Y-m-d', strtotime('-60 days'));
+  $stamp = gmdate('Ymd\THis\Z');
+  $devis = []; foreach ((array)readJson("$DATA_DIR/devis.json") as $d) if (is_array($d) && isset($d['id'])) $devis[(string)$d['id']] = $d;
+  $ev = '';
+  foreach ((array)readJson("$DATA_DIR/prestations.json") as $p) {
+    if (!is_array($p) || ($p['dateEvenement'] ?? '') < $depuis) continue;
+    $st = (string)($p['statutRealisation'] ?? '');
+    $option = $st === 'Option';
+    if ($option && !$avecOptions) continue;
+    if (!in_array($st, ['Option', 'Confirmée', 'Réalisée'], true)) continue;
+    $dv = $devis[(string)($p['idDevis'] ?? '')] ?? [];
+    if (($dv['statut'] ?? '') === 'Refusé') continue;
+    $quoi = trim((string)($p['typePrestation'] ?? '')) ?: 'Prestation magie';
+    $client = trim((string)($dv['nomClient'] ?? ''));
+    $titre = $discret ? 'Magie · '.$quoi : ($client !== '' ? $client.' · ' : '').$quoi;
+    $desc = $discret ? ($option ? 'Option : date pas encore confirmée.' : '')
+      : implode("\n", array_filter([
+          $option ? 'OPTION : devis envoyé, pas encore accepté.' : 'Prestation confirmée.',
+          $p['creneau'] ?? '' ? 'Créneau : '.$p['creneau'] : '',
+          !empty($p['duree']) ? 'Durée : '.$p['duree'] : '',
+          !empty($p['contactSurPlace']) ? 'Contact : '.trim($p['contactSurPlace']) : '',
+          !empty($p['idDevis']) ? 'Devis '.$p['idDevis'] : '',
+          !empty($p['materielNotes']) ? 'Matériel : '.$p['materielNotes'] : '',
+        ]));
+    $ev .= icsEvenement('presta-'.($p['id'] ?? $p['idDevis'] ?? md5(json_encode($p))), $p['dateEvenement'], $p['horaire'] ?? '',
+                        $titre, $p['lieu'] ?? '', $desc, $option, $stamp);
+  }
+  // Projets « Imagine the Impossible » (agence Inspiration)
+  foreach ((array)readJson("$DATA_DIR/projets.json") as $p) {
+    if (!is_array($p) || ($p['date'] ?? '') < $depuis) continue;
+    $st = (string)($p['statut'] ?? '');
+    if ($st === 'Annulé') continue;
+    $option = $st === 'Prospect';
+    if ($option && !$avecOptions) continue;
+    $nom = trim((string)($p['nom'] ?? '')) ?: 'Imagine the Impossible';
+    $titre = $discret ? 'Magie · Imagine the Impossible' : '🎭 '.$nom;
+    $desc = $discret ? '' : implode("\n", array_filter(['Projet Imagine the Impossible · '.$st,
+      !empty($p['nbInvites']) ? 'Invités : '.$p['nbInvites'] : '', !empty($p['equipe']) ? count((array)$p['equipe']).' magicien(s)' : '']));
+    $ev .= icsEvenement('projet-'.($p['id'] ?? md5(json_encode($p))), $p['date'], $p['dureePresta'] ?? '', $titre, $p['lieu'] ?? '', $desc, $option, $stamp);
+  }
+  $tz = "BEGIN:VTIMEZONE\r\nTZID:Europe/Paris\r\nBEGIN:DAYLIGHT\r\nTZOFFSETFROM:+0100\r\nTZOFFSETTO:+0200\r\nTZNAME:CEST\r\nDTSTART:19700329T020000\r\nRRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU\r\nEND:DAYLIGHT\r\nBEGIN:STANDARD\r\nTZOFFSETFROM:+0200\r\nTZOFFSETTO:+0100\r\nTZNAME:CET\r\nDTSTART:19701025T030000\r\nRRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU\r\nEND:STANDARD\r\nEND:VTIMEZONE\r\n";
+  header('Content-Type: text/calendar; charset=utf-8');
+  header('Content-Disposition: inline; filename="louismagie.ics"');
+  header('Cache-Control: no-cache');
+  echo "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//LouisMagie//CRM//FR\r\nCALSCALE:GREGORIAN\r\nMETHOD:PUBLISH\r\n"
+     ."X-WR-CALNAME:LouisMagie · Prestations\r\nX-WR-TIMEZONE:Europe/Paris\r\nX-PUBLISHED-TTL:PT1H\r\nREFRESH-INTERVAL;VALUE=DURATION:PT1H\r\n"
+     .$tz.$ev."END:VCALENDAR\r\n";
+  exit;
+}
+
 if ($action === 'logo') {
   $config = readJson("$DATA_DIR/config.json"); if(!is_array($config)) $config = [];
   $v = $_GET['v'] ?? '';
@@ -1752,7 +1864,7 @@ switch ($action) {
     if ($firstRun) foreach ($ENTITIES as $e) { if (is_file("$DATA_DIR/$e.json")) { $firstRun = false; break; } }
     $cleDesabo = $firstRun ? '' : desaboCles($DATA_DIR);   // créée une seule fois, sous verrou
     $config = readJson("$DATA_DIR/config.json"); if(!is_array($config)) $config = [];
-    unset($config['desaboLegacy'], $config['desaboLegacyJusqua']);   // restent sur le serveur
+    unset($config['desaboLegacy'], $config['desaboLegacyJusqua'], $config['agendaKey']);   // restent sur le serveur
     if ($cleDesabo === '') unset($config['desaboKey']); else $config['desaboKey'] = $cleDesabo;
     $opens = readJson($DATA_DIR.'/_opens.json'); if(!is_array($opens)) $opens = [];
     $sigs  = readJson($DATA_DIR.'/_signatures.json'); if(!is_array($sigs)) $sigs = [];
@@ -1881,10 +1993,16 @@ switch ($action) {
     out(['ok'=>false, 'error'=>'version introuvable']);
   }
 
+  case 'agendaLien': {
+    $cle = agendaCle($DATA_DIR, !empty($req['renouveler']));
+    if ($cle === '') out(['ok'=>false, 'error'=>'clé d\'agenda impossible à créer']);
+    out(['ok'=>true, 'k'=>$cle]);
+  }
+
   case 'putConfig': {
     $entrant = is_array($req['config'] ?? null) ? $req['config'] : [];
     $graine = $entrant['desaboKey'] ?? null;          // copie détenue par un appareil (reprise après perte du serveur)
-    unset($entrant['desaboKey'], $entrant['desaboLegacy'], $entrant['desaboLegacyJusqua']);   // seul le serveur les pose
+    unset($entrant['desaboKey'], $entrant['desaboLegacy'], $entrant['desaboLegacyJusqua'], $entrant['agendaKey']);   // seul le serveur les pose
     $ok = sousVerrou($DATA_DIR, 'config', function() use ($DATA_DIR, $entrant, $graine) {
       $actuel = readJson("$DATA_DIR/config.json"); if (!is_array($actuel)) $actuel = [];
       if (empty($actuel['desaboKey']) && is_string($graine) && preg_match('/^[A-Za-z0-9]{16,128}$/', $graine))

@@ -4775,6 +4775,13 @@ RENDERERS.reglages=function(){
       <div style="text-align:right;margin-top:10px"><button class="btn btn-or" onclick="saveParams()">Enregistrer</button></div>
     </div>
 
+    <div class="panel"><div class="panel-title">📅 Mon agenda sur Apple Calendar et Family Wall</div>
+      <div class="td-dim" style="margin-bottom:12px">Un lien d'abonnement : tes prestations confirmées et tes options apparaissent dans ton agenda et se mettent à jour toutes seules. Les options sont marquées <strong>[OPTION]</strong>.</div>
+      <label style="display:flex;align-items:center;gap:9px;font-size:14px;cursor:pointer;margin-bottom:8px"><input type="checkbox" id="ag-options" ${cfg.agendaOptions===false?'':'checked'} onchange="agendaReglage()" style="width:18px;height:18px">Inclure les options (devis envoyés, pas encore acceptés)</label>
+      <label style="display:flex;align-items:center;gap:9px;font-size:14px;cursor:pointer;margin-bottom:14px"><input type="checkbox" id="ag-discret" ${cfg.agendaDiscret?'checked':''} onchange="agendaReglage()" style="width:18px;height:18px">Mode famille : masquer le nom des clients et leurs coordonnées</label>
+      <div id="agenda-lien"><button class="btn btn-or" onclick="agendaAfficherLien()">🔗 Obtenir mon lien d'agenda</button></div>
+    </div>
+
     <div class="panel"><div class="panel-title">🛡️ Mes données entre mes appareils</div>
       <div id="coherence-panel">${coherenceHtml()}</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">
@@ -5979,6 +5986,37 @@ function partagerBrief(pid){
        <a class="btn btn-ghost" href="${esc(url)}" target="_blank" rel="noopener">👁 Ouvrir la page</a></div>
      <div class="panel-title" style="font-size:13px">Envoyer à l'équipe</div>${liste}`,
     '<button class="btn btn-ghost" onclick="editBrief(\''+pid+'\')">← Retour</button>');
+}
+/* ─── Flux d'agenda (iCal) : Apple Calendar, Family Wall, Google ─── */
+function agendaReglage(){
+  const c=DB.config();
+  c.agendaOptions=!!(document.getElementById('ag-options')||{}).checked;
+  c.agendaDiscret=!!(document.getElementById('ag-discret')||{}).checked;
+  DB.saveConfig(c); toast('Réglage enregistré · ton agenda se met à jour au prochain rafraîchissement','ok');
+}
+async function agendaAfficherLien(renouveler){
+  const box=document.getElementById('agenda-lien'); if(!box) return;
+  if(!cloudUrl()||!cloudAuth()){ toast('Connecte-toi au serveur pour obtenir le lien','err'); return; }
+  if(renouveler&&!confirm('Créer un nouveau lien ?\n\nL\'ancien cessera aussitôt de fonctionner : il faudra réabonner Apple Calendar et Family Wall avec le nouveau.')) return;
+  box.innerHTML='<div class="td-dim">Préparation du lien…</div>';
+  const j=await cloudPost({action:'agendaLien',renouveler:!!renouveler});
+  if(!j||!j.ok||!j.k){ box.innerHTML='<button class="btn btn-or" onclick="agendaAfficherLien()">🔗 Obtenir mon lien d\'agenda</button>'; toast('Lien indisponible : le serveur doit être à jour (redéploie) et joignable','err'); return; }
+  const https=new URL(cloudUrl(),location.href); https.search='?action=agenda&k='+j.k;
+  const url=https.href, webcal=url.replace(/^https?:/,'webcal:');
+  window._agendaUrl=url;
+  box.innerHTML=`
+    <div class="form-group"><label class="form-label">Ton lien privé (ne le partage qu'avec ta famille)</label>
+      <input class="form-control" readonly value="${esc(url)}" onclick="this.select()"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+      <a class="btn btn-or" href="${esc(webcal)}">🍎 Ajouter à Apple Calendar</a>
+      <button class="btn btn-ghost" onclick="copierTexte(window._agendaUrl,'Lien copié')">📋 Copier le lien</button>
+      <button class="btn btn-ghost" onclick="agendaAfficherLien(true)">♻ Nouveau lien</button>
+    </div>
+    <div class="td-dim" style="font-size:13px;line-height:1.7">
+      <strong>Apple Calendar</strong> (iPhone ou Mac) : touche « Ajouter à Apple Calendar », puis « S'abonner ». Choisis <em>iCloud</em> comme emplacement pour le voir sur tous tes appareils.<br>
+      <strong>Family Wall</strong> : Agenda → importer un agenda externe par URL → colle le lien copié.<br>
+      Mise à jour : environ toutes les heures selon l'application. Une prestation supprimée ou refusée disparaît au rafraîchissement suivant.
+    </div>`;
 }
 function copierTexte(t,msg){ const fin=()=>toast(msg||'Copié','ok');
   if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(fin,()=>prompt('Copie :',t)); else prompt('Copie :',t); }
