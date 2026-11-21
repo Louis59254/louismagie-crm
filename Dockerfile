@@ -12,6 +12,8 @@ RUN apt-get update \
 COPY crm.html /var/www/html/index.html
 COPY api.php  /var/www/html/api.php
 COPY robots.txt /var/www/html/robots.txt
+# App sur l'écran d'accueil + notifications push
+COPY sw.js manifest.webmanifest icon-192.png icon-512.png apple-touch-icon.png /var/www/html/
 
 # Dossiers de données + PDF (persistés via volume Coolify), accessibles en écriture
 RUN mkdir -p /var/www/html/data /var/www/html/pdf \
@@ -35,6 +37,10 @@ RUN printf '%s\n' \
     '</Files>' \
     '# Le CRM doit toujours etre revalide : sans cela le navigateur garde' \
     '# une version perimee apres un deploiement.' \
+    'AddType application/manifest+json .webmanifest' \
+    '<FilesMatch "^sw\.js$">' \
+    '  Header always set Cache-Control "no-cache, must-revalidate"' \
+    '</FilesMatch>' \
     '<FilesMatch "\.html$">' \
     '  Header always set Cache-Control "no-cache, must-revalidate"' \
     '</FilesMatch>' \

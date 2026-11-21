@@ -499,6 +499,135 @@ function agendaCle($DATA_DIR, $renouveler = false){
     return (string)$cfg['agendaKey'];
   });
 }
+/* ===== Notifications push (Web Push + VAPID) =====
+   Le push part VIDE : le service worker de l'appareil vient ensuite chercher le texte dans
+   pushBoite, avec le condensé SHA-256 de son adresse d'abonnement. Aucun chiffrement de
+   contenu à maintenir, et le texte (noms de clients) ne transite jamais par Apple ou Google.
+   Fichiers serveur hors synchro : _vapid.json (clé privée), _push.json (abonnements),
+   _push_boite.json (messages par abonnement), _push_rappels.json (rappels déjà envoyés). */
+function b64u($s){ return rtrim(strtr(base64_encode($s), '+/', '-_'), '='); }
+function vapidCles($DATA_DIR){
+  $f = "$DATA_DIR/_vapid.json"; $v = readJson($f);
+  if (is_array($v) && !empty($v['pem']) && !empty($v['pub'])) return $v;
+  return sousVerrou($DATA_DIR, 'vapid', function() use ($f) {
+    $v = readJson($f); if (is_array($v) && !empty($v['pem']) && !empty($v['pub'])) return $v;
+    $k = @openssl_pkey_new(['curve_name' => 'prime256v1', 'private_key_type' => OPENSSL_KEYTYPE_EC]);
+    if (!$k || !openssl_pkey_export($k, $pem)) return null;
+    $d = openssl_pkey_get_details($k);
+    if (empty($d['ec']['x']) || empty($d['ec']['y'])) return null;
+    $pub = "\x04".str_pad($d['ec']['x'], 32, "\0", STR_PAD_LEFT).str_pad($d['ec']['y'], 32, "\0", STR_PAD_LEFT);
+    $v = ['pem' => $pem, 'pub' => b64u($pub), 'cree' => date('c')];
+    return writeJson($f, $v) ? $v : null;
+  });
+}
+/* Signature ECDSA : openssl rend du DER (SEQUENCE de deux INTEGER), JWT ES256 veut r||s (2 × 32 octets) */
+function derVersBrut($der){
+  $o = 2; if (ord($der[1]) & 0x80) $o += ord($der[1]) & 0x7f;
+  if (ord($der[$o]) !== 0x02) return null;
+  $lr = ord($der[$o + 1]); $r = substr($der, $o + 2, $lr); $o += 2 + $lr;
+  if (ord($der[$o]) !== 0x02) return null;
+  $ls = ord($der[$o + 1]); $s = substr($der, $o + 2, $ls);
+  $r = ltrim($r, "\0"); $s = ltrim($s, "\0");
+  if (strlen($r) > 32 || strlen($s) > 32) return null;
+  return str_pad($r, 32, "\0", STR_PAD_LEFT).str_pad($s, 32, "\0", STR_PAD_LEFT);
+}
+function vapidJwt($aud, $pem){
+  $h = b64u(json_encode(['typ' => 'JWT', 'alg' => 'ES256']));
+  $p = b64u(json_encode(['aud' => $aud, 'exp' => time() + 3600, 'sub' => 'mailto:contact@louismagie.fr']));
+  if (!openssl_sign("$h.$p", $der, $pem, OPENSSL_ALGO_SHA256)) return null;
+  $sig = derVersBrut($der); return $sig === null ? null : "$h.$p.".b64u($sig);
+}
+function pushHoteOk($endpoint){
+  $u = parse_url((string)$endpoint);
+  if (($u['scheme'] ?? '') !== 'https' || empty($u['host'])) return false;
+  return (bool)preg_match('/(^|\.)(push\.apple\.com|fcm\.googleapis\.com|push\.services\.mozilla\.com|notify\.windows\.com)$/i', $u['host']);
+}
+/* Envoie un push vide ; renvoie le code HTTP (201 = accepté, 404/410 = abonnement mort) */
+function pushEnvoyer($endpoint, $v){
+  if (!pushHoteOk($endpoint)) return 0;
+  $u = parse_url($endpoint);
+  $jwt = vapidJwt('https://'.$u['host'], $v['pem']); if (!$jwt) return 0;
+  $ctx = stream_context_create(['http' => ['method' => 'POST', 'timeout' => 10, 'ignore_errors' => true, 'content' => '',
+    'header' => "TTL: 86400\r\nUrgency: high\r\nContent-Length: 0\r\nAuthorization: vapid t=$jwt, k=".$v['pub']."\r\n"]]);
+  $http_response_header = [];
+  @file_get_contents($endpoint, false, $ctx);
+  $code = 0;
+  foreach ($http_response_header as $hd) if (preg_match('#^HTTP/\S+\s+(\d{3})#', $hd, $m)) $code = (int)$m[1];
+  return $code;
+}
+/* Dépose le message dans la boîte de chaque appareil abonné puis le réveille. Best effort :
+   ne lève jamais d'erreur, pour ne pas casser l'action qui notifie (formulaire, signature). */
+function pushNotifier($DATA_DIR, $titre, $corps, $url = '/', $tag = 'crm'){
+  try {
+    $subs = readJson("$DATA_DIR/_push.json"); if (!is_array($subs) || !$subs) return 0;
+    $v = vapidCles($DATA_DIR); if (!$v) return 0;
+    $msg = ['id' => bin2hex(random_bytes(6)), 'titre' => mb_substr((string)$titre, 0, 120), 'corps' => mb_substr((string)$corps, 0, 400),
+            'url' => (string)$url, 'tag' => (string)$tag, 'at' => date('c'), 'lu' => false];
+    sousVerrou($DATA_DIR, 'push', function() use ($DATA_DIR, $subs, $msg) {
+      $b = readJson("$DATA_DIR/_push_boite.json"); if (!is_array($b)) $b = [];
+      foreach ($subs as $sb) { $ep = (string)($sb['ep'] ?? ''); if ($ep === '') continue;
+        $l = is_array($b[$ep] ?? null) ? $b[$ep] : []; $l[] = $msg; $b[$ep] = array_slice($l, -15); }
+      return writeJson("$DATA_DIR/_push_boite.json", $b);
+    });
+    $ok = 0; $morts = [];
+    foreach ($subs as $sb) {
+      $c = pushEnvoyer($sb['endpoint'] ?? '', $v);
+      if ($c >= 200 && $c < 300) $ok++; elseif ($c === 404 || $c === 410) $morts[] = $sb['ep'] ?? '';
+    }
+    if ($morts) sousVerrou($DATA_DIR, 'push', function() use ($DATA_DIR, $morts) {
+      $s = readJson("$DATA_DIR/_push.json"); if (!is_array($s)) return false;
+      $s = array_values(array_filter($s, function($x) use ($morts) { return !in_array($x['ep'] ?? '', $morts, true); }));
+      $b = readJson("$DATA_DIR/_push_boite.json"); if (is_array($b)) { foreach ($morts as $m) unset($b[$m]); writeJson("$DATA_DIR/_push_boite.json", $b); }
+      return writeJson("$DATA_DIR/_push.json", $s);
+    });
+    return $ok;
+  } catch (\Throwable $e) { return 0; }
+}
+/* Rappels (appelé par le cron toutes les 15 min) : récap du matin à partir de 8 h, et
+   chaque rendez-vous une heure avant. Chaque rappel ne part qu'une fois (_push_rappels.json). */
+function pushRappels($DATA_DIR){
+  try {
+    $subs = readJson("$DATA_DIR/_push.json"); if (!is_array($subs) || !$subs) return 0;
+    $now = new DateTime('now', new DateTimeZone('Europe/Paris'));
+    $auj = $now->format('Y-m-d'); $min = (int)$now->format('H') * 60 + (int)$now->format('i');
+    $envois = [];
+    $n = sousVerrou($DATA_DIR, 'push_rappels', function() use ($DATA_DIR, $auj, $min, &$envois) {
+      $f = "$DATA_DIR/_push_rappels.json"; $e = readJson($f);
+      if (!is_array($e)) $e = ['jour' => '', 'faits' => []];
+      $avant = json_encode($e);
+      $rdv = array_filter((array)readJson("$DATA_DIR/rdv.json"), function($r) use ($auj) { return is_array($r) && ($r['date'] ?? '') === $auj; });
+      if (($e['jour'] ?? '') !== $auj && $min >= 8 * 60) {
+        if ($min < 12 * 60) {
+          $l = [];
+          foreach ((array)readJson("$DATA_DIR/prestations.json") as $p)
+            if (is_array($p) && ($p['dateEvenement'] ?? '') === $auj && in_array($p['statutRealisation'] ?? '', ['Confirmée', 'Option'], true))
+              $l[] = '🎩 '.trim(($p['horaire'] ?? '') ?: ($p['creneau'] ?? '')).' '.($p['typePrestation'] ?? 'Prestation').(!empty($p['lieu']) ? ' · '.$p['lieu'] : '');
+          foreach ((array)readJson("$DATA_DIR/projets.json") as $p)
+            if (is_array($p) && ($p['date'] ?? '') === $auj && ($p['statut'] ?? '') !== 'Annulé')
+              $l[] = '🎭 '.($p['nom'] ?? 'Projet Imagine').(!empty($p['lieu']) ? ' · '.$p['lieu'] : '');
+          $tri = array_values($rdv); usort($tri, function($a, $b) { return strcmp($a['debut'] ?? '', $b['debut'] ?? ''); });
+          foreach ($tri as $r) $l[] = '🗓 '.(($r['debut'] ?? '') !== '' ? $r['debut'].' ' : '').($r['titre'] ?? 'Rendez-vous');
+          if ($l) $envois[] = ["Aujourd'hui · ".count($l).' au programme', implode("\n", $l), '/#agenda', 'recap-'.$auj];
+        }
+        $e['jour'] = $auj;
+      }
+      foreach ($rdv as $r) {
+        if (!preg_match('/^(\d{1,2}):(\d{2})$/', (string)($r['debut'] ?? ''), $m)) continue;
+        $d = (int)$m[1] * 60 + (int)$m[2] - $min; $cle = ($r['id'] ?? '').'@'.$auj.'T'.$r['debut'];
+        if ($d < 0 || $d > 60 || in_array($cle, $e['faits'] ?? [], true)) continue;
+        $envois[] = ['🗓 '.($d <= 1 ? 'Maintenant' : 'Dans '.$d.' min').' · '.($r['titre'] ?? 'Rendez-vous'),
+          trim(($r['debut'] ?? '').(!empty($r['fin']) ? '–'.$r['fin'] : '').(!empty($r['lieu']) ? ' · '.$r['lieu'] : '').(!empty($r['avec']) ? ' · avec '.$r['avec'] : '')),
+          '/#rdv='.($r['id'] ?? ''), 'rdv-'.($r['id'] ?? '')];
+        $e['faits'][] = $cle;
+      }
+      $e['faits'] = array_slice(array_values($e['faits'] ?? []), -200);
+      if (json_encode($e) !== $avant) writeJson($f, $e);
+      return count($envois);
+    });
+    foreach ($envois as $x) pushNotifier($DATA_DIR, $x[0], $x[1], $x[2], $x[3]);
+    return $n;
+  } catch (\Throwable $e) { return 0; }
+}
 function icsTexte($t){   // RFC 5545 : échappement des valeurs texte
   return str_replace(["\\", ";", ",", "\r\n", "\n", "\r"], ["\\\\", "\;", "\\,", "\\n", "\\n", ""], (string)$t);
 }
@@ -1216,6 +1345,8 @@ if ($action === 'imagine') {
         .($c('message',2000)?("\nMessage :\n".$c('message',2000)."\n"):'')
         ."\nElle est déjà dans ton CRM, section Imagine.");
     }
+    pushNotifier($DATA_DIR, '🎭 Demande Imagine · '.$agence, implode(' · ', array_filter([$nomEvt, $date ? date('d/m/Y', strtotime($date)) : '', $lieu])) ?: 'Formulaire agence',
+      !empty($prj['id']) ? '/#projet='.$prj['id'] : '/', 'imagine-'.($prj['id'] ?? ''));
     echo $shell('<header><div class="eyebrow">LouisMagie · Imagine the Impossible</div><h1>Demande <span class="g">bien reçue</span></h1></header>'
       .'<div class="msg"><h2>Merci '.$H($contact).' !</h2><p>Louis a reçu votre demande pour <strong style="color:#fff">'.$H($prj['nom']).'</strong>'
       .($date?(' du '.$H(date('d/m/Y',strtotime($date)))):'').'.<br><br>Il revient vers vous rapidement avec une proposition adaptée.</p></div>'
@@ -1411,6 +1542,7 @@ if ($action === 'briefLu') {
       if($notif) @smtpSend($notif, '✅ Brief lu — '.$nom,
         $nom." vient de confirmer la lecture du brief « ".($b['titre'] ?? '')." ».\n\n"
         .count($lus)." magicien(s) ont confirmé pour l'instant.\n\nLouisMagie CRM");
+      pushNotifier($DATA_DIR, '✅ Brief lu · '.$nom, ($b['titre'] ?? 'Brief').' · '.count($lus).' lecture(s)', '/', 'brief-'.md5($nom.($b['titre'] ?? '')));
     }
   }
   // retour sur la page du brief, avec confirmation
@@ -1483,10 +1615,33 @@ if ($action === 'newDemande') {
       ."\nElle est déjà dans ton CRM, onglet Demandes.";
     @smtpSend($notif, '📥 Nouvelle demande — '.$nom, $corps);
   }
+  pushNotifier($DATA_DIR, '📥 Nouvelle demande · '.$nom,
+    implode(' · ', array_filter([$dem['typeEvenement'] ?? '', !empty($dem['dateEvenement']) ? date('d/m/Y', strtotime($dem['dateEvenement'])) : '', $dem['lieu'] ?? ''])) ?: 'Depuis le site',
+    '/#demandes', 'dem-'.$dem['id']);
   out(['ok'=>true,'id'=>$dem['id']]);
 }
 
 /* ===== Logo public (sert le logo configuré pour l'en-tête des emails) ===== */
+/* ===== Boîte de notifications d'un appareil (public : l'appareil s'identifie par le
+   SHA-256 de son adresse d'abonnement, que lui seul connaît). Renvoie les messages non lus
+   et les marque lus ; « dernier » sert à ne pas afficher de notification vide. ===== */
+if ($action === 'pushBoite') {
+  header('Cache-Control: no-store');
+  $ep = (string)($_GET['ep'] ?? '');
+  if (!preg_match('/^[a-f0-9]{64}$/', $ep)) out(['ok' => false]);
+  $res = sousVerrou($DATA_DIR, 'push', function() use ($DATA_DIR, $ep) {
+    $b = readJson("$DATA_DIR/_push_boite.json"); if (!is_array($b) || !is_array($b[$ep] ?? null)) return [[], null];
+    $msgs = []; $chg = false;
+    foreach ($b[$ep] as &$m) if (empty($m['lu'])) { $msgs[] = $m; $m['lu'] = true; $chg = true; }
+    unset($m);
+    if ($chg) writeJson("$DATA_DIR/_push_boite.json", $b);
+    $dernier = end($b[$ep]) ?: null;
+    return [$msgs, $dernier];
+  });
+  $net = function($m) { return is_array($m) ? ['titre' => $m['titre'] ?? '', 'corps' => $m['corps'] ?? '', 'url' => $m['url'] ?? '/', 'tag' => $m['tag'] ?? 'crm'] : null; };
+  out(['ok' => true, 'msgs' => array_map($net, $res[0]), 'dernier' => $net($res[1])]);
+}
+
 /* ===== Flux d'agenda (public, protégé par la clé secrète du lien) ===== */
 if ($action === 'agenda') {
   $cfgA = readJson("$DATA_DIR/config.json"); if (!is_array($cfgA)) $cfgA = [];
@@ -1634,6 +1789,7 @@ if ($action === 'sign' || $action === 'signSubmit') {
     $notif=getenv('SMTP_FROM')?:getenv('SMTP_USER');
     if($notif){ @smtpSend($notif,'✍️ Devis '.$id.' signé en ligne',
       "Bonne nouvelle !\n\n".($signataire?:'Un client')." vient de signer le devis ".$id." (".number_format((float)($d['montantTTC']??0),2,',',' ')." € TTC).\nStatut passé à « Accepté ».\n\nLouisMagie CRM"); }
+    pushNotifier($DATA_DIR, '✍️ Devis '.$id.' signé', ($signataire ?: 'Le client').' · '.number_format((float)($d['montantTTC'] ?? 0), 0, ',', ' ').' € TTC', '/#devis='.$id, 'sign-'.$id);
     out(['ok'=>true]);
   }
 
@@ -1753,6 +1909,7 @@ if ($action === 'runScheduled') {
   // ligne par ligne ci-dessous protège aussi le cas où ce verrou n'a pas pu s'ouvrir)
   $lockF = $DATA_DIR.'/_cron.lock'; $lock = @fopen($lockF,'c');
   if ($lock && !@flock($lock, LOCK_EX | LOCK_NB)) out(['ok'=>false,'error'=>'envoi déjà en cours']);
+  $rappelsPush = pushRappels($DATA_DIR);   // récap du matin + rendez-vous dans l'heure (best effort)
   // Allège les envois déjà traités (anciennes campagnes comprises) : une écriture au plus, aucune si rien à faire.
   // La version complète reste dans _historique (historiser, appelé par majTable).
   $alleges = (int)majTable($DATA_DIR, 'planifs', function(&$t) {
@@ -1842,7 +1999,7 @@ if ($action === 'runScheduled') {
   }
   if ($lock) { @flock($lock, LOCK_UN); @fclose($lock); }
   out(['ok'=>$arret==='','sent'=>$sent,'fail'=>$fail,'reportes'=>$reportes,'incertains'=>$incertains,'perimes'=>$perimes,
-       'desabonnes'=>$skip,'sautes'=>$sautes,'alleges'=>$alleges,'arret'=>$arret,'plafond'=>$plafond,'total'=>count($arr)]);
+       'desabonnes'=>$skip,'sautes'=>$sautes,'alleges'=>$alleges,'arret'=>$arret,'plafond'=>$plafond,'total'=>count($arr),'rappelsPush'=>$rappelsPush]);
 }
 
 /* ===== Diagnostic SMTP (clé requise) ===== */
@@ -2016,6 +2173,36 @@ switch ($action) {
     out(['ok'=>false, 'error'=>'version introuvable']);
   }
 
+  case 'pushCle': {
+    $v = vapidCles($DATA_DIR);
+    out($v ? ['ok' => true, 'pub' => $v['pub']] : ['ok' => false, 'error' => 'clé de notification impossible à créer']);
+  }
+  case 'pushAbonner': {
+    $sub = $req['sub'] ?? null; $endpoint = is_array($sub) ? (string)($sub['endpoint'] ?? '') : '';
+    if (!pushHoteOk($endpoint)) out(['ok' => false, 'error' => 'abonnement invalide']);
+    $ua = mb_substr((string)($req['ua'] ?? ''), 0, 200); $ep = hash('sha256', $endpoint);
+    sousVerrou($DATA_DIR, 'push', function() use ($DATA_DIR, $endpoint, $ep, $ua) {
+      $s = readJson("$DATA_DIR/_push.json"); if (!is_array($s)) $s = [];
+      $s = array_values(array_filter($s, function($x) use ($ep) { return ($x['ep'] ?? '') !== $ep; }));
+      $s[] = ['ep' => $ep, 'endpoint' => $endpoint, 'ua' => $ua, 'date' => date('c')];
+      return writeJson("$DATA_DIR/_push.json", $s);
+    });
+    out(['ok' => true, 'ep' => $ep]);
+  }
+  case 'pushDesabonner': {
+    $ep = hash('sha256', (string)($req['endpoint'] ?? ''));
+    sousVerrou($DATA_DIR, 'push', function() use ($DATA_DIR, $ep) {
+      $s = readJson("$DATA_DIR/_push.json"); if (!is_array($s)) return false;
+      $s = array_values(array_filter($s, function($x) use ($ep) { return ($x['ep'] ?? '') !== $ep; }));
+      return writeJson("$DATA_DIR/_push.json", $s);
+    });
+    out(['ok' => true]);
+  }
+  case 'pushTest': {
+    $n = pushNotifier($DATA_DIR, '🎩 Notifications activées', 'Tu recevras ici les nouvelles demandes, les devis signés et tes rappels du jour.', '/', 'test');
+    $s = readJson("$DATA_DIR/_push.json");
+    out(['ok' => $n > 0, 'envoyes' => $n, 'appareils' => is_array($s) ? count($s) : 0]);
+  }
   case 'agendaLien': {
     $cle = agendaCle($DATA_DIR, !empty($req['renouveler']));
     if ($cle === '') out(['ok'=>false, 'error'=>'clé d\'agenda impossible à créer']);

@@ -4,6 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>CRM · LouisMagie</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="LouisMagie">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="theme-color" content="#0E0E0C">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@500;600;700;800&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
@@ -790,6 +797,8 @@ function authStore(hash){ const stay=(document.getElementById('pwd-stay')||{}).c
   if(stay){ localStorage.setItem('lm_authh',hash); localStorage.setItem('lm_auth','1'); } }
 function doLogout(){ ['lm_auth','lm_authh'].forEach(k=>{ sessionStorage.removeItem(k); localStorage.removeItem(k); }); location.reload(); }
 function ouvrirLienProfond(){
+  const v=(location.hash||'').match(/^#(agenda|demandes)$/);
+  if(v&&document.getElementById('app').style.display==='flex'){ try{ history.replaceState(null,'',location.pathname+location.search); }catch(_){} nav(v[1]); return; }
   const m=(location.hash||'').match(/^#(devis|projet|rdv)=([A-Za-z0-9._-]+)$/); if(!m) return;
   if(document.getElementById('app').style.display!=='flex') return;   // après connexion
   const id=m[2]; try{ history.replaceState(null,'',location.pathname+location.search); }catch(_){}
@@ -798,6 +807,65 @@ function ouvrirLienProfond(){
   if(DB.get('devis',id)){ nav('devis'); voirDevis(id); } else toast('Devis '+id+' introuvable sur cet appareil','err');
 }
 window.addEventListener('hashchange',ouvrirLienProfond);
+
+/* ───── Notifications push (service worker /sw.js, abonnement par appareil) ───── */
+function pushDispo(){ return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && location.protocol==='https:'; }
+function estIOS(){ return /iPhone|iPad|iPod/.test(navigator.userAgent); }
+function estAppInstallee(){ return (window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone===true; }
+function b64uVersOctets(t){ const p='='.repeat((4-t.length%4)%4); const b=atob((t+p).replace(/-/g,'+').replace(/_/g,'/'));
+  return Uint8Array.from(b,c=>c.charCodeAt(0)); }
+function octetsVersB64u(buf){ return btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
+async function pushAbonnement(){ if(!pushDispo()) return null; const reg=await navigator.serviceWorker.getRegistration('/'); return reg?reg.pushManager.getSubscription():null; }
+function pushEtatPlus(){ setTimeout(pushAfficherEtat,0); return '<div class="td-dim">Vérification…</div>'; }
+async function pushAfficherEtat(){
+  const box=document.getElementById('push-etat'); if(!box) return;
+  if(!pushDispo()){
+    box.innerHTML=estIOS()&&!estAppInstallee()
+      ? '<div class="alert warning" style="margin:0"><span class="alert-icon">📱</span><div>Sur iPhone, les notifications ne marchent que dans l\'app : Safari → bouton Partager → <strong>Sur l\'écran d\'accueil</strong>, puis ouvre le CRM depuis cette icône et reviens ici.</div></div>'
+      : '<div class="td-dim">Ce navigateur ne prend pas en charge les notifications.</div>';
+    return; }
+  const sub=await pushAbonnement().catch(()=>null), perm=Notification.permission;
+  if(perm==='denied'){ box.innerHTML='<div class="alert warning" style="margin:0"><span class="alert-icon">🔕</span><div>Les notifications ont été refusées pour le CRM. Sur iPhone : Réglages → Notifications → LouisMagie → Autoriser. Sur Mac : réglages du site dans le navigateur.</div></div>'; return; }
+  box.innerHTML=(sub&&perm==='granted')
+    ? '<div class="alert success" style="margin:0 0 12px"><span class="alert-icon">🔔</span><div><strong>Notifications activées sur cet appareil.</strong></div></div>'
+      +'<div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn btn-ghost" onclick="pushTester()">Envoyer une notification de test</button><button class="btn btn-ghost" onclick="pushDesactiver()">Désactiver sur cet appareil</button></div>'
+    : '<button class="btn btn-or" onclick="pushActiver()">🔔 Activer les notifications</button>';
+}
+async function pushActiver(){
+  try{
+    if(!pushDispo()){ pushAfficherEtat(); return; }
+    const perm=await Notification.requestPermission();      // en premier : Safari l'exige dans le geste de l'utilisateur
+    if(perm!=='granted'){ toast('Notifications non autorisées','err'); pushAfficherEtat(); return; }
+    const reg=await navigator.serviceWorker.register('/sw.js'); await navigator.serviceWorker.ready;
+    const k=await cloudPost({action:'pushCle'});
+    if(!k||!k.ok||!k.pub){ toast('Serveur : '+((k&&k.error)||'clé indisponible (déploiement à jour ?)'),'err'); return; }
+    let sub=await reg.pushManager.getSubscription();
+    if(sub){ const cle=sub.options&&sub.options.applicationServerKey;          // clé serveur changée → réabonner
+      if(cle&&octetsVersB64u(cle)!==k.pub){ await sub.unsubscribe(); sub=null; } }
+    if(!sub) sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:b64uVersOctets(k.pub)});
+    const j=await cloudPost({action:'pushAbonner',sub:sub.toJSON(),ua:navigator.userAgent});
+    if(!j||!j.ok){ toast('Abonnement refusé : '+((j&&j.error)||'serveur injoignable'),'err'); return; }
+    toast('🔔 Notifications activées','ok'); await pushTester();
+  }catch(e){ toast('Activation impossible : '+((e&&e.message)||e),'err'); }
+  finally{ pushAfficherEtat(); }
+}
+async function pushTester(){
+  const j=await cloudPost({action:'pushTest'});
+  if(j&&j.ok) toast('Notification de test envoyée ('+j.envoyes+' appareil'+(j.envoyes>1?'s':'')+')','ok');
+  else toast('Test non reçu par le service de notification'+(j&&j.appareils===0?' : aucun appareil abonné':''),'err');
+}
+async function pushDesactiver(){
+  try{ const sub=await pushAbonnement(); if(sub){ await cloudPost({action:'pushDesabonner',endpoint:sub.endpoint}); await sub.unsubscribe(); }
+    toast('Notifications désactivées sur cet appareil','ok'); }
+  catch(e){ toast('Erreur : '+((e&&e.message)||e),'err'); }
+  pushAfficherEtat();
+}
+if(pushDispo()){
+  navigator.serviceWorker.register('/sw.js').catch(()=>{});
+  // clic sur une notification alors que le CRM est ouvert : le service worker transmet le lien
+  navigator.serviceWorker.addEventListener('message',e=>{ const l=e.data&&e.data.lien; if(!l) return;
+    try{ const u=new URL(l); if(u.origin===location.origin&&u.hash){ if(location.hash===u.hash) ouvrirLienProfond(); else location.hash=u.hash; } }catch(_){} });
+}
 function showApp(){
   document.getElementById('login-screen').style.display='none';
   document.getElementById('app').style.display='flex';
@@ -4838,6 +4906,11 @@ RENDERERS.reglages=function(){
       </div>
       <div class="form-group"><label class="form-label">Lien portail URSSAF</label><input class="form-control" id="cfg-urssafUrl" value="${esc(cfg.urssafUrl||'')}"></div>
       <div style="text-align:right;margin-top:10px"><button class="btn btn-or" onclick="saveParams()">Enregistrer</button></div>
+    </div>
+
+    <div class="panel"><div class="panel-title">🔔 Notifications sur cet appareil</div>
+      <div class="td-dim" style="margin-bottom:12px">Nouvelles demandes, devis signés, briefs lus, récap du jour à 8 h et chaque rendez-vous une heure avant. À activer sur chaque appareil (iPhone, Mac). Sur iPhone, ouvre d'abord le CRM depuis son icône sur l'écran d'accueil.</div>
+      <div id="push-etat">${pushEtatPlus()}</div>
     </div>
 
     <div class="panel"><div class="panel-title">📅 Mon agenda sur Apple Calendar et Family Wall</div>
