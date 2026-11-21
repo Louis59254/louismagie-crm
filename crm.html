@@ -246,6 +246,7 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
 #cloud-dot.pulse{animation:lmPulse 1.1s ease-in-out infinite}
 @keyframes lmPulse{50%{opacity:.35}}
 @media (prefers-reduced-motion:reduce){#cloud-dot.pulse{animation:none}}
+.cal-evt.rdv{border-left-color:var(--gm);background:transparent;border:1px solid var(--gc);border-left:3px solid var(--gm)}
 .cal-evt.option{border-left-color:var(--info);background:transparent;border:1px dashed var(--info);opacity:.85}
 .cal-risk{font-size:10px;color:var(--er);font-weight:700;margin-top:2px;cursor:pointer}
 .cal-risk.soft{color:var(--warn)}
@@ -459,7 +460,7 @@ const LOGO_B64="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAACgCAYAAACLz2
    ════════════════════════════════════════════════════ */
 
 /* ───── Couche données (abstraction) ───── */
-const ENTITIES = ['demandes','devis','prestations','factures','clients','relances','activite','mails','catalogue','recettes','declarations','planifs','templates','projets','magiciens','effets','segments','campagnes'];
+const ENTITIES = ['demandes','devis','prestations','factures','clients','relances','activite','mails','catalogue','recettes','declarations','planifs','templates','projets','magiciens','effets','segments','campagnes','rdv'];
 const LS_PREFIX = 'lm_crm_';
 /* ═══ Fusion multi-appareils ═══════════════════════════════════════════
    Rien n'est jamais remplacé en bloc : chaque enregistrement est arbitré
@@ -788,6 +789,15 @@ function authStore(hash){ const stay=(document.getElementById('pwd-stay')||{}).c
   sessionStorage.setItem('lm_authh',hash); sessionStorage.setItem('lm_auth','1');
   if(stay){ localStorage.setItem('lm_authh',hash); localStorage.setItem('lm_auth','1'); } }
 function doLogout(){ ['lm_auth','lm_authh'].forEach(k=>{ sessionStorage.removeItem(k); localStorage.removeItem(k); }); location.reload(); }
+function ouvrirLienProfond(){
+  const m=(location.hash||'').match(/^#(devis|projet|rdv)=([A-Za-z0-9._-]+)$/); if(!m) return;
+  if(document.getElementById('app').style.display!=='flex') return;   // après connexion
+  const id=m[2]; try{ history.replaceState(null,'',location.pathname+location.search); }catch(_){}
+  if(m[1]==='projet'){ if(DB.get('projets',id)) nav('projet',{id}); else toast('Projet introuvable sur cet appareil','err'); return; }
+  if(m[1]==='rdv'){ nav('agenda'); if(DB.get('rdv',id)) rdvForm(id); return; }
+  if(DB.get('devis',id)){ nav('devis'); voirDevis(id); } else toast('Devis '+id+' introuvable sur cet appareil','err');
+}
+window.addEventListener('hashchange',ouvrirLienProfond);
 function showApp(){
   document.getElementById('login-screen').style.display='none';
   document.getElementById('app').style.display='flex';
@@ -795,11 +805,13 @@ function showApp(){
   if(!cloudUrl()) resyncDerives();   // avec un serveur : après la récupération (sinon on dériverait de devis périmés)
   updateBadges();
   nav('dashboard');
+  if(!(cloudUrl()&&cloudAuth())) ouvrirLienProfond();
   // cloudAuth() lit la session ET la connexion mémorisée : avant, « rester connecté »
   // empêchait toute récupération au démarrage et chaque appareil restait sur ses données.
   if(cloudUrl()&&cloudAuth()){ _dernierPull=Date.now(); cloudPull().then(r=>{
       if(RENDERERS[_currentView]&&!vueEnSaisie())RENDERERS[_currentView](currentParams); updateBadges();
       if(r==='pulled'||r==='init') verifierCoherence();
+      ouvrirLienProfond();
       if(r!=='pulled'&&r!=='init') toast('⚠️ Serveur injoignable : tu vois les données de cet appareil. Rien ne sera envoyé tant que la connexion n\'est pas rétablie — tes modifications sont gardées ici.','err');
     }); }
 }
@@ -951,7 +963,7 @@ RENDERERS.dashboard=function(){
       +'<a onclick="voirDevis(\''+d.id+'\')" style="color:inherit;text-decoration:underline;cursor:pointer">Ouvrir</a>',3); });
   const prestaProches=prestations.filter(p=>p.statutRealisation==='Confirmée'&&daysFromNow(p.dateEvenement)>=0&&daysFromNow(p.dateEvenement)<=7);
   prestaProches.forEach(p=>{ const j=daysFromNow(p.dateEvenement);
-    alrt('presta-'+p.id,'info','📅','<strong>Prestation '+(j===0?"aujourd'hui":'J-'+j)+'</strong> · '+esc(p.typePrestation)+' — '+esc(p.lieu)+' ('+esc(p.horaire||p.creneau)+'). Contact : '+esc(p.contactSurPlace||'—'),2); });
+    alrt('presta-'+p.id,'info','📅','<strong>Prestation '+(j===0?"aujourd'hui":'J-'+j)+'</strong> · '+esc(p.typePrestation)+' — '+esc(p.lieu)+' ('+esc(p.horaire||p.creneau)+'). Contact : '+esc(p.contactSurPlace||'—'),j+1); });
   const avisAdemander=prestations.filter(p=>p.statutRealisation==='Réalisée'&&daysSince(p.dateEvenement)<=14&&daysSince(p.dateEvenement)>=0&&!mailEnvoye('avis',p.id));
   avisAdemander.forEach(p=>{ alrt('avis-'+p.id,'success','★','<strong>Avis Google à demander</strong> — '+esc(p.typePrestation)+' du '+fmtDateShort(p.dateEvenement)+'. <a onclick="avisGoogleMail(\''+p.id+'\')" style="color:inherit;text-decoration:underline;cursor:pointer">Préparer l\'email</a>',7); });
   trimsADeclarer().forEach(q=>{ const ca=caTrimestre(q.an,q.t); const ech=trimEcheance(q.an,q.t); const jE=daysFromNow(ech);
@@ -965,7 +977,7 @@ RENDERERS.dashboard=function(){
     alrt('proj-'+x.id, j<=2?'danger':type,'🎭','<strong>Projet '+(j===0?"aujourd'hui":'J-'+j)+'</strong> · '+esc(x.nom||'Imagine')+' — '+esc(x.lieu||'')
       +(eq.length?(' · '+(eq.length-pasConf)+'/'+eq.length+' magiciens confirmés'):' · <strong>aucun magicien</strong>')
       +(pasConf||!eq.length?' ⚠':'')
-      +'. <a onclick="nav(\'projet\',{id:\''+x.id+'\'})" style="color:inherit;text-decoration:underline;cursor:pointer">Ouvrir le projet</a>',2); });
+      +'. <a onclick="nav(\'projet\',{id:\''+x.id+'\'})" style="color:inherit;text-decoration:underline;cursor:pointer">Ouvrir le projet</a>',j+1); });
   // 💰 Acompte pas reçu alors que l'événement approche (J-21) : la date n'est pas réellement bloquée
   devis.filter(d=>d.statut==='Accepté'&&(d.acomptePct||0)>0&&d.dateEvenement).forEach(d=>{
     const j=daysFromNow(d.dateEvenement); if(j<0||j>21) return;
@@ -974,6 +986,8 @@ RENDERERS.dashboard=function(){
   devis.filter(d=>d.statut==='Envoyé'&&d.dateEvenement).forEach(d=>{
     const j=daysFromNow(d.dateEvenement); if(j<0||j>10) return;
     alrt('devy-'+d.id,'warning','⏳','<strong>Sans réponse & événement dans '+j+' j</strong> — devis '+esc(d.id)+' ('+esc(d.nomClient)+'). Relance ou libère le créneau. <a onclick="voirDevis(\''+d.id+'\')" style="color:inherit;text-decoration:underline;cursor:pointer">Ouvrir</a>',2); });
+  DB.all('rdv').filter(r=>r.date).forEach(r=>{ const j=daysFromNow(r.date); if(j<0||j>1) return;
+    alrt('rdv-'+r.id,'info','🗓','<strong>Rendez-vous '+(j===0?"aujourd'hui":'demain')+(r.debut?' à '+esc(r.debut):'')+'</strong> · '+esc(r.titre||'')+(r.lieu?' — '+esc(r.lieu):'')+'. <a onclick="rdvForm(\''+r.id+'\')" style="color:inherit;text-decoration:underline;cursor:pointer">Ouvrir</a>',j+1); });
   if(!alertes) alertes=alertHtml('success','✓','Aucune alerte — tout est à jour. 🎩');
 
   // Activité
@@ -1001,8 +1015,15 @@ function kpi(cls,label,val,sub){ return '<div class="kpi '+cls+'"><div class="kp
 function alertHtml(type,icon,txt,key,days){
   return '<div class="alert '+type+'"><span class="alert-icon">'+icon+'</span><div style="flex:1">'+txt+'</div>'
     +(key?'<button class="alert-x" title="Masquer cette notification" onclick="dismissAlert(\''+key+'\','+(days||7)+')">×</button>':'')+'</div>'; }
+/* Alertes masquées : fusion clé par clé entre appareils (la date la plus lointaine gagne,
+   les dates passées tombent). Avant, le dernier appareil à enregistrer un réglage écrasait
+   toute la liste et les alertes masquées sur l'autre appareil revenaient. */
+function fusionDismissed(a,b){ const out={}, now=Date.now();
+  [a,b].forEach(m=>{ if(!m||typeof m!=='object') return; Object.keys(m).forEach(k=>{ const t=Date.parse(m[k]);
+    if(!(t>now)) return; if(!out[k]||t>Date.parse(out[k])) out[k]=m[k]; }); });
+  return out; }
 function isSnoozed(key){ const d=(DB.config().dismissed||{})[key]; return d && new Date(d)>new Date(); }
-function dismissAlert(key,days){ const c=DB.config(); c.dismissed=c.dismissed||{};
+function dismissAlert(key,days){ const c=DB.config(); c.dismissed=fusionDismissed(c.dismissed,null);
   const u=new Date(); u.setDate(u.getDate()+(days||7)); c.dismissed[key]=u.toISOString(); DB.saveConfig(c);
   if(RENDERERS.dashboard&&document.getElementById('view-dashboard').classList.contains('active')) RENDERERS.dashboard();
   updateBadges(); toast('Notification masquée '+(days||7)+' j','ok'); }
@@ -2203,7 +2224,8 @@ RENDERERS.agenda=function(){
     const projHtml=projs.map(x=>`<div class="cal-evt" style="background:linear-gradient(135deg,#7B1FA2,#9C27B0);color:#fff;border:none" onclick="event.stopPropagation();nav('projet',{id:'${x.id}'})">🎭 ${esc((x.nom||'Projet').slice(0,15))}</div>`).join('');
     const rq=risqueJour(ds,null);
     const rqHtml=rq?`<div class="cal-risk ${rq.niveau==='risque'?'soft':''}" onclick="event.stopPropagation();analyseJour('${ds}')">⚠ ${rq.niveau==='conflit'?'conflit':'serré'}</div>`:'';
-    cells+=`<div class="cal-cell ${ds===todayStr?'today':''}"><div class="cal-day">${day}</div>${evtHtml}${projHtml}${rqHtml}</div>`;
+    const rdvHtml=DB.all('rdv').filter(r=>r.date===ds).sort((a,b)=>(a.debut||'').localeCompare(b.debut||'')).map(r=>`<div class="cal-evt rdv" onclick="event.stopPropagation();rdvForm('${r.id}')">🗓 ${esc(r.debut||'')} ${esc((r.titre||'RDV').slice(0,16))}</div>`).join('');
+    cells+=`<div class="cal-cell ${ds===todayStr?'today':''}" onclick="rdvForm(null,'${ds}')" title="Ajouter un rendez-vous"><div class="cal-day">${day}</div>${evtHtml}${projHtml}${rdvHtml}${rqHtml}</div>`;
   }
   const moisLabel=first.toLocaleDateString('fr-FR',{month:'long',year:'numeric'});
 
@@ -2219,6 +2241,12 @@ RENDERERS.agenda=function(){
       <div class="kb-card-sub">${fmtDateFr(p.dateEvenement)} · ${esc(p.creneau||'')} · ${esc(p.lieu||'')}</div>
       <div class="kb-card-sub" style="color:${j<=7?'var(--or)':'var(--gm)'}">${j===0?"aujourd'hui":'J-'+j}</div></div>`;}).join(''):'<div class="td-dim">Aucune prestation à venir.</div>')
     +(projCards?'<div class="td-dim" style="margin:12px 0 6px;font-weight:600;color:#9C27B0">🎭 Projets Imagine</div>'+projCards:'');
+  const rdvAvenir=DB.all('rdv').filter(r=>r.date&&r.date>=todayStr).sort((a,b)=>(a.date+(a.debut||'')).localeCompare(b.date+(b.debut||'')));
+  const rdvCards=rdvAvenir.map(r=>{ const j=daysFromNow(r.date);
+    return `<div class="kb-card" onclick="rdvForm('${r.id}')" style="margin-bottom:8px;border-left:3px solid var(--gm)">
+      <div class="kb-card-title">🗓 ${esc(r.titre||'Rendez-vous')}</div>
+      <div class="kb-card-sub">${fmtDateFr(r.date)}${r.debut?' · '+esc(r.debut)+(r.fin?'–'+esc(r.fin):''):''}${r.lieu?' · '+esc(r.lieu):''}</div>
+      <div class="kb-card-sub" style="color:${j<=1?'var(--or)':'var(--gm)'}">${j===0?"aujourd'hui":'J-'+j}${r.avec?' · '+esc(r.avec):''}</div></div>`;}).join('');
 
   document.getElementById('view-agenda').innerHTML=`
     <div class="charts-grid" style="grid-template-columns:2fr 1fr;align-items:start">
@@ -2236,9 +2264,46 @@ RENDERERS.agenda=function(){
           <span><span style="color:var(--er);font-weight:700">⚠</span> conflit/risque horaire</span>
         </div>
       </div>
-      <div class="panel"><div class="panel-title">Prestations à venir</div>${listAvenir}</div>
+      <div class="panel"><div class="panel-title">Prestations à venir</div>${listAvenir}
+        <div style="display:flex;justify-content:space-between;align-items:center;margin:16px 0 8px"><div class="td-dim" style="font-weight:600">🗓 Rendez-vous</div><button class="btn btn-or btn-sm" onclick="rdvForm(null,'')">+ Rendez-vous</button></div>
+        ${rdvCards||'<div class="td-dim">Aucun rendez-vous à venir. Clique sur un jour du calendrier pour en ajouter un.</div>'}</div>
     </div>`;
 };
+/* ───── Rendez-vous (appels, réunions, repérages…) : entité 'rdv', synchronisée comme le reste ───── */
+function rdvForm(id,date){
+  const r=id?DB.get('rdv',id):null; if(id&&!r) return;
+  const v=r||{date:date||todayISO(),debut:'',fin:'',titre:'',lieu:'',avec:'',notes:''};
+  const body=`<div class="form-grid c2">
+      <div class="form-group" style="grid-column:1/-1"><label class="form-label">Objet *</label><input class="form-control" id="rdv-titre" value="${esc(v.titre||'')}" placeholder="ex : appel mariée, réunion agence, repérage salle"></div>
+      <div class="form-group"><label class="form-label">Date *</label><input class="form-control" type="date" id="rdv-date" value="${esc(v.date||'')}"></div>
+      <div class="form-group"><label class="form-label">Avec qui</label><input class="form-control" id="rdv-avec" value="${esc(v.avec||'')}" placeholder="nom, entreprise"></div>
+      <div class="form-group"><label class="form-label">Début</label><input class="form-control" type="time" id="rdv-debut" value="${esc(v.debut||'')}"></div>
+      <div class="form-group"><label class="form-label">Fin</label><input class="form-control" type="time" id="rdv-fin" value="${esc(v.fin||'')}"></div>
+      <div class="form-group" style="grid-column:1/-1"><label class="form-label">Lieu ou lien visio</label><input class="form-control" id="rdv-lieu" value="${esc(v.lieu||'')}"></div>
+      <div class="form-group" style="grid-column:1/-1"><label class="form-label">Notes</label><textarea class="form-control" id="rdv-notes">${esc(v.notes||'')}</textarea></div>
+    </div><div class="td-dim">Sans heure de début, le rendez-vous occupe la journée entière dans ton agenda Apple.</div>`;
+  const footer=(r?`<button class="btn btn-ghost" onclick="rdvDel('${r.id}')">🗑 Supprimer</button>`:'')
+    +`<button class="btn btn-or" onclick="rdvSave(${r?`'${r.id}'`:'null'})">Enregistrer</button>`;
+  openModal(r?'Rendez-vous':'Nouveau rendez-vous',body,footer);
+}
+function rdvSave(id){
+  const g=k=>(document.getElementById('rdv-'+k).value||'').trim();
+  const titre=g('titre'), date=g('date');
+  if(!titre||!/^\d{4}-\d{2}-\d{2}$/.test(date)){ toast('Objet et date obligatoires','err'); return; }
+  const debut=g('debut'), fin=g('fin');
+  if(debut&&fin&&fin<=debut&&!confirm('La fin est avant le début : le rendez-vous finira le lendemain. Continuer ?')) return;
+  const ancien=id?DB.get('rdv',id):null;
+  const r=Object.assign({},ancien||{},{id:id||('RDV-'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)),
+    titre,date,debut,fin,avec:g('avec'),lieu:g('lieu'),notes:g('notes')});
+  if(!ancien) r.createdAt=new Date().toISOString();
+  DB.save('rdv',r); closeModal(); toast('Rendez-vous enregistré','ok');
+  if(_currentView==='agenda') RENDERERS.agenda(); else if(_currentView==='dashboard') RENDERERS.dashboard();
+}
+function rdvDel(id){ const r=DB.get('rdv',id); if(!r) return;
+  if(!confirm('Supprimer le rendez-vous « '+(r.titre||'')+' » du '+fmtDateShort(r.date)+' ?')) return;
+  DB.remove('rdv',id); closeModal(); toast('Rendez-vous supprimé','ok');
+  if(_currentView==='agenda') RENDERERS.agenda(); else if(_currentView==='dashboard') RENDERERS.dashboard();
+}
 function calNav(delta){ _calRef.m+=delta; if(_calRef.m<0){_calRef.m=11;_calRef.y--;} if(_calRef.m>11){_calRef.m=0;_calRef.y++;} RENDERERS.agenda(); }
 function voirPrestation(id){
   const p=DB.get('prestations',id); if(!p)return;
@@ -2263,7 +2328,7 @@ function voirPrestation(id){
   </div>${jourHtml}
   <div class="form-group" style="margin-top:14px"><label class="form-label">Matériel / notes logistiques</label>
     <textarea class="form-control" id="pre-notes">${esc(p.materielNotes||'')}</textarea></div>`;
-  let footer=`<button class="btn btn-ghost" onclick="savePrestaNotes('${id}')">Enregistrer notes</button>`;
+  let footer=(dev?`<button class="btn btn-ghost" onclick="voirDevis('${dev.id}')">📄 Voir le devis</button>`:'')+`<button class="btn btn-ghost" onclick="savePrestaNotes('${id}')">Enregistrer notes</button>`;
   if(p.statutRealisation==='Option') footer+=`<span class="td-dim" style="align-self:center">Devis non accepté — créneau en option</span>`;
   else if(p.statutRealisation!=='Réalisée') footer+=`<button class="btn btn-success" onclick="marquerRealisee('${id}')">✓ Marquer réalisée</button>`;
   else {
@@ -3955,7 +4020,7 @@ function mktRappels(){ // {c, raison, info, key}
   DB.all('clients').filter(c=>c.email&&!D.has(normEmail(c.email))).forEach(c=>{ const last=clientDernierEvt(c.id); if(last&&daysSince(last)>240&&!vus.has('a'+c.id)&&!vus.has('d'+c.id)){ vus.add('d'+c.id); add(c,'dormant','Pas de prestation depuis '+Math.round(daysSince(last)/30)+' mois'); } });
   return out;
 }
-function dismissRappel(key){ mktCaptureDraft(); const c=DB.config(); c.dismissed=c.dismissed||{}; const u=new Date(); u.setDate(u.getDate()+90); c.dismissed[key]=u.toISOString(); DB.saveConfig(c); RENDERERS.marketing(); updateBadges(); toast('Suggestion masquée','ok'); }
+function dismissRappel(key){ mktCaptureDraft(); const c=DB.config(); c.dismissed=fusionDismissed(c.dismissed,null); const u=new Date(); u.setDate(u.getDate()+90); c.dismissed[key]=u.toISOString(); DB.saveConfig(c); RENDERERS.marketing(); updateBadges(); toast('Suggestion masquée','ok'); }
 RENDERERS.marketing=function(){
   const reset=_mktReset; _mktReset=false;                  // posé par mktLoadTpl / mktSaveTemplate seulement
   if(!reset){ mktCaptureDraft(); if(!_mktDraft) mktBrouillonRestaurer(); }
@@ -5202,7 +5267,9 @@ async function cloudPull(){ const url=cloudUrl(); if(!url){ setCloudStatus('off'
     if(_cfgEnAttente){ _cfgEnAttente=false; cloudQueueConfig(); }
     if(j.config&&Object.keys(j.config).length){ const cur=DB.config();
       // fusion : le serveur arbitre les clés qu'il connaît, les réglages locaux inédits survivent
-      localStorage.setItem(LS_PREFIX+'config', JSON.stringify(Object.assign({},cur,j.config,{passwordHash:j.config.passwordHash||cur.passwordHash}))); }
+      const dis=fusionDismissed(cur.dismissed,j.config.dismissed), disS=j.config.dismissed||{};
+      localStorage.setItem(LS_PREFIX+'config', JSON.stringify(Object.assign({},cur,j.config,{passwordHash:j.config.passwordHash||cur.passwordHash,dismissed:dis})));
+      if(Object.keys(dis).some(k=>disS[k]!==dis[k])) cloudQueueConfig(); }   // le serveur apprend les alertes masquées ici
     // Les variantes du logo sont calculées au démarrage, AVANT la connexion : leur
     // envoi part alors sans authentification et échoue. On répare ici, une fois connecté.
     const cfgL=DB.config(), cfgS=j.config||{};

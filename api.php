@@ -33,7 +33,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') { exit; }
 
 $ENTITIES = ['demandes','devis','prestations','factures','clients','relances',
              'activite','mails','catalogue','recettes','declarations','planifs','templates',
-             'projets','magiciens','effets','segments','campagnes'];
+             'projets','magiciens','effets','segments','campagnes','rdv'];
 
 function out($o){ echo json_encode($o, JSON_UNESCAPED_UNICODE); exit; }
 
@@ -515,7 +515,7 @@ function icsHoraire($h){
   $t = array_map(function($x){ return min(23, (int)$x[1]) * 60 + (isset($x[2]) && $x[2] !== '' ? min(59, (int)$x[2]) : 0); }, $m);
   return [$t[0], $t[1] ?? null];
 }
-function icsEvenement($uid, $date, $horaire, $titre, $lieu, $desc, $option, $stamp){
+function icsEvenement($uid, $date, $horaire, $titre, $lieu, $desc, $option, $stamp, $url = ''){
   if (!preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', (string)$date, $d)) return '';
   $l = ['BEGIN:VEVENT', 'UID:'.$uid.'@louismagie', 'DTSTAMP:'.$stamp];
   $h = icsHoraire($horaire);
@@ -536,6 +536,7 @@ function icsEvenement($uid, $date, $horaire, $titre, $lieu, $desc, $option, $sta
   if (trim((string)$desc) !== '') $l[] = 'DESCRIPTION:'.icsTexte($desc);
   $l[] = 'STATUS:'.($option ? 'TENTATIVE' : 'CONFIRMED');
   $l[] = 'TRANSP:'.($option ? 'TRANSPARENT' : 'OPAQUE');
+  if ($url !== '') $l[] = 'URL:'.$url;                          // Apple Calendar : lien cliquable vers le CRM
   $l[] = 'COLOR:tomato';                               // RFC 7986 : rouge tomate des événements magie
   $l[] = 'END:VEVENT';
   return implode('', array_map('icsLigne', $l));
@@ -1496,6 +1497,11 @@ if ($action === 'agenda') {
   $depuis = date('Y-m-d', strtotime('-60 days'));
   $stamp = gmdate('Ymd\THis\Z');
   $devis = []; foreach ((array)readJson("$DATA_DIR/devis.json") as $d) if (is_array($d) && isset($d['id'])) $devis[(string)$d['id']] = $d;
+  $crm = 'https://'.preg_replace('/[^A-Za-z0-9.:-]/', '', (string)($_SERVER['HTTP_HOST'] ?? '')).'/';
+  $lien = function($type, $id) use ($crm, $discret) {   // ouvre la fiche dans le CRM (connexion requise)
+    $id = (string)$id;
+    return ($discret || $crm === 'https:///' || !preg_match('/^[A-Za-z0-9._-]+$/', $id)) ? '' : $crm.'#'.$type.'='.$id;
+  };
   $ev = '';
   foreach ((array)readJson("$DATA_DIR/prestations.json") as $p) {
     if (!is_array($p) || ($p['dateEvenement'] ?? '') < $depuis) continue;
@@ -1517,8 +1523,10 @@ if ($action === 'agenda') {
           !empty($p['idDevis']) ? 'Devis '.$p['idDevis'] : '',
           !empty($p['materielNotes']) ? 'Matériel : '.$p['materielNotes'] : '',
         ]));
+    $url = !empty($p['idDevis']) ? $lien('devis', $p['idDevis']) : '';
+    if ($url !== '') $desc .= "\n\nVoir le devis : ".$url;
     $ev .= icsEvenement('presta-'.($p['id'] ?? $p['idDevis'] ?? md5(json_encode($p))), $p['dateEvenement'], $p['horaire'] ?? '',
-                        $titre, $p['lieu'] ?? '', $desc, $option, $stamp);
+                        $titre, $p['lieu'] ?? '', $desc, $option, $stamp, $url);
   }
   // Projets « Imagine the Impossible » (agence Inspiration)
   foreach ((array)readJson("$DATA_DIR/projets.json") as $p) {
@@ -1531,7 +1539,21 @@ if ($action === 'agenda') {
     $titre = $discret ? 'Magie · Imagine the Impossible' : '🎭 '.$nom;
     $desc = $discret ? '' : implode("\n", array_filter(['Projet Imagine the Impossible · '.$st,
       !empty($p['nbInvites']) ? 'Invités : '.$p['nbInvites'] : '', !empty($p['equipe']) ? count((array)$p['equipe']).' magicien(s)' : '']));
-    $ev .= icsEvenement('projet-'.($p['id'] ?? md5(json_encode($p))), $p['date'], $p['dureePresta'] ?? '', $titre, $p['lieu'] ?? '', $desc, $option, $stamp);
+    $url = !empty($p['id']) ? $lien('projet', $p['id']) : '';
+    if ($url !== '') $desc .= "\n\nOuvrir le projet : ".$url;
+    $ev .= icsEvenement('projet-'.($p['id'] ?? md5(json_encode($p))), $p['date'], $p['dureePresta'] ?? '', $titre, $p['lieu'] ?? '', $desc, $option, $stamp, $url);
+  }
+  // Rendez-vous saisis dans le CRM (appels, réunions, repérages)
+  foreach ((array)readJson("$DATA_DIR/rdv.json") as $r) {
+    if (!is_array($r) || ($r['date'] ?? '') < $depuis) continue;
+    $deb = trim((string)($r['debut'] ?? '')); $fin = trim((string)($r['fin'] ?? ''));
+    $horaire = $deb === '' ? '' : ($fin !== '' ? $deb.'-'.$fin : $deb);
+    $titre = $discret ? 'Rendez-vous' : '🗓 '.(trim((string)($r['titre'] ?? '')) ?: 'Rendez-vous');
+    $desc = $discret ? '' : implode("\n", array_filter([
+      !empty($r['avec']) ? 'Avec : '.$r['avec'] : '', !empty($r['notes']) ? (string)$r['notes'] : '']));
+    $url = !empty($r['id']) ? $lien('rdv', $r['id']) : '';
+    $ev .= icsEvenement('rdv-'.($r['id'] ?? md5(json_encode($r))), $r['date'], $horaire, $titre,
+                        $discret ? '' : ($r['lieu'] ?? ''), $desc, false, $stamp, $url);
   }
   $tz = "BEGIN:VTIMEZONE\r\nTZID:Europe/Paris\r\nBEGIN:DAYLIGHT\r\nTZOFFSETFROM:+0100\r\nTZOFFSETTO:+0200\r\nTZNAME:CEST\r\nDTSTART:19700329T020000\r\nRRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU\r\nEND:DAYLIGHT\r\nBEGIN:STANDARD\r\nTZOFFSETFROM:+0200\r\nTZOFFSETTO:+0100\r\nTZNAME:CET\r\nDTSTART:19701025T030000\r\nRRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU\r\nEND:STANDARD\r\nEND:VTIMEZONE\r\n";
   header('Content-Type: text/calendar; charset=utf-8');
@@ -2009,6 +2031,18 @@ switch ($action) {
       if (empty($actuel['desaboKey']) && is_string($graine) && preg_match('/^[A-Za-z0-9]{16,128}$/', $graine))
         $actuel['desaboKey'] = $graine;               // seulement si le serveur n'a aucune clé
       desaboInit($actuel);                            // AVANT la fusion : fige la formKey qui a signé les liens déjà envoyés
+      // Alertes masquées : fusion clé par clé (la date la plus lointaine gagne, les dates passées
+      // tombent). Sinon le dernier appareil qui enregistre un réglage écrase celles de l'autre.
+      if (isset($entrant['dismissed']) && is_array($entrant['dismissed'])) {
+        $m = []; $now = time();
+        foreach ([is_array($actuel['dismissed'] ?? null) ? $actuel['dismissed'] : [], $entrant['dismissed']] as $src)
+          foreach ($src as $k => $v) {
+            $t = is_string($v) ? strtotime($v) : false;
+            if ($t === false || $t <= $now) continue;
+            if (!isset($m[$k]) || $t > strtotime($m[$k])) $m[$k] = $v;
+          }
+        $entrant['dismissed'] = $m;
+      }
       // fusion par clé : un appareil qui ignore un réglage récent ne l'efface plus
       return writeJson("$DATA_DIR/config.json", array_merge($actuel, $entrant));
     });
