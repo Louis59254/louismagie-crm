@@ -475,11 +475,12 @@ const LS_PREFIX = 'lm_crm_';
    les ressusciterait). Téléphone et ordinateur convergent sans perte. */
 const LS_DELS='lm_dels';
 function delsAll(){ try{ return JSON.parse(localStorage.getItem(LS_DELS))||{}; }catch(_){ return {}; } }
-function delsSave(m){ try{ localStorage.setItem(LS_DELS, JSON.stringify(delsPrune(m))); }catch(_){} }
+function delsSave(m){ try{ localStorage.setItem(LS_DELS, JSON.stringify(delsPrune(m))); return true; }
+  catch(_){ try{ toast('⚠️ Mémoire de l\'appareil pleine : la suppression n\'a pas pu être enregistrée. Libère de la place (Réglages → Exporter, puis alléger).','err'); }catch(__){} return false; } }
 function delsPrune(m){ const lim=new Date(Date.now()-180*864e5).toISOString();
   Object.keys(m||{}).forEach(e=>{ Object.keys(m[e]||{}).forEach(id=>{ if(m[e][id]<lim) delete m[e][id]; }); });
   return m||{}; }
-function delsAdd(e,id){ const m=delsAll(); (m[e]=m[e]||{})[String(id)]=new Date().toISOString(); delsSave(m); }
+function delsAdd(e,id){ const m=delsAll(); (m[e]=m[e]||{})[String(id)]=new Date().toISOString(); return delsSave(m); }
 function delsFusion(a,b){ const r=JSON.parse(JSON.stringify(a||{}));
   Object.keys(b||{}).forEach(e=>{ r[e]=r[e]||{};
     Object.keys(b[e]||{}).forEach(id=>{ if(!r[e][id]||b[e][id]>r[e][id]) r[e][id]=b[e][id]; }); });
@@ -499,6 +500,7 @@ function fusionRows(locales, distantes, dels, e){
   (distantes||[]).forEach(r=>{ if(r&&r.id!=null) map.set(String(r.id), r); });
   (locales||[]).forEach(r=>{ if(!r||r.id==null) return; const k=String(r.id), d=map.get(k);
     if(!d){ map.set(k,r); return; }
+    if(r.cle && d.cle && r.cle!==d.cle){ _collisionsVues.push({entity:e,row:r,at:new Date().toISOString()}); return; }   // même numéro, autre document : le distant reste, le local est mis de côté
     if(e==='planifs' && r.statut==='prévu' && d.statut!=='prévu') return;   // une planif traitée ne redevient jamais « prévu »
     const tl=rowTs(r), td=rowTs(d);
     if(tl && (!td || tl>td)) map.set(k,r);          // égalité → on garde le distant (convergence stable)
@@ -520,10 +522,112 @@ function rowsDiffer(distantes, fusion){
 function jsonStable(v){
   if(v===null||typeof v!=='object') return JSON.stringify(v);
   if(Array.isArray(v)) return '['+v.map(x=>x===undefined?'null':jsonStable(x)).join(',')+']';
-  return '{'+Object.keys(v).filter(k=>k!=='updatedAt'&&v[k]!==undefined).sort()
+  return '{'+Object.keys(v).filter(k=>k!=='updatedAt'&&k!=='_base'&&v[k]!==undefined).sort()
     .map(k=>JSON.stringify(k)+':'+jsonStable(v[k])).join(',')+'}';
 }
 function memeContenu(a,b){ try{ return jsonStable(a)===jsonStable(b); }catch(_){ return false; } }
+/* Versions de départ des formulaires ouverts (devis…) : vidées à chaque changement de vue */
+let _bases={}, _avant={};
+/* Réglages : chaque clé porte sa date de modification (_t) et ses suppressions (_suppr).
+   La fusion se fait clé par clé, la plus récente gagne : un appareil en retard n'écrase plus rien. */
+const CFG_META=['_t','_suppr'];
+function configHorodater(prev,c){
+  const now=new Date().toISOString(), t=Object.assign({},(prev&&prev._t)||{},c._t||{}), sp=Object.assign({},(prev&&prev._suppr)||{},c._suppr||{});
+  new Set([...Object.keys(prev||{}),...Object.keys(c)]).forEach(k=>{ if(CFG_META.includes(k)) return;
+    const dans=k in c && c[k]!==undefined, avant=prev&&k in prev&&prev[k]!==undefined;
+    if(dans){ if(!avant||jsonStable(prev[k])!==jsonStable(c[k])){ t[k]=now; delete sp[k]; } }
+    else if(avant){ sp[k]=now; }
+  });
+  c._t=t; c._suppr=sp; return c;
+}
+function maxTs(a,b){ a=String(a||''); b=String(b||''); return a>b?a:b; }
+function fusionConfig(loc,srv){
+  loc=loc||{}; srv=srv||{};
+  const tl=loc._t||{}, ts=srv._t||{}, sp={}, t={};
+  [loc._suppr||{},srv._suppr||{}].forEach(m=>Object.keys(m).forEach(k=>{ sp[k]=maxTs(sp[k],m[k]); }));
+  const out={};
+  new Set([...Object.keys(loc),...Object.keys(srv)]).forEach(k=>{ if(CFG_META.includes(k)) return;
+    const a=String(tl[k]||''), b=String(ts[k]||''), enL=k in loc, enS=k in srv;
+    let v, tv;
+    if(enL&&enS){ if(a>b){ v=loc[k]; tv=a; } else { v=srv[k]; tv=b; } }
+    else if(enL){ v=loc[k]; tv=a; } else { v=srv[k]; tv=b; }
+    if(sp[k]&&sp[k]>tv) return;                 // supprimé après sa dernière modification
+    out[k]=v; if(tv) t[k]=tv;
+  });
+  out.dismissed=fusionDismissed(loc.dismissed,srv.dismissed);
+  if(!out.passwordHash&&loc.passwordHash) out.passwordHash=loc.passwordHash;
+  out._t=t; out._suppr=sp; return out;
+}
+function editionBase(e,row){ if(row&&row.id) _bases[e+'|'+row.id]=JSON.parse(JSON.stringify(row)); }
+/* Un formulaire rend « » ou 0 là où la fiche n'avait rien : ce n'est pas une modification */
+function valNorm(v){ if(v==null||v===''||v===0||v===false) return ''; return typeof v==='number'?String(v):v; }
+function valEgale(a,b){ return jsonStable(valNorm(a))===jsonStable(valNorm(b)); }
+/* base = version à l'ouverture, cur = version actuelle (autre appareil), mine = ce que Louis enregistre */
+function fusion3(base,cur,mine){
+  const out=JSON.parse(JSON.stringify(cur)); let gardes=false;
+  const cles=new Set([...Object.keys(base),...Object.keys(mine),...Object.keys(cur)]);
+  cles.forEach(k=>{ if(k==='updatedAt'||k==='_base') return;
+    const bm=valEgale(base[k],mine[k]);
+    if(!bm){ if(k in mine) out[k]=mine[k]; else delete out[k]; }            // champ modifié par Louis : il gagne
+    else if(!valEgale(cur[k],base[k])) gardes=true;                          // champ modifié ailleurs : conservé
+  });
+  out.id=mine.id; return {obj:out,gardes};
+}
+/* Collisions de numéro (deux appareils hors ligne) : la fiche locale est mise de côté, jamais perdue */
+const LS_COLL='lm_collisions';
+let _collisionsVues=[];
+function collisionsAll(){ try{ return JSON.parse(localStorage.getItem(LS_COLL))||[]; }catch(_){ return []; } }
+function collisionsSave(a){ try{ localStorage.setItem(LS_COLL,JSON.stringify(a)); }catch(_){} }
+/* Occupation du stockage local (Safari iPhone : environ 5 Mo par site) */
+function stockageLocal(){ let n=0; try{ for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); n+=(k.length+(localStorage.getItem(k)||'').length)*2; } }catch(_){}
+  return {octets:n, mo:(n/1048576).toFixed(1), pct:Math.round(n/(5*1048576)*100)}; }
+function majSauvegardeMail(v){ const c=DB.config(); c.sauvegardeMail=v; DB.saveConfig(c);
+  toast(v==='non'?'Sauvegarde par email désactivée':'Sauvegarde par email : '+(v==='jour'?'chaque jour':'chaque semaine'),'ok'); }
+/* Le serveur avait une version que cet appareil n'avait pas vue (modifiée sur l'autre appareil) :
+   on refusionne champ par champ — les changements des deux côtés sont gardés. */
+function refusionnerConflits(entity,ids,ecrases){
+  const ok=[], archives=[];
+  ids.forEach(id=>{ const base=_avant[entity+'|'+id], autre=ecrases[id], mien=DB.get(entity,id);
+    if(!base||!autre||!mien){ archives.push(id); return; }
+    const r=fusion3(base,autre,mien);
+    if(!memeContenu(r.obj,mien)){ delete _avant[entity+'|'+id]; DB.save(entity,r.obj); }
+    ok.push(id); });
+  if(ok.length) try{ toast('🔀 '+ok.join(', ')+' : modifié sur les deux appareils, les deux modifications sont gardées.','ok'); logActivite('Fusion de modifications concurrentes · '+entity+' '+ok.join(', ')); }catch(_){}
+  if(archives.length) try{ toast('ℹ️ '+archives.join(', ')+' : modifié aussi sur l\'autre appareil. Ta version est gardée, l\'autre est dans l\'historique (Réglages).','ok'); logActivite('Modification concurrente · '+entity+' '+archives.join(', ')+' (version précédente archivée)'); }catch(_){}
+}
+function traiterCollisions(){
+  if(!_collisionsVues.length) return;
+  const a=collisionsAll(); let n=0;
+  _collisionsVues.forEach(c=>{ if(!a.some(x=>x.entity===c.entity&&x.row.cle===c.row.cle)){ a.push(c); n++; } });
+  _collisionsVues=[]; if(!n) return;
+  collisionsSave(a);
+  try{ toast('⚠️ '+n+' document(s) créé(s) sur cet appareil ont le même numéro qu\'un document de l\'autre appareil. Ils sont mis de côté : tableau de bord → Renuméroter.','err'); }catch(_){}
+  try{ logActivite('Collision de numéro détectée ('+n+')'); }catch(_){}
+}
+function renumeroterCollision(i){
+  const a=collisionsAll(), c=a[i]; if(!c) return;
+  const prefix=c.entity==='devis'?'DEV':'FAC', ancien=c.row.id, neuf=nextId(prefix,c.entity);
+  const champ=c.entity==='devis'?'idDevis':'ref';
+  const t0=parseInt(String(c.row.cle||'').split('-')[1],36)||0;
+  const enfants=[];
+  if(c.entity==='devis'){
+    DB.all('factures').filter(f=>f.idDevis===ancien).forEach(f=>enfants.push(['factures',f]));
+    DB.all('projets').filter(p=>p.idDevis===ancien).forEach(p=>enfants.push(['projets',p]));
+    DB.all('recettes').filter(r=>r.ref===ancien).forEach(r=>enfants.push(['recettes',r]));
+  } else DB.all('recettes').filter(r=>r.ref===ancien).forEach(r=>enfants.push(['recettes',r]));
+  const recents=enfants.filter(([,r])=>{ const t=parseInt(String(r.cle||'').split('-')[1],36)||Date.parse(r.createdAt||r.dateEmission||r.date||'')||0; return t>=t0; });
+  const liste=recents.map(([e,r])=>'• '+e+' '+r.id).join('\n');
+  if(!confirm('Le '+(c.entity==='devis'?'devis':'facture')+' « '+(c.row.nomClient||'')+' » créé sur cet appareil devient '+neuf+'.'
+    +(recents.length?'\n\nCes éléments créés après lui passeront aussi sur '+neuf+' :\n'+liste:'')+'\n\nContinuer ?')) return;
+  const row=Object.assign({},c.row,{id:neuf}); delete row._base;
+  DB.save(c.entity,row);
+  recents.forEach(([e,r])=>{ const x=DB.get(e,r.id); if(!x) return;
+    if(e==='recettes') x.ref=neuf; else x.idDevis=neuf; DB.save(e,x); });
+  if(c.entity==='devis') try{ syncPrestationDevis(row); }catch(_){}
+  a.splice(i,1); collisionsSave(a);
+  logActivite(ancien+' (créé sur cet appareil) renuméroté '+neuf); toast('Renuméroté : '+neuf,'ok');
+  if(RENDERERS[_currentView]) RENDERERS[_currentView](currentParams); updateBadges();
+}
 
 const DB = {
   all(e){ try{ return JSON.parse(localStorage.getItem(LS_PREFIX+e)) || []; }catch(_){ return []; } },
@@ -534,15 +638,24 @@ const DB = {
   get(e,id){ return DB.all(e).find(x=>x.id===id) || null; },
   save(e,obj){
     const arr=DB.all(e); const i=arr.findIndex(x=>x.id===obj.id);
+    // Formulaire ouvert sur une version que l'autre appareil a modifiée depuis : on garde ses changements
+    // sur les champs que Louis n'a pas touchés (fusion à trois voies), au lieu d'écraser toute la fiche.
+    const bk=e+'|'+obj.id, base=_bases[bk];
+    if(i>=0 && base && base.updatedAt!==arr[i].updatedAt){ const r=fusion3(base,arr[i],obj); Object.keys(obj).forEach(k=>delete obj[k]); Object.assign(obj,r.obj);
+      if(r.gardes) try{ toast('Modifications de l\'autre appareil conservées sur '+obj.id,'ok'); }catch(_){} }
+    if(i<0 && !obj.cle && (e==='devis'||e==='factures')) obj.cle=uid('k');   // identité de création : détecte deux numéros identiques
+    if(i>=0){ obj._base=arr[i].updatedAt||''; _avant[bk]=JSON.parse(JSON.stringify(arr[i])); }   // version d'avant : sert à refusionner si le serveur avait mieux   // version de départ : le serveur repère une modification faite sur une copie dépassée
     // Contenu identique à l'existant → rien : pas de nouvelle date, pas d'envoi. Sinon un
     // simple réenregistrement changerait l'empreinte de l'appareil sans rien modifier.
     if(i>=0 && memeContenu(arr[i],obj)){ obj.updatedAt=arr[i].updatedAt; return obj; }
     obj.updatedAt=new Date().toISOString();    // horodatage : arbitre la fusion entre appareils
-    if(i>=0) arr[i]=obj; else arr.push(obj); DB._write(e,arr); return obj; },
-  remove(e,id){ delsAdd(e,id);                            // trace la suppression, sinon la fusion la ressuscite
+    if(i>=0) arr[i]=obj; else arr.push(obj); DB._write(e,arr);
+    if(base) _bases[bk]=JSON.parse(JSON.stringify(obj));
+    return obj; },
+  remove(e,id){ if(!delsAdd(e,id)) return false;   // suppression non journalisée = elle reviendrait : on ne supprime pas                            // trace la suppression, sinon la fusion la ressuscite
     DB._write(e, DB.all(e).filter(x=>x.id!==id)); },
   config(){ try{ return JSON.parse(localStorage.getItem(LS_PREFIX+'config')) || {}; }catch(_){ return {}; } },
-  saveConfig(c){ localStorage.setItem(LS_PREFIX+'config', JSON.stringify(c)); if(typeof cloudQueueConfig==='function') cloudQueueConfig(); },
+  saveConfig(c){ configHorodater(DB.config(),c); localStorage.setItem(LS_PREFIX+'config', JSON.stringify(c)); if(typeof cloudQueueConfig==='function') cloudQueueConfig(); },
 };
 
 /* ───── Utils ───── */
@@ -890,7 +1003,7 @@ const RENDERERS={}; // remplis par les modules de vue (tours suivants)
 let currentParams={};
 let _currentView='dashboard';
 function nav(view,params){
-  currentParams=params||{}; _currentView=view;
+  currentParams=params||{}; _currentView=view; _bases={};
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
   document.querySelectorAll('.sb-item').forEach(i=>i.classList.remove('active'));
   const vEl=document.getElementById('view-'+view);
@@ -1056,6 +1169,8 @@ RENDERERS.dashboard=function(){
     alrt('devy-'+d.id,'warning','⏳','<strong>Sans réponse & événement dans '+j+' j</strong> — devis '+esc(d.id)+' ('+esc(d.nomClient)+'). Relance ou libère le créneau. <a onclick="voirDevis(\''+d.id+'\')" style="color:inherit;text-decoration:underline;cursor:pointer">Ouvrir</a>',2); });
   DB.all('rdv').filter(r=>r.date).forEach(r=>{ const j=daysFromNow(r.date); if(j<0||j>1) return;
     alrt('rdv-'+r.id,'info','🗓','<strong>Rendez-vous '+(j===0?"aujourd'hui":'demain')+(r.debut?' à '+esc(r.debut):'')+'</strong> · '+esc(r.titre||'')+(r.lieu?' — '+esc(r.lieu):'')+'. <a onclick="rdvForm(\''+r.id+'\')" style="color:inherit;text-decoration:underline;cursor:pointer">Ouvrir</a>',j+1); });
+  collisionsAll().forEach((c,i)=>{ alertes+=alertHtml('danger','⚠️','<strong>Numéro en double : '+esc(c.row.id)+'</strong> ('+esc(c.row.nomClient||'')+') a été créé sur cet appareil alors que l\'autre appareil avait déjà utilisé ce numéro. Rien n\'est perdu : il est mis de côté. <a onclick="renumeroterCollision('+i+')" style="color:inherit;text-decoration:underline;cursor:pointer">Renuméroter</a>'); });
+  const sto=stockageLocal(); if(sto.pct>=70) alrt('stockage-'+todayISO(),sto.pct>=85?'danger':'warning','💾','<strong>Mémoire de l\'appareil remplie à '+sto.pct+' %</strong> ('+sto.mo+' Mo). Au-delà, de nouvelles modifications ne pourraient plus être enregistrées ici. Tes données sont sur le serveur : exporte une sauvegarde puis demande-moi d\'alléger.',1);
   if(!alertes) alertes=alertHtml('success','✓','Aucune alerte — tout est à jour. 🎩');
 
   // Activité
@@ -3473,12 +3588,14 @@ function dvSuivreSaisie(){
 document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='hidden'&&_currentView==='devis-create') dvBrouillonSauver(); });
 window.addEventListener('pagehide',()=>{ if(_currentView==='devis-create') dvBrouillonSauver(); });
 /* Vues de saisie à ne jamais redessiner automatiquement (synchro, retour dans l'app) */
-function vueEnSaisie(){ return mktEnSaisie()||_currentView==='devis-create'; }
+function vueEnSaisie(){ const a=document.activeElement;
+  return mktEnSaisie()||_currentView==='devis-create'||!!(a&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)&&a.type!=='checkbox'&&!a.closest('#modal')); }
 
 RENDERERS['devis-create']=function(params){
   const cfg=DB.config();
   let d;
-  if(params.id){ d=Object.assign({},DB.get('devis',params.id)); }
+  if(params.id){ d=Object.assign({},DB.get('devis',params.id)); editionBase('devis',DB.get('devis',params.id)); }
+  else if(cloudUrl()&&_pullOk) cloudReprise(true);   // nouveau devis : on récupère d'abord les numéros pris sur l'autre appareil
   else {
     d={id:'',dateCreation:todayISO(),idClient:'',nomClient:'',email:'',tel:'',dateEvenement:'',creneau:'Soirée',horaire:'',lieu:'',distanceKm:0,nbInvites:'',prestations:[{label:'',prix:0,duree:''}],montantHT:0,fraisDeplacement:0,tva:0,montantTTC:0,remise:0,acomptePct:cfg.acompteDefautPct||30,statut:'Brouillon',dateEnvoi:'',dateAcceptation:'',notes:'',idDemandeOrigine:''};
     if(params.demandeId){ const dem=DB.get('demandes',params.demandeId); if(dem){
@@ -4008,24 +4125,36 @@ function exportBackup(){
   const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='sauvegarde_louismagie_'+todayISO()+'.json'; a.click(); URL.revokeObjectURL(a.href);
   logActivite('Sauvegarde exportée'); toast('Sauvegarde téléchargée','ok');
 }
-function importBackupFile(input){ const f=input.files&&input.files[0]; if(!f)return;
-  const rd=new FileReader(); rd.onload=()=>{ try{ confirmImport(JSON.parse(rd.result)); }catch(_){ toast('Fichier illisible','err'); } }; rd.readAsText(f); input.value=''; }
+async function importBackupFile(input){ const f=input.files&&input.files[0]; if(!f)return; input.value='';
+  try{
+    let txt;
+    if(/\.gz$/i.test(f.name)){   // sauvegarde reçue par email (compressée)
+      const ds=new DecompressionStream('gzip'); txt=await new Response(f.stream().pipeThrough(ds)).text();
+    } else txt=await f.text();
+    confirmImport(JSON.parse(txt));
+  }catch(_){ toast('Fichier illisible','err'); } }
 function confirmImport(j){
   if(!j||!j.data){ toast('Sauvegarde non reconnue','err'); return; }
   const n=Object.values(j.data).reduce((a,arr)=>a+(Array.isArray(arr)?arr.length:0),0);
   window._importData=j;
   openModal('Restaurer cette sauvegarde ?',
-    '<div class="alert warning" style="margin:0"><span class="alert-icon">⚠</span><div>Remplace <strong>toutes les données actuelles</strong> par la sauvegarde (<strong>'+n+' enregistrements</strong>, du '+(j._date?fmtDateShort(j._date):'?')+'). Irréversible — exporte d\'abord l\'état actuel si besoin.</div></div>',
+    '<div class="alert warning" style="margin:0"><span class="alert-icon">⚠</span><div>Remplace <strong>toutes les données actuelles, sur tous tes appareils</strong>, par la sauvegarde (<strong>'+n+' enregistrements</strong>, du '+(j._date?fmtDateShort(j._date):'?')+'). Le serveur garde une copie de l\'état actuel avant de remplacer. Exporte aussi l\'état actuel si tu veux une copie chez toi.</div></div>',
     '<button class="btn btn-ghost" onclick="closeModal()">Annuler</button><button class="btn btn-danger" onclick="doImport()">Remplacer tout</button>');
 }
 async function doImport(){ const j=window._importData; if(!j)return;
+  if(cloudUrl()){
+    // Le serveur remplace vraiment tout (copie de l'état actuel d'abord) et prévient l'autre appareil
+    toast('Restauration sur le serveur…');
+    const data={}; ENTITIES.forEach(e=>{ data[e]=Array.isArray(j.data[e])?j.data[e]:[]; });
+    const cfg=j.config?Object.assign({},j.config):null; if(cfg){ delete cfg._t; delete cfg._suppr; }
+    const r=await cloudPost({action:'restaurer',data,config:cfg});
+    if(!r||!r.ok){ toast('Restauration refusée par le serveur : '+((r&&r.error)||'injoignable')+'. Rien n\'a été modifié.','err'); return; }
+    ENTITIES.forEach(e=>DB._writeLocal(e,[])); localStorage.removeItem(LS_DELS); pendSet([]);
+    closeModal(); toast('Sauvegarde restaurée ('+r.n+' fiches). Copie de l\'état précédent gardée sur le serveur.','ok');
+    setTimeout(()=>location.reload(),1200); return;
+  }
   ENTITIES.forEach(e=>DB._writeLocal(e, Array.isArray(j.data[e])?j.data[e]:[]));
   if(j.config) DB.saveConfig(j.config);
-  if(cloudUrl()){ // pousse tout vers le serveur AVANT le reload (sinon cloudPull écraserait l'import)
-    toast('Import → synchronisation serveur…');
-    try{ await Promise.all(ENTITIES.map(e=>cloudPost({action:'putEntity',entity:e,rows:DB.all(e)}))
-                            .concat(cloudPost({action:'putConfig',config:DB.config()}))); }catch(_){}
-  }
   closeModal(); toast('Sauvegarde restaurée','ok'); setTimeout(()=>location.reload(),800);
 }
 function supprimerRecette(id){ DB.remove('recettes',id); RENDERERS.compta(); toast('Recette supprimée','ok'); }
@@ -5129,6 +5258,15 @@ RENDERERS.reglages=function(){
         <button class="btn btn-ghost" onclick="ouvrirHistorique()">🕘 Historique & corbeille</button>
       </div>
       <div class="td-dim" style="margin-top:12px;font-size:12.5px">Chaque version remplacée ou supprimée est conservée <strong>24 mois</strong> sur le serveur, en plus d'une copie complète quotidienne (14 jours).</div>
+      <div class="form-grid" style="margin-top:14px">
+        <div class="form-group"><label class="form-label">Sauvegarde envoyée sur ta boîte mail (copie hors serveur)</label>
+          <select class="form-control" id="cfg-sauvegardeMail" onchange="majSauvegardeMail(this.value)">
+            ${[['jour','Chaque jour'],['semaine','Chaque semaine'],['non','Désactivée']].map(([v,l])=>`<option value="${v}"${(cfg.sauvegardeMail||'jour')===v?' selected':''}>${l}</option>`).join('')}
+          </select></div>
+        <div class="form-group"><label class="form-label">Mémoire utilisée sur cet appareil</label>
+          <div class="td-dim" style="padding-top:9px">${(()=>{ const st=stockageLocal(); return st.mo+' Mo sur environ 5 Mo ('+st.pct+' %)'; })()}</div></div>
+      </div>
+      <div class="td-dim" style="font-size:12.5px">Le fichier <strong>.json.gz</strong> reçu par email se restaure avec « Restaurer une sauvegarde » (Réglages, plus bas). Si le serveur disparaissait, ta boîte mail garde tout.</div>
     </div>
 
     <div class="panel"><div class="panel-title">☁️ Backend de synchronisation</div>
@@ -5150,7 +5288,7 @@ RENDERERS.reglages=function(){
       <div class="td-dim" style="margin-bottom:12px">Filet de sécurité : exporte tout dans un fichier (devis, factures, clients, recettes, réglages…). Garde-le sur ton ordi/Drive. En cas de pépin, restaure en 1 clic — <strong>zéro perte</strong>. Pense à exporter après chaque session importante.</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap">
         <button class="btn btn-or" onclick="exportBackup()">⬇ Exporter la sauvegarde</button>
-        <label class="btn btn-ghost" style="cursor:pointer">⬆ Restaurer une sauvegarde<input type="file" accept="application/json,.json" style="display:none" onchange="importBackupFile(this)"></label>
+        <label class="btn btn-ghost" style="cursor:pointer">⬆ Restaurer une sauvegarde<input type="file" accept="application/json,.json,.gz,application/gzip" style="display:none" onchange="importBackupFile(this)"></label>
       </div>
     </div>
 
@@ -5469,7 +5607,7 @@ function cloudFlushPending(){ if(!cloudUrl()) return Promise.resolve();
   if(!_pullOk) return cloudAuth()?cloudPull():Promise.resolve();   // récupérer d'abord ; le pull renvoie ensuite la file
   const a=pendAll().filter(e=>!_planifies.has(e));   // déjà programmé par ailleurs → pas de double envoi
   if(!a.length) return Promise.resolve();
-  return Promise.all(a.map(e=>cloudPushEntity(e))); }
+  return Promise.all(a.map(e=>e==='config'?envoyerConfig():cloudPushEntity(e))); }
 window.addEventListener('online',()=>{ cloudFlushPending(); });
 
 /* Envoi sans le délai de 1,5 s, quand l'écran doit annoncer ce que le serveur a reçu */
@@ -5494,7 +5632,9 @@ function cloudPushEntity(entity){
           let m=fusionRows(DB.all(entity), j.rows, delsAll()[entity], entity);
           if(entity==='activite') m=capActivite(m);
           DB._writeLocal(entity,m);
+          traiterCollisions();
         }
+        if(Array.isArray(j.conflits)&&j.conflits.length) refusionnerConflits(entity,j.conflits,j.ecrases||{});
       } else pendAdd(entity);                      // échec → on retentera
       return j; })
     .catch(err=>{ pendAdd(entity); return {ok:false}; });
@@ -5502,7 +5642,9 @@ function cloudPushEntity(entity){
 function cloudQueueConfig(){ if(!cloudUrl())return;
   if(!_pullOk){ _cfgEnAttente=true; return; }  // une config pas encore fusionnée écraserait les vrais réglages
   clearTimeout(_cloudTimers._cfg);
-  _cloudTimers._cfg=setTimeout(()=>cloudPost({action:'putConfig',config:DB.config()}),1500); }
+  pendAdd('config');                          // rejoué si l'envoi échoue (réseau, serveur)
+  _cloudTimers._cfg=setTimeout(envoyerConfig,1500); }
+function envoyerConfig(){ return cloudPost({action:'putConfig',config:DB.config()}).then(j=>{ if(j&&j.ok) pendDel('config'); return j; }); }
 function cloudAuth(){ return sessionStorage.getItem('lm_authh')||localStorage.getItem('lm_authh')||''; }
 function cloudPost(payload){ const url=cloudUrl(); if(!url) return Promise.resolve({ok:false});
   setCloudStatus('sync'); payload.token=DB.config().backendToken||''; if(!payload.auth) payload.auth=cloudAuth();
@@ -5535,15 +5677,18 @@ async function cloudPull(){ const url=cloudUrl(); if(!url){ setCloudStatus('off'
       if(rowsDiffer(dist,m)) aRepublier.push(e);         // le serveur ignore des lignes d'ici → on les lui rend
     });
     aRepublier.forEach(e=>cloudQueueEntity(e));
+    traiterCollisions();
     if(Array.isArray(j.signatures)) applySignatures(j.signatures);   // ré-applique le journal de signatures (anti-perte)
     resyncDerives();                                                  // agenda + prospects à partir des devis rapatriés
     cloudFlushPending();                                              // ce qui attendait (hors ligne, avant connexion)
     if(_cfgEnAttente){ _cfgEnAttente=false; cloudQueueConfig(); }
     if(j.config&&Object.keys(j.config).length){ const cur=DB.config();
       // fusion : le serveur arbitre les clés qu'il connaît, les réglages locaux inédits survivent
-      const dis=fusionDismissed(cur.dismissed,j.config.dismissed), disS=j.config.dismissed||{};
-      localStorage.setItem(LS_PREFIX+'config', JSON.stringify(Object.assign({},cur,j.config,{passwordHash:j.config.passwordHash||cur.passwordHash,dismissed:dis})));
-      if(Object.keys(dis).some(k=>disS[k]!==dis[k])) cloudQueueConfig(); }   // le serveur apprend les alertes masquées ici
+      const fus=fusionConfig(cur,j.config);
+      localStorage.setItem(LS_PREFIX+'config', JSON.stringify(fus));
+      // une clé plus récente ici (réglage changé hors ligne, alerte masquée…) : le serveur doit l'apprendre
+      const tS=j.config._t||{}, disS=j.config.dismissed||{};
+      if(Object.keys(fus._t||{}).some(k=>(fus._t[k]||'')>(tS[k]||''))||Object.keys(fus.dismissed||{}).some(k=>disS[k]!==fus.dismissed[k])) cloudQueueConfig(); }
     // Les variantes du logo sont calculées au démarrage, AVANT la connexion : leur
     // envoi part alors sans authentification et échoue. On répare ici, une fois connecté.
     const cfgL=DB.config(), cfgS=j.config||{};
@@ -5932,10 +6077,10 @@ function briefSortie(){ if(briefAutoSave()&&_pullOk) briefFlushCloud(); }   // s
 let _dernierPull=Date.now();
 /* Retour sur l'application (déverrouillage du téléphone, changement d'onglet) :
    on pousse ce qui n'était pas parti, puis on récupère le travail des autres appareils. */
-async function cloudReprise(){
+async function cloudReprise(force){
   if(!cloudUrl()||!cloudAuth()) return;
   await cloudFlushPending();
-  if(Date.now()-_dernierPull < 60000) return;
+  if(!force && Date.now()-_dernierPull < 60000) return;
   _dernierPull=Date.now();
   const r=await cloudPull();
   if(r==='pulled'&&typeof RENDERERS[_currentView]==='function'){ if(!vueEnSaisie()) RENDERERS[_currentView](currentParams); updateBadges(); }
@@ -5952,6 +6097,9 @@ document.addEventListener('visibilitychange',()=>{
     _mktCacheDepuis=0; cloudReprise();
   }
 });
+/* Écran resté ouvert (Mac) : récupère le travail de l'autre appareil chaque minute, et au retour sur la fenêtre */
+setInterval(()=>{ if(document.visibilityState==='visible'&&_pullOk) cloudReprise(); },20000);
+window.addEventListener('focus',()=>{ if(_pullOk) cloudReprise(); });
 window.addEventListener('beforeunload',e=>{ if(mktBoucleActive()){ e.preventDefault(); e.returnValue=''; return ''; } });
 window.addEventListener('pagehide',briefSortie);
 document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='hidden') mktBrouillonEcrire(); });

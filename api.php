@@ -120,7 +120,7 @@ function smtpSend($to,$subject,$bodyText,$attachName='',$attachB64='',$trackUrl=
     $b='mix'.md5(uniqid());
     $m=$h."Content-Type: multipart/mixed; boundary=\"$b\"\r\n\r\n"
       ."--$b\r\n".$bP()."\r\n"
-      ."--$b\r\nContent-Type: application/pdf; name=\"$attachName\"\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename=\"$attachName\"\r\n\r\n".chunk_split($attachB64)."\r\n--$b--\r\n";
+      ."--$b\r\nContent-Type: ".(preg_match('/\.gz$/i', $attachName) ? 'application/gzip' : 'application/pdf')."; name=\"$attachName\"\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename=\"$attachName\"\r\n\r\n".chunk_split($attachB64)."\r\n--$b--\r\n";
   } else if($html){
     $m=$h.$bP();
   } else {
@@ -181,16 +181,50 @@ function planifInstant($p){
 /* Planifs : la trace d'un envoi réel (ou tenté) ne s'efface pas, et une ligne traitée
    ne redevient jamais « prévu » par la synchro (seul le serveur change ce statut). */
 function planifTraitee($r){ return in_array((string)($r['statut'] ?? ''), ['envoi','envoyé','échec','incertain'], true); }
-function mergeRows($existantes, $entrantes, $dels, $entity){
+/* Réglages : chaque clé porte sa date (_t) et ses suppressions (_suppr). La plus récente gagne,
+   clé par clé : un appareil en retard n'écrase plus les réglages récents de l'autre, et une clé
+   supprimée ne revient plus. Un ancien CRM sans dates ne peut écraser que des clés jamais datées. */
+function configFusion($a, $e){
+  $ta = is_array($a['_t'] ?? null) ? $a['_t'] : []; $te = is_array($e['_t'] ?? null) ? $e['_t'] : [];
+  $sp = [];
+  foreach ([is_array($a['_suppr'] ?? null) ? $a['_suppr'] : [], is_array($e['_suppr'] ?? null) ? $e['_suppr'] : []] as $m)
+    foreach ($m as $k => $t) { $t = (string)$t; if (!isset($sp[$k]) || strcmp($t, $sp[$k]) > 0) $sp[$k] = $t; }
+  $out = $a; $t = $ta;
+  foreach ($e as $k => $v) {
+    if ($k === '_t' || $k === '_suppr') continue;
+    $tk = (string)($te[$k] ?? ''); $ak = (string)($ta[$k] ?? '');
+    if ($k === 'dismissed') { $out[$k] = $v; if (strcmp($tk, $ak) > 0) $t[$k] = $tk; continue; }   // déjà fusionné clé par clé
+    $gagne = !array_key_exists($k, $a) ? true : ($tk === '' ? $ak === '' : strcmp($tk, $ak) > 0);
+    if ($gagne) { $out[$k] = $v; if ($tk !== '') $t[$k] = $tk; }
+  }
+  $lim = gmdate('Y-m-d\\TH:i:s.000\\Z', time() - 180*86400);
+  foreach ($sp as $k => $ts) {
+    if (strcmp($ts, $lim) < 0) { unset($sp[$k]); continue; }
+    if (array_key_exists($k, $out) && strcmp($ts, (string)($t[$k] ?? '')) > 0) { unset($out[$k]); unset($t[$k]); }
+  }
+  $out['_t'] = $t ?: new stdClass(); $out['_suppr'] = $sp ?: new stdClass();
+  return $out;
+}
+function mergeRows($existantes, $entrantes, $dels, $entity, &$collisions = null, &$conflits = null, &$ecrases = null){
+  $collisions = []; $conflits = []; $ecrases = [];
   $map = [];
   foreach ((array)$existantes as $r) { if (is_array($r) && isset($r['id'])) $map[(string)$r['id']] = $r; }
   foreach ((array)$entrantes as $r) {
     if (!is_array($r) || !isset($r['id'])) continue;
     $k = (string)$r['id'];
     if (!isset($map[$k])) { $map[$k] = $r; continue; }
+    // même numéro mais autre document (créé sur un autre appareil hors ligne) : on n'écrase pas,
+    // l'appareil le met de côté et le renumérote
+    $ce = (string)($r['cle'] ?? ''); $cm = (string)($map[$k]['cle'] ?? '');
+    if ($ce !== '' && $cm !== '' && $ce !== $cm) { $collisions[] = $k; continue; }
     if ($entity === 'planifs' && ($r['statut'] ?? '') === 'prévu' && ($map[$k]['statut'] ?? '') !== 'prévu') continue;
     $te = rowTs($r); $tm = rowTs($map[$k]);
-    if ($te !== '' && ($tm === '' || strcmp($te, $tm) >= 0)) $map[$k] = $r;   // l'entrant gagne s'il est au moins aussi récent
+    if ($te !== '' && ($tm === '' || strcmp($te, $tm) >= 0)) {   // l'entrant gagne s'il est au moins aussi récent
+      // modifié sur une copie qui n'avait pas vu la version actuelle : celle-ci est archivée de force
+      $b = (string)($r['_base'] ?? '');
+      if ($b !== '' && $tm !== '' && $te !== $tm && strcmp($tm, $b) > 0) { $conflits[] = $k; $ecrases[$k] = $map[$k]; }   // l'appareil refusionne champ par champ
+      $map[$k] = $r;
+    }
   }
   $out = [];
   foreach ($map as $k => $r) {
@@ -378,7 +412,7 @@ function alertePlafond($DATA_DIR, $max){   // une alerte par jour, adressée à 
    mensuel en ajout seul). Une modification n'est photographiée qu'une fois
    par quart d'heure et par fiche — sinon l'enregistrement automatique d'un
    brief en cours de frappe remplirait le disque. Une suppression l'est toujours. */
-function historiser($DATA_DIR, $e, $existantes, $fusion){
+function historiser($DATA_DIR, $e, $existantes, $fusion, $forcer = []){
   if ($e === 'activite') return;
   $apres = [];
   foreach ((array)$fusion as $r) if (is_array($r) && isset($r['id'])) $apres[(string)$r['id']] = $r;
@@ -392,8 +426,9 @@ function historiser($DATA_DIR, $e, $existantes, $fusion){
     if (!isset($apres[$k])) $raison = 'suppression';
     elseif (json_encode($apres[$k]) !== json_encode($r)) {
       $cle = "$e|$k";
-      if (isset($idx[$cle]) && strcmp((string)$idx[$cle], $lim) > 0) continue;   // photo récente : inutile
-      $raison = 'modification';
+      $force = in_array($k, $forcer, true);
+      if (!$force && isset($idx[$cle]) && strcmp((string)$idx[$cle], $lim) > 0) continue;   // photo récente : inutile
+      $raison = $force ? 'conflit' : 'modification';
     }
     else continue;
     $lignes .= json_encode(['at'=>$at,'entity'=>$e,'id'=>$k,'raison'=>$raison,'avant'=>$r],
@@ -585,6 +620,39 @@ function pushNotifier($DATA_DIR, $titre, $corps, $url = '/', $tag = 'crm'){
 }
 /* Rappels (appelé par le cron toutes les 15 min) : récap du matin à partir de 8 h, et
    chaque rendez-vous une heure avant. Chaque rappel ne part qu'une fois (_push_rappels.json). */
+/* Sauvegarde hors serveur : une fois par jour (ou par semaine), toutes les données compressées
+   envoyées à Louis par email. Si le serveur disparaît, la boîte mail garde de quoi tout restaurer
+   (Réglages → Restaurer une sauvegarde accepte le .json.gz). */
+function sauvegardeEmail($DATA_DIR, $ENTITIES){
+  try {
+    $cfg = readJson("$DATA_DIR/config.json"); if (!is_array($cfg)) $cfg = [];
+    $freq = (string)($cfg['sauvegardeMail'] ?? 'jour');
+    if ($freq === 'non') return 'désactivée';
+    $now = new DateTime('now', new DateTimeZone('Europe/Paris'));
+    if ((int)$now->format('H') < 3) return 'trop tôt';
+    $f = "$DATA_DIR/_sauvegarde_mail.txt"; $der = is_file($f) ? trim((string)file_get_contents($f)) : '';
+    $cle = $freq === 'semaine' ? $now->format('o-\\WW') : $now->format('Y-m-d');
+    if ($der === $cle) return 'déjà faite';
+    $to = (string)($cfg['emailLouis'] ?? '') ?: (getenv('SMTP_FROM') ?: getenv('SMTP_USER'));
+    if (!$to) return 'aucune adresse';
+    $data = []; $n = 0;
+    foreach ($ENTITIES as $e) { $v = readJson("$DATA_DIR/$e.json"); $data[$e] = is_array($v) ? $v : []; $n += count($data[$e]); }
+    if ($n === 0) return 'aucune donnée';
+    $c2 = $cfg; unset($c2['desaboKey'], $c2['agendaKey'], $c2['desaboLegacy'], $c2['desaboLegacyJusqua']);
+    $blob = ['_app'=>'CRM LouisMagie','_version'=>1,'_date'=>gmdate('c'),'_source'=>'sauvegarde automatique du serveur','config'=>$c2,'data'=>$data];
+    $gz = gzencode(json_encode($blob, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE), 9);
+    if ($gz === false) return 'compression impossible';
+    if (strlen($gz) > 9 * 1048576) return 'trop volumineuse ('.round(strlen($gz)/1048576,1).' Mo)';
+    $nom = 'sauvegarde_louismagie_'.$now->format('Y-m-d').'.json.gz';
+    $res = smtpSend($to, '💾 Sauvegarde CRM du '.$now->format('d/m/Y').' ('.$n.' fiches)',
+      "Sauvegarde automatique de ton CRM, en pièce jointe.\n\n".$n." fiches, ".round(strlen($gz)/1024)." Ko compressés.\n\n"
+      ."Pour restaurer : CRM → Réglages → Restaurer une sauvegarde, puis choisis ce fichier .json.gz.\n"
+      ."Garde ces emails : ce sont tes copies hors serveur.\n\nPour changer la fréquence : Réglages → Mes données.", $nom, base64_encode($gz));
+    $ok = is_array($res) ? !empty($res[0]) : (bool)$res;
+    if ($ok) @file_put_contents($f, $cle);
+    return $ok ? 'envoyée' : 'échec';
+  } catch (\Throwable $e) { return 'erreur'; }
+}
 function pushRappels($DATA_DIR){
   try {
     $subs = readJson("$DATA_DIR/_push.json"); if (!is_array($subs) || !$subs) return 0;
@@ -1910,6 +1978,7 @@ if ($action === 'runScheduled') {
   $lockF = $DATA_DIR.'/_cron.lock'; $lock = @fopen($lockF,'c');
   if ($lock && !@flock($lock, LOCK_EX | LOCK_NB)) out(['ok'=>false,'error'=>'envoi déjà en cours']);
   $rappelsPush = pushRappels($DATA_DIR);   // récap du matin + rendez-vous dans l'heure (best effort)
+  $sauvegarde = sauvegardeEmail($DATA_DIR, $ENTITIES);   // copie hors serveur, dans la boîte mail de Louis
   // Allège les envois déjà traités (anciennes campagnes comprises) : une écriture au plus, aucune si rien à faire.
   // La version complète reste dans _historique (historiser, appelé par majTable).
   $alleges = (int)majTable($DATA_DIR, 'planifs', function(&$t) {
@@ -1999,7 +2068,7 @@ if ($action === 'runScheduled') {
   }
   if ($lock) { @flock($lock, LOCK_UN); @fclose($lock); }
   out(['ok'=>$arret==='','sent'=>$sent,'fail'=>$fail,'reportes'=>$reportes,'incertains'=>$incertains,'perimes'=>$perimes,
-       'desabonnes'=>$skip,'sautes'=>$sautes,'alleges'=>$alleges,'arret'=>$arret,'plafond'=>$plafond,'total'=>count($arr),'rappelsPush'=>$rappelsPush]);
+       'desabonnes'=>$skip,'sautes'=>$sautes,'alleges'=>$alleges,'arret'=>$arret,'plafond'=>$plafond,'total'=>count($arr),'rappelsPush'=>$rappelsPush,'sauvegarde'=>$sauvegarde]);
 }
 
 /* ===== Diagnostic SMTP (clé requise) ===== */
@@ -2068,14 +2137,14 @@ switch ($action) {
         }
         return $d;
       });
-      $fusion = mergeRows($existantes, $entrantes, $dels[$e] ?? [], $e);
+      $fusion = mergeRows($existantes, $entrantes, $dels[$e] ?? [], $e, $coll, $conf, $ecr);
       backupJour($DATA_DIR, $e);
-      historiser($DATA_DIR, $e, $existantes, $fusion);
+      historiser($DATA_DIR, $e, $existantes, $fusion, $conf);
       if (!writeJson("$DATA_DIR/$e.json", $fusion)) return null;
-      return $fusion;
+      return [$fusion, $coll, $conf, $ecr];
     });
     if ($res === null) out(['ok'=>false,'error'=>'écriture impossible']);
-    out(['ok'=>true, 'entity'=>$e, 'n'=>count($res), 'rows'=>$res]);
+    out(['ok'=>true, 'entity'=>$e, 'n'=>count($res[0]), 'rows'=>$res[0], 'collisions'=>$res[1], 'conflits'=>$res[2], 'ecrases'=>($res[3] ?: new stdClass())]);
   }
 
   case 'annulerPlanifs': {
@@ -2173,6 +2242,45 @@ switch ($action) {
     out(['ok'=>false, 'error'=>'version introuvable']);
   }
 
+  case 'restaurer': {
+    // Remplace vraiment tout par une sauvegarde : copie de l'état actuel d'abord, fiches restaurées
+    // datées de maintenant (elles l'emportent sur tous les appareils), fiches absentes de la sauvegarde
+    // inscrites au journal de suppressions (l'autre appareil les retire aussi).
+    $data = is_array($req['data'] ?? null) ? $req['data'] : null;
+    if (!$data) out(['ok'=>false,'error'=>'sauvegarde vide']);
+    $total = 0; foreach ($ENTITIES as $e) $total += is_array($data[$e] ?? null) ? count($data[$e]) : 0;
+    if ($total === 0) out(['ok'=>false,'error'=>'sauvegarde sans aucune fiche']);
+    $stamp = gmdate('Ymd-His'); $dir = "$DATA_DIR/_bak/restauration-$stamp";
+    if (!@mkdir($dir, 0775, true)) out(['ok'=>false,'error'=>'copie de sécurité impossible']);
+    foreach (array_merge($ENTITIES, ['config', '_dels']) as $f) if (is_file("$DATA_DIR/$f.json") && !@copy("$DATA_DIR/$f.json", "$dir/$f.json")) out(['ok'=>false,'error'=>'copie de sécurité impossible']);
+    $now = nowTs(); $n = 0;
+    $ok = sousVerrou($DATA_DIR, 'dels', function() use ($DATA_DIR, $ENTITIES, $data, $now, &$n) {
+      $d = delsRead($DATA_DIR);
+      foreach ($ENTITIES as $e) {
+        $rows = []; foreach ((array)($data[$e] ?? []) as $r) if (is_array($r) && isset($r['id'])) { unset($r['_base']); $r['updatedAt'] = $now; $rows[(string)$r['id']] = $r; }
+        $r2 = sousVerrou($DATA_DIR, $e, function() use ($DATA_DIR, $e, $rows, $now, &$d) {
+          $act = readJson("$DATA_DIR/$e.json"); if (!is_array($act)) $act = [];
+          foreach ($act as $x) if (is_array($x) && isset($x['id']) && !isset($rows[(string)$x['id']])) $d[$e][(string)$x['id']] = $now;
+          foreach (array_keys($rows) as $id) unset($d[$e][$id]);
+          historiser($DATA_DIR, $e, $act, array_values($rows), array_map('strval', array_keys($rows)));
+          return writeJson("$DATA_DIR/$e.json", array_values($rows));
+        });
+        if (!$r2) return false;
+        $n += count($rows);
+      }
+      return writeJson("$DATA_DIR/_dels.json", $d);
+    });
+    if (!$ok) out(['ok'=>false,'error'=>'écriture impossible (copie gardée dans _bak/restauration-'.$stamp.')']);
+    if (is_array($req['config'] ?? null)) {
+      $cfgR = $req['config']; unset($cfgR['desaboKey'], $cfgR['agendaKey'], $cfgR['_t'], $cfgR['_suppr']);
+      sousVerrou($DATA_DIR, 'config', function() use ($DATA_DIR, $cfgR, $now) {
+        $a = readJson("$DATA_DIR/config.json"); if (!is_array($a)) $a = [];
+        $t = []; foreach ($cfgR as $k => $v) $t[$k] = $now;
+        return writeJson("$DATA_DIR/config.json", configFusion($a, $cfgR + ['_t' => $t]));
+      });
+    }
+    out(['ok'=>true, 'n'=>$n, 'copie'=>"restauration-$stamp"]);
+  }
   case 'pushCle': {
     $v = vapidCles($DATA_DIR);
     out($v ? ['ok' => true, 'pub' => $v['pub']] : ['ok' => false, 'error' => 'clé de notification impossible à créer']);
@@ -2230,8 +2338,8 @@ switch ($action) {
           }
         $entrant['dismissed'] = $m;
       }
-      // fusion par clé : un appareil qui ignore un réglage récent ne l'efface plus
-      return writeJson("$DATA_DIR/config.json", array_merge($actuel, $entrant));
+      backupJour($DATA_DIR, 'config');                 // IBAN, mentions, modèles : copie quotidienne comme les tables
+      return writeJson("$DATA_DIR/config.json", configFusion($actuel, $entrant));
     });
     if (!$ok) out(['ok'=>false,'error'=>'écriture impossible']);
     out(['ok'=>true]);
