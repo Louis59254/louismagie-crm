@@ -352,7 +352,14 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
   /* modale plein écran (100dvh = barre Safari iOS prise en compte) */
   #modal-bg{padding:0}
   .modal{width:100%;max-width:100%;height:100vh;height:100dvh;max-height:100vh;max-height:100dvh;border-radius:0;border:none}
-  .modal-footer{position:sticky;bottom:0;background:var(--noir2);padding-bottom:calc(10px + env(safe-area-inset-bottom))}
+  .modal-footer{position:sticky;bottom:0;background:var(--noir2);padding-bottom:calc(10px + env(safe-area-inset-bottom));flex-wrap:nowrap;overflow-x:auto;justify-content:flex-start;-webkit-overflow-scrolling:touch}
+  .modal-footer .btn{flex:0 0 auto;white-space:nowrap}
+  td[data-label][style*="width"]{width:auto!important}
+  /* agenda : liste au lieu de la grille de 7 colonnes */
+  .ag-liste-mob{display:block}
+  .cal-header{flex-wrap:wrap;gap:8px}
+  .cal-header .cal-month{order:-1;width:100%;font-size:17px}
+  .charts-grid>*{min-width:0}
   /* anti-zoom iOS : tout champ de saisie >=16px, y compris styles inline */
   input,select,textarea,#mkt-editor,[contenteditable]{font-size:16px!important}
   /* cibles tactiles confortables */
@@ -2645,7 +2652,7 @@ RENDERERS.agenda=function(){
           <div class="cal-month" style="display:flex;align-items:center;gap:8px;justify-content:center">${moisLabel} <button class="btn btn-ghost btn-sm" onclick="_calRef=null;RENDERERS.agenda()" title="Revenir au mois courant">Aujourd'hui</button></div>
           <button class="btn btn-ghost btn-sm" onclick="calNav(1)">Suiv. ›</button>
         </div>
-        <div class="cal-grid">${dows}${cells}</div>
+        ${window.innerWidth<680?agendaListeMois(y,m):`<div class="cal-grid">${dows}${cells}</div>`}
         <div class="td-dim" style="margin-top:12px;display:flex;gap:14px;flex-wrap:wrap">
           <span><span style="display:inline-block;width:10px;height:10px;border:1px dashed var(--info);border-radius:2px;vertical-align:middle"></span> Option (devis en cours)</span>
           <span><span style="display:inline-block;width:10px;height:10px;background:var(--or);border-radius:2px;vertical-align:middle"></span> Confirmée</span>
@@ -2692,6 +2699,25 @@ function rdvDel(id){ const r=DB.get('rdv',id); if(!r) return;
   if(!confirm('Supprimer le rendez-vous « '+(r.titre||'')+' » du '+fmtDateShort(r.date)+' ?')) return;
   DB.remove('rdv',id); closeModal(); toast('Rendez-vous supprimé','ok');
   if(_currentView==='agenda') RENDERERS.agenda(); else if(_currentView==='dashboard') RENDERERS.dashboard();
+}
+/* Téléphone : la grille de 7 colonnes est illisible → liste des jours qui ont quelque chose */
+function agendaListeMois(y,m){
+  const nb=new Date(y,m+1,0).getDate(), auj=todayISO(); let html='';
+  for(let day=1;day<=nb;day++){
+    const ds=`${y}-${String(m+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+    const pr=DB.all('prestations').filter(p=>p.dateEvenement===ds);
+    const pj=DB.all('projets').filter(x=>x.date===ds&&x.statut!=='Annulé'&&!(x.idDevis&&pr.some(p=>p.idDevis===x.idDevis)));
+    const rv=DB.all('rdv').filter(r=>r.date===ds).sort((a,b)=>(a.debut||'').localeCompare(b.debut||''));
+    if(!pr.length&&!pj.length&&!rv.length) continue;
+    const lab=new Date(ds+'T12:00:00').toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'});
+    const lig=(ic,txt,sous,clic,cls)=>`<div class="kb-card" onclick="${clic}" style="margin:0 0 6px;${cls||''}"><div class="kb-card-title">${ic} ${txt}</div>${sous?`<div class="kb-card-sub">${sous}</div>`:''}</div>`;
+    html+=`<div style="margin:12px 0 6px;font-weight:600;${ds===auj?'color:var(--or)':''}">${esc(lab.charAt(0).toUpperCase()+lab.slice(1))}${ds===auj?' · aujourd\'hui':''}</div>`
+      +pr.map(p=>lig(p.statutRealisation==='Option'?'◌':'🎩',esc((p.horaire||p.creneau||'')+' · '+(p.typePrestation||'Prestation')),esc(p.lieu||'')+(p.statutRealisation==='Option'?' · option':''),`voirPrestation('${p.id}')`,p.statutRealisation==='Option'?'opacity:.8;border-left:3px dashed var(--info)':'border-left:3px solid var(--or)')).join('')
+      +pj.map(x=>lig('🎭',esc(x.nom||'Projet'),esc(x.lieu||''),`nav('projet',{id:'${x.id}'})`,'border-left:3px solid #9C27B0')).join('')
+      +rv.map(r=>lig('🗓',esc((r.debut?r.debut+' · ':'')+(r.titre||'Rendez-vous')),esc(r.lieu||r.avec||''),`rdvForm('${r.id}')`,'border-left:3px solid var(--gm)')).join('');
+  }
+  return `<div class="ag-liste-mob">${html||'<div class="td-dim" style="padding:14px 0">Rien de prévu ce mois-ci.</div>'}
+    <button class="btn btn-or" style="width:100%;margin-top:10px" onclick="rdvForm(null,'')">+ Rendez-vous</button></div>`;
 }
 function calNav(delta){ _calRef.m+=delta; if(_calRef.m<0){_calRef.m=11;_calRef.y--;} if(_calRef.m>11){_calRef.m=0;_calRef.y++;} RENDERERS.agenda(); }
 function voirPrestation(id){
@@ -3911,7 +3937,7 @@ function openMailComposer(opts){
   // opts: {titre, to, subject, body, pdfId, pdfType, onSent, kind, ref}
   const auto=DB.config().gmailEnvoi && cloudUrl();
   const body=`<div class="alert info"><span class="alert-icon">✉</span><div>${auto
-      ? 'Envoi automatique via Gmail activé. <strong>« Envoyer maintenant »</strong> envoie directement'+(opts.pdfId?' (PDF joint inclus)':'')+'.'
+      ? 'Envoi direct par le serveur activé. <strong>« Envoyer maintenant »</strong> envoie directement'+(opts.pdfId?' (PDF joint inclus)':'')+'.'
       : 'Semi-automatique : <strong>« Ouvrir ma messagerie »</strong> ouvre Mail/Gmail pré-rempli.'+(opts.pdfId?' Pense à joindre le PDF.':'')}</div></div>
     <div class="form-grid full">
       <div class="form-group"><label class="form-label">Destinataire</label><input class="form-control" id="mc-to" value="${esc(opts.to||'')}"></div>
@@ -4498,9 +4524,9 @@ RENDERERS.marketing=function(){
     <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr)">
       ${kpi('info','Adresses joignables',joignables,'hors désabonnés, sans doublon')}
       ${kpi('or','Rappels à faire',rappels.length)}
-      ${kpi(auto?'vert':'warn','Envoi',auto?'Gmail auto ✓':'Messagerie',auto?'direct + perso':'mailto groupé')}
+      ${kpi(auto?'vert':'warn','Envoi',auto?'Direct ✓':'Messagerie',auto?'par le serveur':'mailto groupé')}
     </div>
-    ${!auto?alertHtml('warning','✉','Envoi auto Gmail désactivé → l\'envoi groupé ouvrira ta messagerie avec les destinataires en copie cachée (Cci). Active Gmail (Réglages) pour un envoi direct et personnalisé.'):''}
+    ${!auto?alertHtml('warning','✉','Envoi direct désactivé → l\'envoi groupé ouvrira ta messagerie avec les destinataires en copie cachée (Cci). Active l\'envoi direct (Réglages) pour un envoi direct et personnalisé.'):''}
     ${mktBandeauInterrompues(ec)}
 
     <div class="panel"><div class="panel-title">🔔 Rappels intelligents</div>
@@ -4570,7 +4596,7 @@ RENDERERS.marketing=function(){
           <button class="btn btn-ghost" onclick="envoyerTest()">🧪 M'envoyer un test</button>
           <button class="btn btn-or" id="mkt-send" onclick="envoyerCampagne()"${_mktEnvoiEnCours?' disabled':''}>${auto?'📤 Envoyer maintenant':'✉ Ouvrir ma messagerie'}</button></div>
       </div>
-      ${!auto?'<div class="td-dim" style="margin-top:6px">Planification + suivi des ouvertures = nécessitent l\'envoi auto Gmail.</div>':''}
+      ${!auto?'<div class="td-dim" style="margin-top:6px">Planification + suivi des ouvertures = nécessitent l\'envoi direct par le serveur.</div>':''}
     </div>
 
     ${marketingStatsHtml(ec)}
@@ -5180,14 +5206,14 @@ RENDERERS.reglages=function(){
   const cfg=DB.config();
   const cat=DB.all('catalogue');
   const catRows=cat.length?cat.map(c=>`<tr>
-    <td><input class="form-control" value="${esc(c.label)}" onchange="majCat('${c.id}','label',this.value)"></td>
-    <td style="width:110px"><input class="form-control" type="number" value="${c.prix}" onchange="majCat('${c.id}','prix',+this.value)"></td>
-    <td style="width:90px"><input class="form-control" value="${esc(c.duree||'')}" onchange="majCat('${c.id}','duree',this.value)"></td>
-    <td style="width:120px"><select class="form-control" onchange="majCat('${c.id}','categorie',this.value)">
+    <td data-label="Libellé"><input class="form-control" value="${esc(c.label)}" onchange="majCat('${c.id}','label',this.value)"></td>
+    <td data-label="Prix (€)" style="width:110px"><input class="form-control" type="number" value="${c.prix}" onchange="majCat('${c.id}','prix',+this.value)"></td>
+    <td data-label="Durée" style="width:90px"><input class="form-control" value="${esc(c.duree||'')}" onchange="majCat('${c.id}','duree',this.value)"></td>
+    <td data-label="Catégorie" style="width:120px"><select class="form-control" onchange="majCat('${c.id}','categorie',this.value)">
       <option value="prestation"${c.categorie==='prestation'?' selected':''}>Prestation</option>
       <option value="option"${c.categorie==='option'?' selected':''}>Option</option></select></td>
-    <td style="width:80px;text-align:center"><input type="checkbox" ${c.actif!==false?'checked':''} onchange="majCat('${c.id}','actif',this.checked)" title="Actif"></td>
-    <td style="width:50px"><button class="btn btn-ghost btn-sm" onclick="delCat('${c.id}')">✕</button></td></tr>`).join('')
+    <td data-label="Actif" style="width:80px;text-align:center"><input type="checkbox" ${c.actif!==false?'checked':''} onchange="majCat('${c.id}','actif',this.checked)" title="Actif"></td>
+    <td data-label="" style="width:50px"><button class="btn btn-ghost btn-sm" onclick="delCat('${c.id}')">✕ Retirer</button></td></tr>`).join('')
     :'<tr><td colspan="6"><div class="td-dim" style="padding:10px">Catalogue vide.</div></td></tr>';
 
   document.getElementById('view-reglages').innerHTML=`
@@ -5335,14 +5361,15 @@ RENDERERS.reglages=function(){
     <div class="panel"><div class="panel-title">☁️ Backend de synchronisation</div>
       <div class="td-dim" style="margin-bottom:12px">Synchro sécurisée par <strong>ton mot de passe</strong> : connecte-toi avec sur n'importe quel appareil → données synchronisées + PDF archivés. Plus de token à recopier. Laisse l'URL vide = 100 % local.</div>
       <div class="form-grid">
-        <div class="form-group full"><label class="form-label">URL backend — laisse VIDE = auto (même domaine)</label><input class="form-control" id="cfg-appsScriptUrl" value="${esc(cfg.appsScriptUrl||'')}" placeholder="auto : ${location.origin}/api.php"></div>
-        <div class="form-group"><label class="form-label">Envoi auto via Gmail (serveur)</label><select class="form-control" id="cfg-gmailEnvoi"><option value="non"${!cfg.gmailEnvoi?' selected':''}>Non — ouvre ma messagerie</option><option value="oui"${cfg.gmailEnvoi?' selected':''}>Oui — envoi direct + PDF joint</option></select></div>
+        <div class="form-group"><label class="form-label">Envoi des emails</label><select class="form-control" id="cfg-gmailEnvoi"><option value="non"${!cfg.gmailEnvoi?' selected':''}>Ouvrir ma messagerie</option><option value="oui"${cfg.gmailEnvoi?' selected':''}>Envoi direct par le serveur (PDF joint)</option></select></div>
       </div>
-      <div class="td-dim" style="margin-top:4px">Envoi auto = nécessite <code>GMAIL_USER</code> + <code>GMAIL_APP_PASSWORD</code> dans Coolify (mot de passe d'application Gmail, 2FA requise).</div>
+      <div class="td-dim" style="margin-top:4px">L'envoi direct passe par ta boîte <strong>contact@louismagie.fr</strong> (Infomaniak), réglée dans Coolify (<code>SMTP_USER</code>, <code>SMTP_PASS</code>).</div>
+      <details style="margin-top:10px"><summary class="td-dim" style="cursor:pointer">Réglage avancé</summary>
+        <div class="form-group" style="margin-top:8px"><label class="form-label">Adresse du serveur (laisse vide : même domaine que le CRM)</label><input class="form-control" id="cfg-appsScriptUrl" value="${esc(cfg.appsScriptUrl||'')}" placeholder="${location.origin}/api.php"></div></details>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">
         <button class="btn btn-or" onclick="saveBackend()">💾 Enregistrer & synchroniser</button>
-        <button class="btn btn-ghost" onclick="cloudPushAll()">⬆ Tout envoyer vers Google</button>
-        <button class="btn btn-ghost" onclick="cloudSyncNow()">🔄 Récupérer depuis Google</button>
+        <button class="btn btn-ghost" onclick="cloudPushAll()">⬆ Tout renvoyer au serveur</button>
+        <button class="btn btn-ghost" onclick="cloudSyncNow()">🔄 Récupérer depuis le serveur</button>
         <button class="btn btn-ghost" onclick="voirJournalEnvois()">📜 Emails partis du serveur</button>
       </div>
     </div>
@@ -5476,7 +5503,7 @@ async function changePwd(){
   document.getElementById('cfg-pwd').value=''; toast('Mot de passe changé (synchronisé)','ok');
 }
 
-/* ═══════════ SYNC CLOUD (Google Apps Script + Sheet + Drive) ═══════════
+/* ═══════════ SYNCHRONISATION AVEC LE SERVEUR (api.php) ═══════════
    localStorage reste le moteur (rapide, hors-ligne). Le cloud est un miroir auto :
    chaque écriture est poussée (debounce) vers le Sheet ; au démarrage on tire le Sheet.
    PDF devis/facture archivés automatiquement dans le Drive. */
@@ -5718,7 +5745,7 @@ function cloudPushAll(){ if(!cloudUrl())return; ENTITIES.forEach(e=>cloudPushEnt
   cloudPost({action:'putConfig',config:DB.config()}); toast('Envoi de toutes les données vers le serveur…','ok'); }
 async function cloudPull(){ const url=cloudUrl(); if(!url){ setCloudStatus('off'); return 'off'; }
   setCloudStatus('sync');
-  try{ const r=await fetch(url+'?action=getAll&auth='+encodeURIComponent(cloudAuth())+'&token='+encodeURIComponent(DB.config().backendToken||'')); const j=await r.json();
+  try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'getAll',auth:cloudAuth(),token:DB.config().backendToken||''})}); const j=await r.json();
     if(!j||!j.ok||!j.data){ setCloudStatus('err'); return 'err'; }
     const total=ENTITIES.reduce((a,e)=>a+((j.data[e]||[]).length),0);
     if(total===0){
@@ -5762,8 +5789,13 @@ async function cloudPull(){ const url=cloudUrl(); if(!url){ setCloudStatus('off'
   }catch(_){ setCloudStatus('err'); return 'err'; } }
 function archivePdfCloud(doc,kind,filename,year){ if(!cloudUrl())return;
   try{ const b64=doc.output('datauristring').split(',')[1];
+    // un aperçu identique n'est pas renvoyé (iPhone : réseau et archives épargnés)
+    let h=0; for(let i=0;i<b64.length;i+=97) h=(h*31+b64.charCodeAt(i))|0; const sig=b64.length+':'+h;
+    let m={}; try{ m=JSON.parse(localStorage.getItem('lm_arch'))||{}; }catch(_){}
+    const k=kind+'/'+filename; if(m[k]===sig) return; m[k]=sig;
+    try{ const ks=Object.keys(m); if(ks.length>300) ks.slice(0,ks.length-300).forEach(x=>delete m[x]); localStorage.setItem('lm_arch',JSON.stringify(m)); }catch(_){}
     cloudPost({action:'archivePdf',kind,filename,base64:b64,year:year||new Date().getFullYear()})
-      .then(j=>{ if(j&&j.ok&&j.url) logActivite('PDF archivé dans Drive : '+filename); }); }catch(_){}
+      .then(j=>{ if(j&&j.ok&&j.url) logActivite('PDF archivé sur le serveur : '+filename); }); }catch(_){}
 }
 async function saveBackend(){            // sauve les réglages + POUSSE vers le serveur (sans re-tirer = pas d'écrasement)
   saveParams();
@@ -5781,8 +5813,8 @@ async function voirJournalEnvois(){
   const rows=(j.entrees||[]).map(e=>'<tr><td>'+esc(f(e.at))+'</td><td>'+esc(e.to)+'</td><td>'+esc(e.sujet)+'</td><td>'+esc(lib[e.statut]||e.statut)+'</td><td class="td-dim">'+esc(e.origine)+'</td></tr>').join('');
   openModal('Ce qui est réellement parti du serveur',
     '<div class="td-dim" style="margin-bottom:10px">'+(j.jour||0)+' email(s) sur les dernières 24 h'+(j.plafond?' · plafond '+j.plafond:'')+'. Les 50 derniers :</div>'
-    +'<div class="table-wrap"><table><thead><tr><th>Date</th><th>Destinataire</th><th>Objet</th><th>Statut</th><th>Origine</th></tr></thead><tbody>'
-    +(rows||'<tr><td colspan="5" class="td-dim">Aucun envoi enregistré depuis la mise à jour.</td></tr>')+'</tbody></table></div>',
+    +'<div class="table-wrap"><div style="overflow-x:auto"><table style="min-width:620px"><thead><tr><th>Date</th><th>Destinataire</th><th>Objet</th><th>Statut</th><th>Origine</th></tr></thead><tbody>'
+    +(rows||'<tr><td colspan="5" class="td-dim">Aucun envoi enregistré depuis la mise à jour.</td></tr>')+'</tbody></table></div></div>',
     '<button class="btn btn-ghost" onclick="closeModal()">Fermer</button>');
 }
 async function cloudSyncNow(){
