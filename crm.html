@@ -1175,7 +1175,8 @@ RENDERERS.dashboard=function(){
     const j=daysFromNow(d.dateEvenement); if(j<0||j>10) return;
     alrt('devy-'+d.id,'warning','⏳','<strong>Sans réponse & événement dans '+j+' j</strong> — devis '+esc(d.id)+' ('+esc(d.nomClient)+'). Relance ou libère le créneau. <a onclick="voirDevis(\''+d.id+'\')" style="color:inherit;text-decoration:underline;cursor:pointer">Ouvrir</a>',2); });
   DB.all('rdv').filter(r=>r.date).forEach(r=>{ const j=daysFromNow(r.date); if(j<0||j>1) return;
-    alrt('rdv-'+r.id,'info','🗓','<strong>Rendez-vous '+(j===0?"aujourd'hui":'demain')+(r.debut?' à '+esc(r.debut):'')+'</strong> · '+esc(r.titre||'')+(r.lieu?' — '+esc(r.lieu):'')+'. <a onclick="rdvForm(\''+r.id+'\')" style="color:inherit;text-decoration:underline;cursor:pointer">Ouvrir</a>',j+1); });
+    alrt('rdv-'+r.id,'info','🗓','<strong>Rendez-vous '+(j===0?"aujourd'hui":'demain')+(r.debut?' à '+esc(r.debut):'')+'</strong> · '+esc(r.titre||'')+(r.lieu?' — '+esc(r.lieu):'')+'. <a onclick="rdvForm(\''+r.id+'\')" style="color:inherit;text-decoration:underline;cursor:pointer">Ouvrir</a>'
+      +(j===1&&r.email&&!r.rappelEnvoye?' · <a onclick="rdvMail(\''+r.id+'\',\'rappel\')" style="color:inherit;text-decoration:underline;cursor:pointer">Envoyer le rappel</a>':''),j+1); });
   collisionsAll().forEach((c,i)=>{ alertes+=alertHtml('danger','⚠️','<strong>Numéro en double : '+esc(c.row.id)+'</strong> ('+esc(c.row.nomClient||'')+') a été créé sur cet appareil alors que l\'autre appareil avait déjà utilisé ce numéro. Rien n\'est perdu : il est mis de côté. <a onclick="renumeroterCollision('+i+')" style="color:inherit;text-decoration:underline;cursor:pointer">Renuméroter</a>'); });
   const sto=stockageLocal(); if(sto.pct>=70) alrt('stockage-'+todayISO(),sto.pct>=85?'danger':'warning','💾','<strong>Mémoire de l\'appareil remplie à '+sto.pct+' %</strong> ('+sto.mo+' Mo). Au-delà, de nouvelles modifications ne pourraient plus être enregistrées ici. Tes données sont sur le serveur : exporte une sauvegarde puis demande-moi d\'alléger.',1);
   if(!alertes) alertes=alertHtml('success','✓','Aucune alerte — tout est à jour. 🎩');
@@ -1240,6 +1241,42 @@ function buildChartType(){
 }
 
 /* ═══════════ VUE : STATISTIQUES ═══════════ */
+/* Période au choix, comparée à la même période de l'année précédente */
+let _statP='annee', _statCmp=true;
+function periodeBornes(k,decal){ const n=new Date(), y=n.getFullYear()-(decal||0), m=n.getMonth(), p=x=>String(x).padStart(2,'0');
+  const fin=`${y}-${p(m+1)}-${p(n.getDate())}`;
+  if(k==='mois') return [`${y}-${p(m+1)}-01`,fin,n.toLocaleDateString('fr-FR',{month:'long'})+' '+y];
+  if(k==='trim'){ const t=Math.floor(m/3); return [`${y}-${p(t*3+1)}-01`,fin,'T'+(t+1)+' '+y]; }
+  if(k==='12m'){ const d=new Date(y,m-11,1); return [`${d.getFullYear()}-${p(d.getMonth()+1)}-01`,fin,'12 mois jusqu\'à '+p(m+1)+'/'+y]; }
+  if(k==='an-1') return [`${y-1}-01-01`,`${y-1}-12-31`,String(y-1)];
+  return [`${y}-01-01`,fin,'Année '+y+' à ce jour']; }
+function statsSur(deb,fin){
+  const dans=x=>x&&x>=deb&&x<=fin;
+  const ca=DB.all('recettes').filter(r=>dans(r.date)).reduce((s,r)=>s+(+r.montant||0),0);
+  const dv=DB.all('devis').filter(d=>dans(d.dateCreation)), acc=DB.all('devis').filter(d=>dans(d.dateAcceptation));
+  const panier=acc.length?acc.reduce((s,d)=>s+(+d.montantTTC||0),0)/acc.length:0;
+  return {ca, demandes:DB.all('demandes').filter(d=>dans(d.date)).length, devis:dv.length, acceptes:acc.length,
+    taux:dv.length?Math.round(dv.filter(d=>d.dateAcceptation||['Accepté','Acompte reçu'].includes(d.statut)).length/dv.length*100):0,
+    panier, prestations:DB.all('prestations').filter(p=>p.statutRealisation==='Réalisée'&&dans(p.dateEvenement)).length}; }
+function statsPeriodeHtml(){
+  const [d0,f0,lib]=periodeBornes(_statP,0), a=statsSur(d0,f0);
+  const cmp=_statCmp&&_statP!=='an-1'?(()=>{ const [d1,f1,l1]=periodeBornes(_statP,1); return {v:statsSur(d1,f1),l:l1}; })():null;
+  const ev=(k,fmt)=>{ if(!cmp) return ''; const x=a[k], y=cmp.v[k]; if(!y&&!x) return 'idem '+cmp.l;
+    if(!y) return 'nouveau vs '+cmp.l; const pc=Math.round((x-y)/y*100); return (pc>0?'+':'')+pc+' % vs '+cmp.l+' ('+fmt(y)+')'; };
+  const n=v=>String(Math.round(v));
+  const opt=[['mois','Ce mois'],['trim','Ce trimestre'],['annee','Cette année'],['12m','12 derniers mois'],['an-1','Année dernière']];
+  return `<div class="panel" style="margin-bottom:16px"><div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+      <select class="form-control" style="max-width:200px" onchange="_statP=this.value;RENDERERS.stats()">${opt.map(([k,l])=>`<option value="${k}"${k===_statP?' selected':''}>${l}</option>`).join('')}</select>
+      ${_statP!=='an-1'?`<label style="display:flex;gap:7px;align-items:center;font-size:13px;cursor:pointer"><input type="checkbox" ${_statCmp?'checked':''} onchange="_statCmp=this.checked;RENDERERS.stats()"> Comparer à l'année précédente</label>`:''}
+      <span class="td-dim">${esc(lib)}</span></div>
+    <div class="kpi-grid" style="margin:0">
+      ${kpi('vert','CA encaissé',fmtEur(a.ca),ev('ca',fmtEur))}
+      ${kpi('info','Demandes reçues',a.demandes,ev('demandes',n))}
+      ${kpi('or','Devis créés',a.devis,ev('devis',n))}
+      ${kpi('vert','Devis acceptés',a.acceptes,ev('acceptes',n))}
+      ${kpi('or','Panier moyen',fmtEur(Math.round(a.panier)),ev('panier',v=>fmtEur(Math.round(v))))}
+      ${kpi('info','Prestations réalisées',a.prestations,ev('prestations',n))}
+    </div></div>`; }
 RENDERERS.stats=function(){
   const devis=DB.all('devis'), demandes=DB.all('demandes'), factures=DB.all('factures'), recettes=DB.all('recettes'), prestations=DB.all('prestations');
   const acceptes=devis.filter(d=>['Accepté','Acompte reçu'].includes(d.statut)||d.dateAcceptation);
@@ -1248,7 +1285,8 @@ RENDERERS.stats=function(){
   const tauxConv=devis.length?Math.round(acceptes.length/devis.length*100):0;
   const panier=acceptes.length?Math.round(acceptes.reduce((s,d)=>s+(+d.montantTTC||0),0)/acceptes.length):0;
   const presReal=prestations.filter(p=>p.statutRealisation==='Réalisée').length;
-  document.getElementById('view-stats').innerHTML=`
+  document.getElementById('view-stats').innerHTML=statsPeriodeHtml()+`
+    <div class="td-dim" style="margin:6px 0 10px;font-weight:600">Depuis le début</div>
     <div class="kpi-grid">
       ${kpi('vert','Taux de conversion',tauxConv+' %','devis acceptés')}
       ${kpi('or','Panier moyen',fmtEur(panier),'par devis accepté')}
@@ -1523,7 +1561,8 @@ function voirDevis(id){
   // actions contextuelles
   const signe=d.signataire||d.signatureImg;
   const signBanner=signe?alertHtml('success','✍️',`<strong>Signé en ligne</strong> par ${esc(d.signataire||'le client')}${d.signedAt?' le '+fmtDateShort(d.signedAt.slice(0,10)):''}. <a href="#" onclick="voirSignature('${id}');return false" style="color:var(--or)">Voir la signature</a>`):'';
-  const lienBtn=cloudUrl()?`<button class="btn btn-ghost" onclick="copySignLink('${id}')">🔗 Copier le lien de signature</button>`:'';
+  const lienBtn=(cloudUrl()?`<button class="btn btn-ghost" onclick="copySignLink('${id}')">🔗 Copier le lien de signature</button>`:'')
+    +((d.tel||(DB.get('clients',d.idClient)||{}).tel)?`<button class="btn btn-ghost" onclick="envoyerSmsDevis('${id}')">📱 Envoyer par SMS</button>`:'');
   const accuse=(d.signataire||d.signedAt)&&!d.mailSignatureFait
     ? `<button class="btn btn-success" onclick="mailSignature('${id}')">✍️ Accusé de signature + acompte</button>` : '';
   const relance=d.statut==='Envoyé'&&!d.signataire
@@ -1565,7 +1604,7 @@ function voirDevis(id){
     <button class="btn btn-ghost" onclick="apercuPdf('Devis','${id}')">👁 Aperçu PDF</button>
     ${devisVerrou(d)?`<button class="btn btn-ghost" onclick="closeModal();dupliquerDevis('${id}')">📋 Dupliquer</button>`:`<button class="btn btn-ghost" onclick="closeModal();nav('devis-create',{id:'${id}'})">✎ Modifier</button>`}
     <button class="btn btn-ghost" onclick="closeModal()">Fermer</button>`;
-  openModal('Devis · '+esc(d.id),body,footer);
+  openModal('Devis · '+esc(d.id),prochaineEtapeHtml(d)+body,footer);
 }
 function envoyerDevis(id){ majDevis(id,'Envoyé'); }
 function envoyerDevisMail(id){
@@ -1620,6 +1659,75 @@ function dossierStage(d){
   if(factAcompteDe(d.id)) return 'Acompte facturé';
   return d.statut;   // Brouillon / Envoyé / Accepté / Acompte reçu
 }
+/* Une seule question, une seule réponse : que faire maintenant sur ce dossier ? */
+function prochaineEtape(d){
+  if(!d) return null; const id=d.id, st=dossierStage(d), fs=factSoldeDe(id), j=d.dateEvenement?daysFromNow(d.dateEvenement):null;
+  const B=(txt,fn,cls)=>({txt,fn,cls:cls||'btn-or'});
+  if(st==='Refusé') return {msg:'Devis refusé.',btn:null};
+  if(st==='Brouillon') return {msg:'Le devis n\'est pas encore parti.',btn:B('✉ Envoyer le devis',`envoyerDevisMail('${id}')`)};
+  if(st==='Envoyé'){
+    if(devisARelancer().some(x=>x.id===id)) return {msg:'Pas de réponse depuis '+daysSince((d.relances||[]).slice(-1)[0]||d.dateEnvoi)+' jours.',btn:B('🔔 Relancer',`relancerDevis('${id}')`)};
+    return {msg:'En attente de la réponse du client'+(d.dateEnvoi?' (envoyé le '+fmtDateShort(d.dateEnvoi)+')':'')+'.',btn:(d.tel||(DB.get('clients',d.idClient)||{}).tel)?B('📱 Lien par SMS',`envoyerSmsDevis('${id}')`,'btn-ghost'):null}; }
+  if(st==='Accepté') return (+d.acomptePct>0)?{msg:'Accepté : l\'acompte bloque la date.',btn:B('💰 Acompte reçu',`enregistrerAcompte('${id}',()=>voirDevis('${id}'))`)}:{msg:'Accepté, sans acompte.',btn:j!=null&&j<=0?B('🧾 Facturer',`facturerSolde('${id}')`):null};
+  if(st==='Acompte reçu'||st==='Acompte facturé') return (j!=null&&j>0)?{msg:'Date bloquée. Prestation dans '+j+' jour'+(j>1?'s':'')+'.',btn:null}:{msg:'Prestation passée : facture le solde.',btn:B('🧾 Facturer le solde',`facturerSolde('${id}')`)};
+  if(st==='Solde facturé'&&fs) return {msg:fmtEur(fs.soldeDu)+' à encaisser'+(daysSince(fs.dateEcheance)>0?', échéance dépassée':'')+'.',btn:B('✓ Paiement reçu',`encaisserFacture('${fs.id}')`,'btn-success')};
+  if(st==='Soldé'){ const pr=DB.all('prestations').find(p=>p.idDevis===id);
+    if(pr&&!mailEnvoye('avis',pr.id)) return {msg:'Dossier soldé : c\'est le bon moment pour demander un avis Google.',btn:B('★ Demander un avis',`avisGoogleMail('${pr.id}')`)};
+    return {msg:'Dossier terminé. 🎩',btn:null}; }
+  return null;
+}
+function prochaineEtapeHtml(d){ const p=prochaineEtape(d); if(!p) return '';
+  return `<div class="alert info" style="margin:0 0 14px;align-items:center"><span class="alert-icon">➡️</span><div style="flex:1"><strong>Prochaine étape</strong> · ${esc(p.msg)}</div>${p.btn?`<button class="btn ${p.btn.cls} btn-sm" onclick="closeModal();${p.btn.fn}">${esc(p.btn.txt)}</button>`:''}</div>`; }
+function envoyerSmsDevis(id){
+  const d=DB.get('devis',id); if(!d) return;
+  const tel=String(d.tel||(DB.get('clients',d.idClient)||{}).tel||'').replace(/[^\d+]/g,'');
+  if(!tel){ toast('Pas de numéro de téléphone pour ce client','err'); return; }
+  const lien=signUrl(d), salut=EMAIL_TPL.bonjour(d).replace(/,\s*$/,'');
+  const txt=salut+', voici votre devis LouisMagie'+(d.dateEvenement?' pour le '+fmtDateShort(d.dateEvenement):'')+(lien?' : '+lien+' (signature en ligne en un clic)':'')+'. Une question ? Répondez ici ou appelez-moi. Louis';
+  const sep=/iPhone|iPad|Macintosh/.test(navigator.userAgent)?'&':'?';
+  logActivite('Lien du devis '+id+' préparé par SMS');
+  location.href='sms:'+tel+sep+'body='+encodeURIComponent(txt);
+}
+/* Pièces jointes (bon de commande, contrat de cession, fiche technique…) : fichier sur le serveur,
+   liste dans la fiche (synchronisée entre appareils). */
+function piecesJointesHtml(entity,id){
+  const r=DB.get(entity,id); if(!r) return ''; const docs=r.docs||[];
+  const ico=e=>({pdf:'📄',png:'🖼',jpg:'🖼',jpeg:'🖼',webp:'🖼',heic:'🖼',gif:'🖼',xls:'📊',xlsx:'📊',ods:'📊',numbers:'📊',csv:'📊'}[e]||'📎');
+  return `<div class="panel" style="margin-top:14px"><div class="panel-title">📎 Pièces jointes</div>
+    ${docs.length?docs.map(d=>`<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--bd)"><span>${ico(d.ext)}</span>
+      <div style="flex:1;min-width:0"><div style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d.nom)}</div><div class="td-dim" style="font-size:11px">${Math.max(1,Math.round((d.taille||0)/1024))} Ko · ${fmtDateShort(String(d.date||'').slice(0,10))}</div></div>
+      <button class="btn btn-ghost btn-sm" onclick="pjOuvrir('${entity}','${id}','${d.id}')">Ouvrir</button><button class="btn btn-ghost btn-sm" onclick="pjRetirer('${entity}','${id}','${d.id}')">✕</button></div>`).join('')
+      :'<div class="td-dim" style="font-size:13px">Aucun fichier. Bon de commande, contrat, fiche technique de la salle…</div>'}
+    <label class="btn btn-ghost btn-sm" style="cursor:pointer;margin-top:10px">⬆ Ajouter un fichier<input type="file" multiple style="display:none" accept=".pdf,.png,.jpg,.jpeg,.webp,.heic,.gif,.doc,.docx,.xls,.xlsx,.odt,.ods,.txt,.csv,.pptx,.key,.pages,.numbers" onchange="pjAjouter('${entity}','${id}',this)"></label></div>`; }
+function pjRafraichir(entity,id){ if(entity==='devis'){ if(document.getElementById('modal-bg').classList.contains('open')) dossierEvenement(id); } else if(_currentView==='projet') RENDERERS.projet(currentParams); }
+async function pjAjouter(entity,id,input){
+  const fs=[...(input.files||[])]; input.value=''; if(!fs.length) return;
+  if(!cloudUrl()){ toast('Les pièces jointes sont gardées sur le serveur : connexion nécessaire','err'); return; }
+  for(const f of fs){
+    if(f.size>10*1048576){ toast(f.name+' : 10 Mo maximum','err'); continue; }
+    toast('Envoi de '+f.name+'…');
+    const b64=await new Promise(res=>{ const rd=new FileReader(); rd.onload=()=>res(String(rd.result).split(',')[1]||''); rd.readAsDataURL(f); });
+    const j=await cloudPost({action:'docAjouter',ref:id,nom:f.name,b64});
+    if(!j||!j.ok){ toast(f.name+' : '+((j&&j.error)||'envoi impossible'),'err'); continue; }
+    const r=DB.get(entity,id); if(!r) continue; r.docs=(r.docs||[]).concat([j.doc]); DB.save(entity,r);
+    logActivite('Pièce jointe ajoutée · '+id+' · '+f.name);
+  }
+  pjRafraichir(entity,id);
+}
+async function pjOuvrir(entity,id,docId){
+  const j=await cloudPost({action:'docLire',ref:id,id:docId}); if(!j||!j.ok){ toast('Fichier indisponible : '+((j&&j.error)||'serveur injoignable'),'err'); return; }
+  const bin=atob(j.b64), u=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) u[i]=bin.charCodeAt(i);
+  const ext=(j.nom.split('.').pop()||'').toLowerCase(), types={pdf:'application/pdf',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',webp:'image/webp',gif:'image/gif'};
+  const url=URL.createObjectURL(new Blob([u],{type:types[ext]||'application/octet-stream'}));
+  if(types[ext]) window.open(url,'_blank'); else { const a=document.createElement('a'); a.href=url; a.download=j.nom; a.click(); }
+  setTimeout(()=>URL.revokeObjectURL(url),60000);
+}
+async function pjRetirer(entity,id,docId){
+  const r=DB.get(entity,id); if(!r) return; const d=(r.docs||[]).find(x=>x.id===docId); if(!d) return;
+  if(!confirm('Retirer « '+d.nom+' » de ce dossier ?\n(Le fichier reste dans une corbeille sur le serveur.)')) return;
+  const j=await cloudPost({action:'docRetirer',ref:id,id:docId}); if(!j||!j.ok){ toast('Retrait impossible','err'); return; }
+  r.docs=(r.docs||[]).filter(x=>x.id!==docId); DB.save(entity,r); logActivite('Pièce jointe retirée · '+id+' · '+d.nom); pjRafraichir(entity,id);
+}
 function stageBadge(stage){
   const map={'Brouillon':'#8a8a8a','Envoyé':'#4A9DE8','Accepté':'#3FB97A','Acompte reçu':'#C4973A','Acompte facturé':'#C4973A','Solde facturé':'#E67E22','Soldé':'#27AE60','Refusé':'#E5564B'};
   return `<span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:600;color:#fff;background:${map[stage]||'#8a8a8a'}">${esc(stage)}</span>`;
@@ -1673,7 +1781,7 @@ function dossierEvenement(id){
   } else {
     etape=`<div class="td-dim">Envoie le devis et fais-le accepter pour avancer. <a href="#" onclick="closeModal();voirDevis('${id}');return false" style="color:var(--or)">Ouvrir le devis</a></div>`;
   }
-  const body=`
+  const body=prochaineEtapeHtml(d)+`
     <div class="info-grid">
       ${infoItem('Client',esc(d.nomClient)+'<br><span class="td-dim" style="font-size:12px">'+contact+'</span>')}
       ${infoItem('Événement',fmtDateFr(d.dateEvenement)+' · '+esc(d.creneau||''))}
@@ -1693,6 +1801,7 @@ function dossierEvenement(id){
         <div class="td-dim" style="font-size:11px;margin-top:6px">Corrige le statut du devis + agenda (créneau bloqué dès « Accepté »).</div>
       </details></div>
     <div class="panel" style="margin-top:14px"><div class="panel-title">📁 Documents du dossier</div>${docs}</div>
+    ${piecesJointesHtml('devis',id)}
     ${dossierSignatureHtml(d)}
     <div class="panel" style="margin-top:14px"><div class="panel-title">📜 Timeline</div>${timelineDevis(id)}</div>
     ${dossierNotesHtml(d)}`;
@@ -2673,14 +2782,27 @@ function rdvForm(id,date){
       <div class="form-group" style="grid-column:1/-1"><label class="form-label">Objet *</label><input class="form-control" id="rdv-titre" value="${esc(v.titre||'')}" placeholder="ex : appel mariée, réunion agence, repérage salle"></div>
       <div class="form-group"><label class="form-label">Date *</label><input class="form-control" type="date" id="rdv-date" value="${esc(v.date||'')}"></div>
       <div class="form-group"><label class="form-label">Avec qui</label><input class="form-control" id="rdv-avec" value="${esc(v.avec||'')}" placeholder="nom, entreprise"></div>
+      <div class="form-group" style="grid-column:1/-1"><label class="form-label">Email (pour envoyer la confirmation)</label><input class="form-control" type="email" id="rdv-email" value="${esc(v.email||'')}"></div>
       <div class="form-group"><label class="form-label">Début</label><input class="form-control" type="time" id="rdv-debut" value="${esc(v.debut||'')}"></div>
       <div class="form-group"><label class="form-label">Fin</label><input class="form-control" type="time" id="rdv-fin" value="${esc(v.fin||'')}"></div>
       <div class="form-group" style="grid-column:1/-1"><label class="form-label">Lieu ou lien visio</label><input class="form-control" id="rdv-lieu" value="${esc(v.lieu||'')}"></div>
       <div class="form-group" style="grid-column:1/-1"><label class="form-label">Notes</label><textarea class="form-control" id="rdv-notes">${esc(v.notes||'')}</textarea></div>
     </div><div class="td-dim">Sans heure de début, le rendez-vous occupe la journée entière dans ton agenda Apple.</div>`;
   const footer=(r?`<button class="btn btn-ghost" onclick="rdvDel('${r.id}')">🗑 Supprimer</button>`:'')
+    +(r&&r.email?`<button class="btn btn-ghost" onclick="rdvMail('${r.id}','confirmation')">✉ Envoyer la confirmation</button>`:'')
     +`<button class="btn btn-or" onclick="rdvSave(${r?`'${r.id}'`:'null'})">Enregistrer</button>`;
   openModal(r?'Rendez-vous':'Nouveau rendez-vous',body,footer);
+}
+function rdvMail(id,type){
+  const r=DB.get('rdv',id); if(!r||!r.email){ toast('Ajoute l\'email de la personne dans le rendez-vous','err'); return; }
+  const pre=prenomDe(r.avec||''), jour=new Date(r.date+'T12:00:00').toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'});
+  const h=r.debut?(' à '+r.debut.replace(':','h')):'', lieu=r.lieu?(', '+r.lieu):'', tel=DB.config().entrepriseTel||'06 46 89 08 87';
+  const tpl=type==='rappel'
+    ? {subject:'Rappel : notre rendez-vous demain'+h, body:`Bonjour${pre?' '+pre:''},\n\nPetit rappel de notre rendez-vous demain, ${jour}${h}${lieu}.\n\nÀ demain,\n\n${sig()}`}
+    : {subject:'Rendez-vous du '+fmtDateShort(r.date)+h, body:`Bonjour${pre?' '+pre:''},\n\nJe vous confirme notre rendez-vous le ${jour}${h}${lieu}.${r.titre?'\nObjet : '+r.titre+'.':''}\n\nSi l'horaire ne vous convient plus, répondez à ce mail ou appelez-moi au ${tel}.\n\n${sig()}`};
+  closeModal();
+  openMailComposer({titre:type==='rappel'?'Rappel de rendez-vous':'Confirmation de rendez-vous', to:r.email, subject:tpl.subject, body:tpl.body, kind:'rdv-'+type, ref:id,
+    onSent:()=>{ const x=DB.get('rdv',id); if(x){ x[type==='rappel'?'rappelEnvoye':'confirmationEnvoyee']=todayISO(); DB.save('rdv',x); } }});
 }
 function rdvSave(id){
   const g=k=>(document.getElementById('rdv-'+k).value||'').trim();
@@ -2690,7 +2812,7 @@ function rdvSave(id){
   if(debut&&fin&&fin<=debut&&!confirm('La fin est avant le début : le rendez-vous finira le lendemain. Continuer ?')) return;
   const ancien=id?DB.get('rdv',id):null;
   const r=Object.assign({},ancien||{},{id:id||('RDV-'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)),
-    titre,date,debut,fin,avec:g('avec'),lieu:g('lieu'),notes:g('notes')});
+    titre,date,debut,fin,avec:g('avec'),email:g('email'),lieu:g('lieu'),notes:g('notes')});
   if(!ancien) r.createdAt=new Date().toISOString();
   DB.save('rdv',r); closeModal(); toast('Rendez-vous enregistré','ok');
   if(_currentView==='agenda') RENDERERS.agenda(); else if(_currentView==='dashboard') RENDERERS.dashboard();
@@ -3180,7 +3302,8 @@ function pdfFacture(id,returnDoc){
   let y=pdfHeader(doc,titre,f.id,[['Émise le',fmtDateShort(f.dateEmission)],['Échéance',fmtDateShort(f.dateEcheance)]]);
   y=pdfBlocs(doc,y,
     {titre:'FACTURÉ À',nom,lines:[factEmailTo(f),f.billingTel||cli.tel,f.billingAddr||cli.adresse,(f.billingSiren||cli.siren)?('SIREN '+(f.billingSiren||cli.siren)):'',f.idDevis?('Réf. devis '+f.idDevis):'']},
-    dev.dateEvenement?{titre:'PRESTATION',lines:['Date : '+fmtDateFr(dev.dateEvenement),dev.creneau?('Créneau : '+dev.creneau):'',dev.horaire?('Horaire : '+dev.horaire):'','Lieu : '+(dev.lieu||'—')]}:null);
+    dev.dateEvenement?{titre:'PRESTATION',lines:['Opération : prestation de services','Date : '+fmtDateFr(dev.dateEvenement),dev.creneau?('Créneau : '+dev.creneau):'',dev.horaire?('Horaire : '+dev.horaire):'','Lieu de la prestation : '+(dev.lieu||'—')]}
+      :{titre:'OPÉRATION',lines:['Prestation de services',f.idProjet&&(getP(f.idProjet)||{}).lieu?('Lieu de la prestation : '+getP(f.idProjet).lieu):'']});
   const dateP=dev.dateEvenement?(' — '+fmtDateFr(dev.dateEvenement)):'';
   let body, totaux, totalLabel, totalVal, cond;
   if(f.type==='avoir'){
@@ -3260,7 +3383,7 @@ function recalcClient(c){
 }
 RENDERERS.clients=function(){
   const nbDbl=(()=>{ try{ return groupesDoublons().length; }catch(_){ return 0; } })();
-  document.getElementById('topbar-actions').innerHTML=`${nbDbl?`<button class="btn btn-warn btn-sm" onclick="voirDoublons()">🔗 ${nbDbl} doublon(s)</button>`:''}<button class="btn btn-ghost btn-sm" onclick="exportClientsCSV()">⬇ Exporter CSV</button><button class="btn btn-or btn-sm" onclick="editClient()">+ Nouveau client</button>`;
+  document.getElementById('topbar-actions').innerHTML=`${nbDbl?`<button class="btn btn-warn btn-sm" onclick="voirDoublons()">🔗 ${nbDbl} doublon(s)</button>`:''}<button class="btn btn-ghost btn-sm" onclick="importClientsOuvrir()">⬆ Importer</button><button class="btn btn-ghost btn-sm" onclick="exportClientsCSV()">⬇ Exporter CSV</button><button class="btn btn-or btn-sm" onclick="editClient()">+ Nouveau client</button>`;
   let all=DB.all('clients').map(recalcClient);
   const top=all.slice().sort((a,b)=>b.caTotal-a.caTotal).slice(0,5);
   if(_fCli) all=all.filter(c=>c.type===_fCli);
@@ -3424,6 +3547,8 @@ function voirClient(id){
   openModal('Fiche · '+esc(((c.prenom||'')+' '+(c.nom||'')).trim()),body,
     `${c.email?`<button class="btn btn-ghost" onclick="closeModal();mailClient('${id}')">✉ Email</button>`:''}
      <button class="btn btn-ghost" onclick="closeModal();editClient('${id}')">Modifier</button>
+     <button class="btn btn-ghost" onclick="exportClientRGPD('${id}')">⬇ Ses données</button>
+     ${c.anonymise?'':`<button class="btn btn-ghost" onclick="anonymiserClient('${id}')">Anonymiser</button>`}
      <button class="btn btn-or" onclick="closeModal();nav('devis-create',{clientId:'${id}'})">→ Nouveau devis</button>`);
 }
 function mailMarketing(id,type){
@@ -3511,6 +3636,89 @@ async function validerDesabo(id,etat){
   toast(etat?'Enregistré : plus aucun email d’actualité vers '+em:'Réabonné : '+em+' peut de nouveau recevoir tes actualités','ok');
   voirClient(id);
 }
+/* RGPD : copie de tout ce que le CRM sait d'une personne, et anonymisation sur demande.
+   Devis et factures restent (obligation de conservation comptable de 10 ans). */
+function donneesClient(c){ const em=(c.email||'').toLowerCase(), nom=normNom(((c.prenom||'')+' '+(c.nom||'')).trim());
+  const lie=x=>x&&((x.idClient===c.id)||(em&&String(x.email||'').toLowerCase()===em));
+  return {client:c, demandes:DB.all('demandes').filter(x=>lie(x)||(nom&&normNom(x.nom)===nom)), devis:DB.all('devis').filter(lie), factures:DB.all('factures').filter(f=>f.idClient===c.id),
+    emails:DB.all('mails').filter(m=>em&&String(m.to||'').toLowerCase().includes(em)), rendezvous:DB.all('rdv').filter(r=>em&&String(r.email||'').toLowerCase()===em)}; }
+function exportClientRGPD(id){ const c=DB.get('clients',id); if(!c) return;
+  const b=new Blob([JSON.stringify({_date:new Date().toISOString(),_source:'CRM LouisMagie',...donneesClient(c)},null,2)],{type:'application/json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='donnees_'+normNom(c.nom||'client').replace(/ /g,'-')+'_'+todayISO()+'.json'; a.click(); URL.revokeObjectURL(a.href);
+  logActivite('Export RGPD · '+(c.nom||id)); toast('Données exportées','ok'); }
+function anonymiserClient(id){ const c=DB.get('clients',id); if(!c) return; const dn=donneesClient(c);
+  if(!confirm('Anonymiser « '+((c.prenom||'')+' '+(c.nom||'')).trim()+' » ?\n\nNom, email, téléphone et adresse seront effacés de sa fiche, de ses demandes et de ses rendez-vous. Ses devis et factures sont gardés (conservation comptable obligatoire).\n\nPense à exporter ses données avant si la personne les a demandées.')) return;
+  Object.assign(c,{nom:'Client anonymisé',prenom:'',email:'',tel:'',adresse:'',notes:'',anonymise:todayISO()}); DB.save('clients',c);
+  dn.demandes.forEach(x=>{ Object.assign(x,{nom:'Anonymisé',email:'',tel:'',prestationSouhaitee:'',notes:''}); DB.save('demandes',x); });
+  dn.rendezvous.forEach(x=>{ Object.assign(x,{avec:'',email:'',notes:''}); DB.save('rdv',x); });
+  logActivite('Client anonymisé (RGPD) · '+id); closeModal(); if(RENDERERS[_currentView]) RENDERERS[_currentView](currentParams); toast('Client anonymisé','ok'); }
+/* Import additif : rien n'est écrasé, les clients déjà connus (SIREN, email ou nom) sont reconnus */
+const IMP_CHAMPS=[['organisation','Organisation (mairie, entreprise…)',/^(organisation|organisme|structure|raison sociale|societe|entreprise|etablissement|collectivite)/],
+  ['nom','Nom',/^(nom|name|client|nom complet)/],['prenom','Prénom',/^(prenom|first)/],
+  ['email','Email',/(mail|courriel)/],['tel','Téléphone',/(tel|phone|portable|mobile|gsm)/],['adresse','Adresse',/^(adresse|address|rue)/],['cp','Code postal',/^(cp|code postal|postal)/],['ville','Ville',/^(ville|city|commune)/],
+  ['type','Type',/^(type|cat[ée]gorie)/],['siren','SIREN / SIRET',/(siren|siret)/],['sourceInitiale','Source',/(source|origine|canal)/],['notes','Notes',/(note|commentaire|remarque)/]];
+let _imp=null;
+function importClientsOuvrir(){
+  openModal('Importer des clients',`<div class="td-dim" style="margin-bottom:12px">Fichier <strong>Excel (.xlsx)</strong> ou <strong>CSV</strong>, une ligne par client, avec une ligne d'en-têtes. Rien n'est remplacé : les clients déjà présents sont reconnus et laissés tels quels.</div>
+    <input type="file" class="form-control" accept=".csv,.xlsx,.xls,text/csv" onchange="importClientsFichier(this)"><div id="imp-zone" style="margin-top:14px"></div>`,
+    '<button class="btn btn-ghost" onclick="closeModal()">Annuler</button>');
+}
+function csvLignes(txt){ const sep=(txt.split('\n')[0].match(/;/g)||[]).length>=(txt.split('\n')[0].match(/,/g)||[]).length?';':',';
+  const out=[]; let row=[], cur='', q=false;
+  for(let i=0;i<txt.length;i++){ const ch=txt[i];
+    if(q){ if(ch==='"'){ if(txt[i+1]==='"'){ cur+='"'; i++; } else q=false; } else cur+=ch; continue; }
+    if(ch==='"') q=true; else if(ch===sep){ row.push(cur); cur=''; } else if(ch==='\n'||ch==='\r'){ if(ch==='\r'&&txt[i+1]==='\n') i++; row.push(cur); cur=''; if(row.some(c=>c.trim()!=='')) out.push(row); row=[]; } else cur+=ch; }
+  row.push(cur); if(row.some(c=>c.trim()!=='')) out.push(row); return out; }
+async function importClientsFichier(input){
+  const f=input.files&&input.files[0]; if(!f) return; let lignes=[];
+  try{
+    if(/\.xlsx?$/i.test(f.name)){
+      if(!window.XLSX) await new Promise((res,rej)=>{ const sc=document.createElement('script'); sc.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'; sc.onload=res; sc.onerror=rej; document.head.appendChild(sc); });
+      const wb=XLSX.read(await f.arrayBuffer(),{type:'array'}); lignes=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:'',raw:false}).filter(r=>r.some(c=>String(c).trim()!==''));
+    } else lignes=csvLignes((await f.text()).replace(/^\uFEFF/,''));
+  }catch(_){ toast('Fichier illisible','err'); return; }
+  if(lignes.length<2){ toast('Aucune ligne de client trouvée','err'); return; }
+  // la ligne d'en-têtes est celle qui reconnaît le plus de colonnes (un titre peut la précéder)
+  const score=r=>r.filter(t=>IMP_CHAMPS.some(([,,re])=>re.test(normNom(t)))).length;
+  let h=0; lignes.slice(0,10).forEach((r,i)=>{ if(score(r)>score(lignes[h])) h=i; });
+  const tetes=lignes[h].map(x=>String(x).trim()), map={};
+  IMP_CHAMPS.forEach(([k,,re])=>{ const i=tetes.findIndex((t,j)=>re.test(normNom(t))&&!Object.values(map).includes(j)); if(i>=0) map[k]=i; });
+  _imp={tetes,rows:lignes.slice(h+1),map}; importClientsApercu();
+}
+function importClientsApercu(){ const {tetes,rows,map}=_imp;
+  const sel=k=>`<select class="form-control" onchange="_imp.map['${k}']=this.value===''?undefined:+this.value;importClientsApercu()"><option value="">—</option>${tetes.map((t,i)=>`<option value="${i}"${map[k]===i?' selected':''}>${esc(t||('Colonne '+(i+1)))}</option>`).join('')}</select>`;
+  const cl=importClientsCalc();
+  document.getElementById('imp-zone').innerHTML=`<div class="form-grid c3">${IMP_CHAMPS.map(([k,l])=>`<div class="form-group"><label class="form-label">${l}</label>${sel(k)}</div>`).join('')}</div>
+    <div class="alert info" style="margin:6px 0 0"><span class="alert-icon">📋</span><div><strong>${cl.nouveaux.length} nouveau(x) client(s)</strong> · ${cl.connus} déjà présent(s) (laissés tels quels) · ${cl.vides} ligne(s) sans nom ignorée(s).</div></div>
+    ${cl.nouveaux.slice(0,6).map(c=>`<div class="td-dim" style="font-size:12px;margin-top:4px">• ${esc(((c.prenom||'')+' '+c.nom).trim())}${c.contacts?' · '+c.contacts.length+' interlocuteur(s)':''}${c.email?' · '+esc(c.email):''}</div>`).join('')}
+    <div style="text-align:right;margin-top:12px"><button class="btn btn-or" onclick="importClientsValider()" ${cl.nouveaux.length?'':'disabled'}>Importer ${cl.nouveaux.length} client(s)</button></div>`; }
+function importClientsCalc(){ const {rows,map}=_imp, v=(r,k)=>map[k]==null?'':String(r[map[k]]??'').trim();
+  const nouveaux=[], parOrg=new Map(); let connus=0, vides=0; const vus=new Set();
+  const titre=x=>x&&x===x.toUpperCase()&&/[A-Z]/.test(x)?x.charAt(0)+x.slice(1).toLowerCase():x;   // « DUAMELLE » → « Duamelle »
+  rows.forEach(r=>{
+    const org=v(r,'organisation'), nomP=titre(v(r,'nom')), pre=v(r,'prenom');
+    if(!org&&!nomP&&!pre){ vides++; return; }
+    const adr=[v(r,'adresse'),[v(r,'cp'),v(r,'ville')].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+    const email=v(r,'email').toLowerCase(), tel=v(r,'tel');
+    const t=normNom(v(r,'type')+' '+org);
+    const type=/partenaire|agence|lieu|traiteur|planner/.test(t)?'partenaire':(org||/entreprise|societe|mairie|ville|asso|collect|centre|ecole|college|lycee|sarl|sas/.test(t))?'entreprise':/particulier|prive/.test(t)?'particulier':'prospect';
+    if(org){   // une organisation : une seule fiche, chaque personne devient un interlocuteur
+      const k=normNom(org); let c=parOrg.get(k);
+      if(!c){ if(trouverClient({nom:org})){ connus++; return; }
+        c={nom:org,prenom:'',email,tel,adresse:adr,type,siren:v(r,'siren').replace(/\D/g,'').slice(0,9),sourceInitiale:v(r,'sourceInitiale')||'Import',notes:v(r,'notes'),contacts:[]};
+        parOrg.set(k,c); nouveaux.push(c); }
+      if(nomP||pre) c.contacts.push({id:uid('ITL'),prenom:pre,nom:nomP,fonction:'',email,tel,principal:!c.contacts.length});
+      if(!c.email&&email) c.email=email; if(!c.tel&&tel) c.tel=tel; if(!c.adresse&&adr) c.adresse=adr;
+      return; }
+    const c={nom:nomP||pre,prenom:nomP?pre:'',email,tel,adresse:adr,type,siren:v(r,'siren').replace(/\D/g,'').slice(0,9),sourceInitiale:v(r,'sourceInitiale')||'Import',notes:v(r,'notes')};
+    const cle=email||normNom(((c.prenom||'')+' '+c.nom).trim());
+    if(trouverClient({nom:((c.prenom?c.prenom+' ':'')+c.nom),email,siren:c.siren})||vus.has(cle)){ connus++; return; }
+    vus.add(cle); nouveaux.push(c); });
+  nouveaux.forEach(c=>{ if(c.contacts&&!c.contacts.length) delete c.contacts; });
+  return {nouveaux,connus,vides}; }
+function importClientsValider(){ const {nouveaux}=importClientsCalc();
+  nouveaux.forEach(c=>DB.save('clients',Object.assign({id:uid('CLI'),date1erDevis:'',nbDevis:0,nbPrestations:0,caTotal:0,createdAt:new Date().toISOString()},c)));
+  logActivite('Import de '+nouveaux.length+' client(s)'); _imp=null; closeModal(); if(_currentView==='clients') RENDERERS.clients(); toast(nouveaux.length+' client(s) importé(s)','ok'); }
 function editClient(id){
   const c=id?DB.get('clients',id):{id:'',nom:'',prenom:'',email:'',tel:'',adresse:'',type:'particulier',sourceInitiale:'',siren:'',naf:''};
   const f=(l,k,t)=>`<div class="form-group"><label class="form-label">${l}</label><input class="form-control" id="cli-${k}" value="${esc(c[k]||'')}" type="${t||'text'}"></div>`;
@@ -3674,7 +3882,7 @@ RENDERERS['devis-create']=function(params){
   else if(params.dupliquer&&DB.get('devis',params.dupliquer)){   // copie d'un devis existant : nouveau numéro, sans statut ni signature
     const src=DB.get('devis',params.dupliquer);
     d=JSON.parse(JSON.stringify(src));
-    ['id','cle','_base','updatedAt','statut','dateEnvoi','dateAcceptation','acompteRecu','dateAcompte','signataire','signatureImg','signedAt','relances','mailSignatureFait','signToken','token','notesSuivi'].forEach(k=>delete d[k]);
+    ['id','cle','_base','updatedAt','statut','dateEnvoi','dateAcceptation','acompteRecu','dateAcompte','signataire','signatureImg','signedAt','relances','mailSignatureFait','signToken','shareToken','token','notesSuivi','docs','paiements'].forEach(k=>delete d[k]);
     d.id=''; d.statut='Brouillon'; d.dateCreation=todayISO();
   }
   else if(cloudUrl()&&_pullOk) cloudReprise(true);   // nouveau devis : on récupère d'abord les numéros pris sur l'autre appareil
@@ -6858,6 +7066,7 @@ RENDERERS.projet=function(params){
       <div class="form-group"><label class="form-label">Feedback post-prestation</label><textarea class="form-control" style="min-height:80px" onchange="projField('${id}','feedback',this.value)">${esc(p.feedback||'')}</textarea></div>
     </div>
 
+    ${piecesJointesHtml('projets',id)}
     <div style="margin:10px 0 30px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-ghost" onclick="dupliquerProjet('${id}')">📋 Dupliquer ce projet</button><button class="btn btn-danger" onclick="supprimerProjet('${id}')">🗑 Supprimer le projet</button></div>`;
 };
 /* Duplique un projet (format répliqué : Paris/Cannes/Antalya…) — copie équipe/effets/consommables/checklist, remet les états à zéro */

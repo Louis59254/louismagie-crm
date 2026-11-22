@@ -2245,6 +2245,39 @@ switch ($action) {
     out(['ok'=>false, 'error'=>'version introuvable']);
   }
 
+  /* Pièces jointes d'un dossier (devis ou projet) : fichiers dans data/docs/<ref>/, jamais servis
+     en direct (data/ est interdit au web), lus seulement ici après authentification. */
+  case 'docAjouter': {
+    $ref = (string)($req['ref'] ?? ''); $nom = (string)($req['nom'] ?? ''); $b64 = (string)($req['b64'] ?? '');
+    if (!preg_match('/^[A-Za-z0-9._-]{1,80}$/', $ref)) out(['ok'=>false,'error'=>'dossier invalide']);
+    $ext = strtolower(pathinfo($nom, PATHINFO_EXTENSION));
+    if (!in_array($ext, ['pdf','png','jpg','jpeg','webp','heic','gif','doc','docx','xls','xlsx','odt','ods','txt','csv','pptx','key','pages','numbers'], true)) out(['ok'=>false,'error'=>'type de fichier non accepté']);
+    $bin = base64_decode($b64, true);
+    if ($bin === false || $bin === '') out(['ok'=>false,'error'=>'fichier illisible']);
+    if (strlen($bin) > 10 * 1048576) out(['ok'=>false,'error'=>'fichier trop lourd (10 Mo maximum)']);
+    $propre = preg_replace('/[^A-Za-z0-9._ -]/', '_', iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $nom) ?: 'fichier.'.$ext);
+    $propre = trim(substr($propre, 0, 90)) ?: 'fichier.'.$ext;
+    $id = gmdate('YmdHis').'-'.bin2hex(random_bytes(3));
+    $dir = "$DATA_DIR/docs/$ref"; if (!is_dir($dir) && !@mkdir($dir, 0775, true)) out(['ok'=>false,'error'=>'stockage impossible']);
+    $tmp = "$dir/.$id.tmp";
+    if (@file_put_contents($tmp, $bin) !== strlen($bin) || !@rename($tmp, "$dir/$id--$propre")) { @unlink($tmp); out(['ok'=>false,'error'=>'écriture impossible']); }
+    out(['ok'=>true, 'doc'=>['id'=>$id, 'nom'=>$nom, 'ext'=>$ext, 'taille'=>strlen($bin), 'date'=>gmdate('c')]]);
+  }
+  case 'docLire': {
+    $ref = (string)($req['ref'] ?? ''); $id = (string)($req['id'] ?? '');
+    if (!preg_match('/^[A-Za-z0-9._-]{1,80}$/', $ref) || !preg_match('/^[0-9]{14}-[a-f0-9]{6}$/', $id)) out(['ok'=>false,'error'=>'référence invalide']);
+    $f = glob("$DATA_DIR/docs/$ref/$id--*");
+    if (!$f || !is_file($f[0])) out(['ok'=>false,'error'=>'fichier introuvable']);
+    out(['ok'=>true, 'b64'=>base64_encode((string)file_get_contents($f[0])), 'nom'=>substr(basename($f[0]), strlen($id) + 2)]);
+  }
+  case 'docRetirer': {
+    // jamais d'effacement définitif : le fichier part dans une corbeille sur le serveur
+    $ref = (string)($req['ref'] ?? ''); $id = (string)($req['id'] ?? '');
+    if (!preg_match('/^[A-Za-z0-9._-]{1,80}$/', $ref) || !preg_match('/^[0-9]{14}-[a-f0-9]{6}$/', $id)) out(['ok'=>false,'error'=>'référence invalide']);
+    $f = glob("$DATA_DIR/docs/$ref/$id--*");
+    if ($f && is_file($f[0])) { $c = "$DATA_DIR/docs/_corbeille"; if (!is_dir($c)) @mkdir($c, 0775, true); @rename($f[0], "$c/$ref--".basename($f[0])); }
+    out(['ok'=>true]);
+  }
   case 'restaurer': {
     // Remplace vraiment tout par une sauvegarde : copie de l'état actuel d'abord, fiches restaurées
     // datées de maintenant (elles l'emportent sur tous les appareils), fiches absentes de la sauvegarde

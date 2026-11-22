@@ -17,6 +17,9 @@ COPY sw.js manifest.webmanifest icon-192.png icon-512.png apple-touch-icon.png /
 # Polices de la charte pour les PDF (DM Sans, Syne), en sous-ensemble latin
 COPY fonts/ /var/www/html/fonts/
 
+# Taille des envois : pièces jointes jusqu'à 10 Mo (20 Mo une fois encodées), sauvegardes
+RUN printf '%s\n' 'post_max_size=32M' 'upload_max_filesize=32M' 'memory_limit=256M' > /usr/local/etc/php/conf.d/crm.ini
+
 # Dossiers de données + PDF (persistés via volume Coolify), accessibles en écriture
 RUN mkdir -p /var/www/html/data /var/www/html/pdf \
     && chown -R www-data:www-data /var/www/html \
