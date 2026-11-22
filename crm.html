@@ -1112,7 +1112,7 @@ RENDERERS.dashboard=function(){
   const caAn=recettes.filter(r=>(r.date||'').slice(0,4)===String(anCour)).reduce((s,r)=>s+(+r.montant||0),0);
   const devisAttente=devis.filter(d=>d.statut==='Envoyé').length;
   const prestaAvenir=prestations.filter(p=>p.statutRealisation==='Confirmée'&&daysFromNow(p.dateEvenement)>=0).length;
-  const impayes=factures.filter(f=>['Émise','Relance 1','Relance 2','En contentieux'].includes(f.statut)).reduce((s,f)=>s+(+f.soldeDu||0),0);
+  const impayes=factures.filter(f=>['Émise','Relance 1','Relance 2','En contentieux'].includes(f.statut)&&f.type!=='avoir'&&(!f.dateEcheance||f.dateEcheance<todayISO())).reduce((s,f)=>s+(+f.soldeDu||0),0);
 
   // Alertes (fermables : × masque X jours, ré-apparaît ensuite)
   let alertes='';
@@ -1183,7 +1183,7 @@ RENDERERS.dashboard=function(){
       ${kpi('vert','CA année '+anCour,fmtEur(caAn))}
       ${kpi('info','Devis en attente',devisAttente,'réponse client')}
       ${kpi('or','Prestations à venir',prestaAvenir,'confirmées')}
-      ${kpi('rouge','Impayés',fmtEur(impayes))}
+      ${kpi('rouge','Impayés échus',fmtEur(impayes),'échéance dépassée')}
     </div>
     <div>${alertes}</div>
     <div class="charts-grid">
@@ -1501,7 +1501,7 @@ RENDERERS.devis=function(){
 };
 function voirDevis(id){
   const d=DB.get('devis',id); if(!d)return;
-  const acompte=Math.round((+d.montantTTC||0)*(d.acomptePct||0)/100);
+  const acompte=montantAcompte(d);
   const lignes=(d.prestations||[]).map(p=>`<tr><td>${esc(p.label)}${p.duree?' <span class="td-dim">('+esc(p.duree)+')</span>':''}</td><td style="text-align:right">${fmtEur(p.prix)}</td></tr>`).join('');
   const facturee=!!factSoldeDe(id);           // facture solde/complète existe
   const facAcompte=factAcompteDe(id);          // facture d'acompte existe ?
@@ -1525,7 +1525,8 @@ function voirDevis(id){
   let manu='';
   if(d.statut==='Brouillon') manu=`<button class="btn btn-ghost" onclick="majDevis('${id}','Envoyé');voirDevis('${id}')">✓ Marquer envoyé</button>`;
   else if(d.statut==='Envoyé') manu=`<button class="btn btn-success" onclick="majDevis('${id}','Accepté');voirDevis('${id}')">✓ Accepté</button><button class="btn btn-warn" onclick="majDevis('${id}','Refusé');voirDevis('${id}')">✗ Refusé</button>`;
-  else if(d.statut==='Accepté') manu=`<button class="btn btn-or" onclick="enregistrerAcompte('${id}');voirDevis('${id}')">💰 Acompte reçu</button>${facturee?'':`<button class="btn btn-ghost" onclick="transformerEnFacture('${id}')">🧾 Facturer</button>`}`;
+  else if(d.statut==='Accepté'&&facturee) manu='<span class="td-dim" style="align-self:center">✓ Facturé en totalité ('+esc((factSoldeDe(id)||{}).id||'')+')</span>';
+  else if(d.statut==='Accepté') manu=`<button class="btn btn-or" onclick="enregistrerAcompte('${id}',()=>voirDevis('${id}'))">💰 Acompte reçu</button>${facturee?'':`<button class="btn btn-ghost" onclick="transformerEnFacture('${id}')">🧾 Facturer</button>`}`;
   else if(d.statut==='Acompte reçu') manu=`${facAcompte?'<span class="td-dim" style="align-self:center">✓ Facture d\'acompte '+esc(facAcompte.id)+'</span>':`<button class="btn btn-ghost" onclick="genererFactureAcompte('${id}')">🧾 Facture d'acompte</button>`}${facturee?'':`<button class="btn btn-or" onclick="transformerEnFacture('${id}')">🧾 Facturer le solde</button>`}<button class="btn btn-ghost" onclick="annulerAcompte('${id}')">↩ Annuler l'acompte</button>`;
   else manu='<div class="td-dim">—</div>';
 
@@ -1555,7 +1556,7 @@ function voirDevis(id){
     <button class="btn btn-ghost" onclick="dossierEvenement('${id}')">📁 Dossier</button>
     ${d.statut!=='Brouillon'?`<button class="btn btn-ghost" onclick="devisBack('${id}')">↩ Étape précédente</button>`:''}
     <button class="btn btn-ghost" onclick="apercuPdf('Devis','${id}')">👁 Aperçu PDF</button>
-    <button class="btn btn-ghost" onclick="closeModal();nav('devis-create',{id:'${id}'})">✎ Modifier</button>
+    ${devisVerrou(d)?`<button class="btn btn-ghost" onclick="closeModal();dupliquerDevis('${id}')">📋 Dupliquer</button>`:`<button class="btn btn-ghost" onclick="closeModal();nav('devis-create',{id:'${id}'})">✎ Modifier</button>`}
     <button class="btn btn-ghost" onclick="closeModal()">Fermer</button>`;
   openModal('Devis · '+esc(d.id),body,footer);
 }
@@ -1619,13 +1620,8 @@ function stageBadge(stage){
 /* Paiement du solde reçu (avec date choisie) depuis le dossier → clôture le dossier */
 function dossierPaiementRecu(idDevis){
   const fs=factSoldeDe(idDevis); if(!fs){ toast('Aucune facture de solde à régler','err'); return; }
-  if(fs.statut==='Payée'){ toast('Facture déjà réglée','err'); return; }
-  const di=document.getElementById('dossier-paydate'); const date=(di&&di.value)||todayISO();
-  const solde=+fs.soldeDu||0;
-  fs.statut='Payée'; fs.datePaiement=date; fs.soldeDu=0; DB.save('factures',fs);
-  addRecetteSolde(fs,solde,date);
-  logActivite('Paiement reçu · facture '+fs.id+' le '+date+' ('+fmtEur(solde)+')');
-  updateBadges(); toast('✅ Paiement enregistré le '+fmtDateShort(date)+' — dossier soldé','ok'); dossierEvenement(idDevis);
+  const di=document.getElementById('dossier-paydate');
+  encaisserFacture(fs.id,{date:(di&&di.value)||todayISO(), after:()=>dossierEvenement(idDevis)});
 }
 function dossierEvenement(id){
   const d=DB.get('devis',id); if(!d)return;
@@ -1751,7 +1747,7 @@ function majStatutDossier(id,statut){ const d=DB.get('devis',id); if(!d)return;
   if(statut==='Envoyé'&&!d.dateEnvoi) d.dateEnvoi=todayISO();
   if(statut==='Accepté'&&!d.dateAcceptation) d.dateAcceptation=todayISO();
   if(statut==='Accepté'||statut==='Acompte reçu') promouvoirProspect(d);
-  if(statut==='Acompte reçu'){ if(!d.acompteRecu) d.acompteRecu=Math.round((+d.montantTTC||0)*(d.acomptePct||0)/100); }
+  if(statut==='Acompte reçu'){ if(!d.acompteRecu) d.acompteRecu=montantAcompte(d); }
   else if(old==='Acompte reçu'||d.acompteRecu>0){ d.acompteRecu=0; removeRecetteAcompte(id); }
   DB.save('devis',d); syncPrestationDevis(d);
   if(statut==='Acompte reçu'&&!DB.all('recettes').some(r=>r.ref===id&&r.type==='Acompte')) addRecetteAcompte(d);   // recette d'acompte cohérente
@@ -1969,11 +1965,30 @@ const _geoCache={};
 async function geocodeLieu(q){ if(!q) return null; if(q in _geoCache) return _geoCache[q];
   try{ const r=await fetch('https://api-adresse.data.gouv.fr/search/?q='+encodeURIComponent(q)+'&limit=1'); const d=await r.json(); const f=(d.features||[])[0]; _geoCache[q]=f?f.geometry.coordinates:null; }catch(_){ _geoCache[q]=null; } return _geoCache[q]; }
 function haversineKm(a,b){ const R=6371,toR=x=>x*Math.PI/180; const dLat=toR(b[1]-a[1]),dLon=toR(b[0]-a[0]); const s=Math.sin(dLat/2)**2+Math.cos(toR(a[1]))*Math.cos(toR(b[1]))*Math.sin(dLon/2)**2; return 2*R*Math.asin(Math.sqrt(s)); }
-function addRecetteAcompte(d){
-  const m=Math.round((+d.montantTTC||0)*(d.acomptePct||0)/100);
+/* Montant de l'acompte : au centime, identique partout (CRM, PDF, page de signature, livre de recettes) */
+/* Un devis signé, acompté ou facturé ne se modifie plus : le client a accepté CE contenu */
+function devisVerrou(d){ if(!d||!d.id) return '';
+  if(d.signataire||d.signatureImg) return 'signé en ligne';
+  if(factSoldeDe(d.id)||(typeof factAcompteDe==='function'&&factAcompteDe(d.id))) return 'facturé';
+  if(d.statut==='Acompte reçu'||(+d.acompteRecu||0)>0) return 'acompté';
+  return ''; }
+function dupliquerDevis(id){ nav('devis-create',{dupliquer:id}); }
+function montantAcompte(d){ return Math.round((+(d&&d.montantTTC)||0)*(+(d&&d.acomptePct)||0))/100; }
+function arr2(x){ return Math.round((+x||0)*100)/100; }
+function addRecetteAcompte(d,montant,date,mode){
+  const m=montant!=null?arr2(montant):montantAcompte(d);
   if(m<=0 || DB.all('recettes').some(r=>r.ref===d.id&&r.type==='Acompte')) return;
-  DB.save('recettes',{id:uid('REC'),date:todayISO(),montant:m,type:'Acompte',mode:'Virement',client:d.nomClient,designation:'Acompte réservation',ref:d.id});
+  DB.save('recettes',{id:uid('REC'),date:date||todayISO(),montant:m,type:'Acompte',mode:mode||'Virement',client:d.nomClient,designation:'Acompte réservation',ref:d.id});
 }
+const MODES_PAIEMENT=['Virement','Chèque','Espèces','Carte bancaire','Chorus Pro','Autre'];
+function champsPaiement(montant,date){ return `<div class="form-grid c3">
+    <div class="form-group"><label class="form-label">Montant reçu (€)</label><input class="form-control" id="pay-montant" type="number" step="0.01" value="${arr2(montant)}"></div>
+    <div class="form-group"><label class="form-label">Date de réception</label><input class="form-control" id="pay-date" type="date" value="${esc(date||todayISO())}"></div>
+    <div class="form-group"><label class="form-label">Mode</label><select class="form-control" id="pay-mode">${MODES_PAIEMENT.map(m=>`<option>${m}</option>`).join('')}</select></div></div>
+    <div class="td-dim">La date compte pour l'URSSAF : mets celle où l'argent est arrivé, pas celle d'aujourd'hui.</div>`; }
+function lirePaiement(){ const m=arr2(document.getElementById('pay-montant').value), d=document.getElementById('pay-date').value, mo=document.getElementById('pay-mode').value;
+  if(!(m>0)){ toast('Montant à indiquer','err'); return null; } if(!/^\d{4}-\d{2}-\d{2}$/.test(d)){ toast('Date à indiquer','err'); return null; }
+  return {montant:m,date:d,mode:mo}; }
 function removeRecetteAcompte(idDevis){ DB.all('recettes').filter(r=>r.ref===idDevis&&r.type==='Acompte').forEach(r=>DB.remove('recettes',r.id)); }
 function annulerAcompte(id){
   const d=DB.get('devis',id); if(!d)return;
@@ -2006,7 +2021,7 @@ function changerStatutDevis(id){
   if(ns==='Envoyé'&&!d.dateEnvoi) d.dateEnvoi=todayISO();
   if(ns==='Accepté'&&!d.dateAcceptation) d.dateAcceptation=todayISO();
   if(ns==='Accepté'||ns==='Acompte reçu') promouvoirProspect(d);
-  if(ns==='Acompte reçu') d.acompteRecu=Math.round((+d.montantTTC||0)*(d.acomptePct||0)/100);
+  if(ns==='Acompte reçu') d.acompteRecu=montantAcompte(d);
   if(ns!=='Acompte reçu') d.acompteRecu=0;   // pas d'acompte encaissé sur les autres statuts
   DB.save('devis',d);
   let extra='';
@@ -2040,7 +2055,7 @@ function confirmSupprimerDevis(id){
 function promouvoirProspect(d){
   if(!d||!d.idClient) return;
   const c=DB.get('clients',d.idClient); if(!c||c.type!=='prospect') return;
-  c.type=c.siren?'entreprise':'particulier';
+  c.type=c.typeCible||(c.siren?'entreprise':'particulier'); delete c.typeCible;
   if(!c.date1erDevis) c.date1erDevis=d.dateCreation||todayISO();
   DB.save('clients',c); logActivite('Prospect converti en client · '+((c.prenom?c.prenom+' ':'')+c.nom).trim());
 }
@@ -2056,10 +2071,18 @@ function majDevis(id,statut){
 }
 function enregistrerAcompte(id,after){
   const d=DB.get('devis',id); if(!d)return;
+  if(factSoldeDe(id)){ toast('Ce devis est déjà facturé en totalité : encaisse plutôt la facture','err'); return; }
+  window._apresAcompte=after;
+  openModal('Acompte reçu · '+esc(id), champsPaiement(montantAcompte(d),todayISO()),
+    `<button class="btn btn-ghost" onclick="closeModal()">Annuler</button><button class="btn btn-or" onclick="validerAcompte('${id}')">💰 Enregistrer l'acompte</button>`);
+}
+function validerAcompte(id){
+  const pay=lirePaiement(); if(!pay) return; const after=window._apresAcompte; window._apresAcompte=null;
+  const d=DB.get('devis',id); if(!d)return;
   d.statut='Acompte reçu';
-  d.acompteRecu=Math.round((+d.montantTTC||0)*(d.acomptePct||0)/100); // montant réellement encaissé
+  d.acompteRecu=pay.montant; d.dateAcompte=pay.date;   // montant réellement encaissé
   DB.save('devis',d);
-  syncPrestationDevis(d); addRecetteAcompte(d);
+  syncPrestationDevis(d); addRecetteAcompte(d,pay.montant,pay.date,pay.mode);
   logActivite('Acompte reçu · '+id+' '+fmtDateShort(d.dateEvenement));
   updateBadges();
   if(typeof after==='function'){ toast('💰 Acompte reçu — créneau confirmé','ok'); after(); }
@@ -2528,7 +2551,7 @@ function pdfFooter(doc){
 function pdfDevis(id,returnDoc){
   const d=DB.get('devis',id); if(!d)return;
   const cli=DB.get('clients',d.idClient)||{};
-  const acompte=Math.round((+d.montantTTC||0)*(d.acomptePct||0)/100);
+  const acompte=montantAcompte(d);
   const valid=new Date(d.dateCreation); valid.setDate(valid.getDate()+30);
   const doc=pdfNew();
   const datesH=[['Date',fmtDateShort(d.dateCreation)],['Validité',fmtDateShort(valid.toISOString().slice(0,10))]];
@@ -2574,7 +2597,7 @@ RENDERERS.agenda=function(){
   const prestations=DB.all('prestations');
   const first=new Date(y,m,1), startDow=(first.getDay()+6)%7; // lundi=0
   const nbDays=new Date(y,m+1,0).getDate();
-  const today=new Date(); const todayStr=today.toISOString().slice(0,10);
+  const today=new Date(); const todayStr=todayISO();
 
   const aVenir=prestations.filter(p=>p.statutRealisation!=='Réalisée'&&daysFromNow(p.dateEvenement)>=0).sort((a,b)=>new Date(a.dateEvenement)-new Date(b.dateEvenement));
 
@@ -2586,7 +2609,7 @@ RENDERERS.agenda=function(){
     const evts=prestations.filter(p=>p.dateEvenement===ds);
     const cls=p=>p.statutRealisation==='Réalisée'?'realisee':(p.statutRealisation==='Option'?'option':'');
     const evtHtml=evts.map(p=>`<div class="cal-evt ${cls(p)}" onclick="event.stopPropagation();voirPrestation('${p.id}')">${esc(p.horaire||p.creneau||'')} · ${esc((p.typePrestation||'').slice(0,16))}</div>`).join('');
-    const projs=DB.all('projets').filter(x=>x.date===ds&&x.statut!=='Annulé');
+    const projs=DB.all('projets').filter(x=>x.date===ds&&x.statut!=='Annulé'&&!(x.idDevis&&evts.some(p=>p.idDevis===x.idDevis)));   // projet déjà affiché via sa prestation
     const projHtml=projs.map(x=>`<div class="cal-evt" style="background:linear-gradient(135deg,#7B1FA2,#9C27B0);color:#fff;border:none" onclick="event.stopPropagation();nav('projet',{id:'${x.id}'})">🎭 ${esc((x.nom||'Projet').slice(0,15))}</div>`).join('');
     const rq=risqueJour(ds,null);
     const rqHtml=rq?`<div class="cal-risk ${rq.niveau==='risque'?'soft':''}" onclick="event.stopPropagation();analyseJour('${ds}')">⚠ ${rq.niveau==='conflit'?'conflit':'serré'}</div>`:'';
@@ -2811,12 +2834,35 @@ function facturerSolde(idDevis,after){
   updateBadges(); const msg=acompte?'🧾 Facture de solde émise':'🧾 Facture émise';
   if(typeof after==='function'){ toast(msg,'ok'); after(); } else { closeModal(); toast(msg,'ok'); nav('factures'); }
 }
-function marquerPayee(id){
-  const f=DB.get('factures',id); const solde=+f.soldeDu||0;
-  f.statut='Payée'; f.datePaiement=todayISO(); f.soldeDu=0; DB.save('factures',f);
-  addRecetteSolde(f,solde);
-  if(f.idProjet){ const p=DB.get('projets',f.idProjet); if(p){ p.statutAgence='Payé'; DB.save('projets',p); } }   // sync statut agence du projet
-  logActivite('Facture '+id+' payée'); updateBadges(); RENDERERS.factures(); toast('✓ Facture payée — recette ajoutée au livre','ok');
+/* Un seul chemin pour encaisser une facture (liste, fiche, dossier) : montant, date réelle, mode.
+   Un paiement partiel laisse la facture ouverte avec le reste dû. */
+function marquerPayee(id,opts){ encaisserFacture(id,opts); }
+function encaisserFacture(id,opts){
+  opts=opts||{}; const f=DB.get('factures',id); if(!f) return;
+  if(f.statut==='Payée'){ toast('Facture déjà réglée','err'); return; }
+  window._apresPaiement=opts.after||null;
+  const deja=(f.paiements||[]).reduce((s,x)=>s+(+x.montant||0),0);
+  openModal('Paiement reçu · '+esc(id),
+    (deja?`<div class="td-dim" style="margin-bottom:10px">Déjà reçu : <strong>${fmtEur(deja)}</strong> · reste dû : <strong>${fmtEur(f.soldeDu)}</strong></div>`:'')
+    +champsPaiement(+f.soldeDu||0,opts.date),
+    `<button class="btn btn-ghost" onclick="closeModal()">Annuler</button><button class="btn btn-success" onclick="validerPaiement('${id}')">✓ Enregistrer le paiement</button>`);
+}
+function validerPaiement(id){
+  const pay=lirePaiement(); if(!pay) return; const after=window._apresPaiement; window._apresPaiement=null;
+  const f=DB.get('factures',id); if(!f) return;
+  const solde=arr2(f.soldeDu);
+  if(pay.montant>solde+0.005&&!confirm('Montant supérieur au reste dû ('+fmtEur(solde)+'). Enregistrer quand même ?')) return;
+  const total=pay.montant>=solde-0.005;
+  f.paiements=(f.paiements||[]).concat([{date:pay.date,montant:pay.montant,mode:pay.mode}]);
+  f.soldeDu=total?0:arr2(solde-pay.montant);
+  if(total){ f.statut='Payée'; f.datePaiement=pay.date; }
+  DB.save('factures',f);
+  DB.save('recettes',{id:uid('REC'),date:pay.date,montant:pay.montant,type:total?'Solde':'Paiement partiel',mode:pay.mode,client:clientNomFacture(f),designation:total?'Solde prestation':'Paiement partiel',ref:f.id});
+  if(total&&f.idProjet){ const p=DB.get('projets',f.idProjet); if(p&&p.statutAgence!=='Payé'){ p.statutAgence='Payé'; DB.save('projets',p); } }   // statut agence du projet
+  logActivite((total?'Facture '+id+' payée':'Paiement partiel · facture '+id)+' le '+pay.date+' ('+fmtEur(pay.montant)+', '+pay.mode+')');
+  closeModal(); updateBadges();
+  if(typeof after==='function') after(); else if(_currentView==='factures') RENDERERS.factures();
+  toast(total?'✓ Facture payée — recette ajoutée au livre':'✓ Paiement partiel enregistré — reste '+fmtEur(f.soldeDu),'ok');
 }
 /* Clé de comparaison d'un nom : sans casse, sans accents, sans ponctuation, espaces normalisés */
 function normNom(x){ return String(x||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'')
@@ -2885,7 +2931,7 @@ function interPrincipal(idClient,idc){ const c=interCollecte(idClient); if(!c)re
   (c.contacts||[]).forEach(x=>x.principal=(x.id===idc)); DB.save('clients',c); }
 function interSave(idClient){ const c=interCollecte(idClient); if(!c)return;
   DB.save('clients',c); toast('👥 Interlocuteurs enregistrés','ok'); voirClient(idClient); }
-function clientNomFacture(f){ if(f&&f.billingName) return f.billingName; const c=DB.get('clients',f.idClient); return c?(c.prenom+' '+c.nom).trim():((DB.get('devis',f.idDevis)||{}).nomClient||''); }
+function clientNomFacture(f){ if(f&&f.billingName) return f.billingName; const c=DB.get('clients',f.idClient); return c?((c.prenom||'')+' '+(c.nom||'')).trim():((DB.get('devis',f.idDevis)||{}).nomClient||''); }
 /* Email destinataire d'une facture : adresse saisie par Louis → interlocuteur → copie faite à la création → fiche client → devis lié */
 function factEmailTo(f){ if(!f) return '';
   if(f.billingEmailManuel&&f.billingEmail) return f.billingEmail;
@@ -2936,7 +2982,7 @@ function voirFacture(id){
                      : alertHtml('danger','🔔','<strong>Délai post-relance 1 écoulé</strong> → relance 2.'); }
   else action=alertHtml('danger','⚠','<strong>Relances 1 & 2 faites, impayé.</strong> Envisager le contentieux.');
 
-  const relType=f.statut==='Relance 1'?'2':'1';
+  const relType=f.statut==='Émise'?'1':'2';
   const emailBtns=[
     `<button class="btn btn-or" onclick="envoyerFactureMail('${id}')">✉ ${envoi?'Renvoyer':'Envoyer'} la facture</button>`,
     (!paye&&['Émise','Relance 1','Relance 2'].includes(f.statut))?`<button class="btn btn-warn" onclick="preparerRelance('${id}')">✉ Relance ${relType} par email</button>`:'',
@@ -3028,7 +3074,7 @@ function devisQuick(d){
   let b='';
   if(d.statut==='Brouillon') b=qbtn('btn-or',`envoyerDevisMail('${d.id}')`,'✉ Envoyer par email')+qbtn('btn-ghost',`majDevis('${d.id}','Envoyé')`,'✓ Déjà envoyé');
   else if(d.statut==='Envoyé') b=qbtn('btn-success',`majDevis('${d.id}','Accepté')`,'✓ Accepté')+qbtn('btn-warn',`majDevis('${d.id}','Refusé')`,'✗ Refusé');
-  else if(d.statut==='Accepté') b=qbtn('btn-or',`enregistrerAcompte('${d.id}')`,'💰 Acompte reçu');
+  else if(d.statut==='Accepté'&&!factSoldeDe(d.id)) b=qbtn('btn-or',`enregistrerAcompte('${d.id}')`,'💰 Acompte reçu');
   else if(d.statut==='Acompte reçu'&&!factSoldeDe(d.id)) b=qbtn('btn-or',`transformerEnFacture('${d.id}')`,'🧾 Facturer le solde');
   return b+qbtn('btn-ghost',`apercuPdf('Devis','${d.id}')`,'👁 PDF');
 }
@@ -3042,26 +3088,30 @@ function factureQuick(f){
   return b+qbtn('btn-ghost',`apercuPdf('Facture','${f.id}')`,'👁 PDF');
 }
 function marquerRelanceManuelle(id){ const f=DB.get('factures',id); const type=f.statut==='Relance 1'?'R2':'R1'; confirmerRelance(id,type); voirFacture(id); toast('Relance '+type+' marquée faite','ok'); }
-function marquerFacturePayee(id){ marquerPayee(id); voirFacture(id); }
+function marquerFacturePayee(id){ encaisserFacture(id,{after:()=>voirFacture(id)}); }
 function supprimerFacture(id){
   const f=DB.get('factures',id)||{};
   if(f.type==='avoir'&&f.avoirDe&&DB.get('factures',f.avoirDe)){
     openModal('Suppression impossible','<div class="alert warning" style="margin:0"><span class="alert-icon">⚠</span><div>Cet avoir justifie l\'annulation de la facture <strong>'+esc(f.avoirDe)+'</strong>. Supprime d\'abord la facture annulée si tu veux vraiment tout effacer.</div></div>','<button class="btn btn-ghost" onclick="closeModal()">OK</button>'); return;
   }
   openModal('Supprimer la facture '+esc(id)+' ?',
-    '<div class="alert danger" style="margin:0"><span class="alert-icon">🗑</span><div>La facture sera supprimée (le devis lié repasse facturable). Les recettes déjà encaissées restent dans le livre de comptes.</div></div>',
+    '<div class="alert danger" style="margin:0"><span class="alert-icon">🗑</span><div>La facture sera supprimée (le devis lié repasse facturable)'+(DB.all('recettes').some(r=>r.ref===id)?', ainsi que ses paiements enregistrés au livre de recettes. Si l\'argent a vraiment été reçu, fais plutôt un avoir.':'.')+'</div></div>',
     '<button class="btn btn-ghost" onclick="voirFacture(\''+id+'\')">Annuler</button><button class="btn btn-danger" onclick="confirmSupprimerFacture(\''+id+'\')">Supprimer définitivement</button>');
 }
 function confirmSupprimerFacture(id){
   const f=DB.get('factures',id)||{};
   if(f.idProjet){ const p=DB.get('projets',f.idProjet); if(p&&p.factureId===id){ p.factureId=''; if(p.statut==='Facturé')p.statut='Réalisé'; DB.save('projets',p); } }
+  DB.all('recettes').filter(r=>r.ref===id).forEach(r=>DB.remove('recettes',r.id));   // pas de recette orpheline au livre
   DB.remove('factures',id); logActivite('Facture '+id+' supprimée'); closeModal(); updateBadges(); RENDERERS.factures(); toast('Facture supprimée','ok'); }
 function factureBack(id){
   const f=DB.get('factures',id); if(!f)return;
   const rmMail=k=>DB.all('mails').filter(m=>m.kind===k&&m.ref===id).forEach(m=>DB.remove('mails',m.id));
   let msg;
-  if(f.statut==='Payée'){ f.statut=f.dateRelance2?'Relance 2':(f.dateRelance1?'Relance 1':'Émise'); f.datePaiement=''; f.soldeDu=(+f.montantTTC||0)-(+f.acompteVerse||0);
-    DB.all('recettes').filter(r=>r.ref===id&&r.type==='Solde').forEach(r=>DB.remove('recettes',r.id)); msg='Paiement annulé'; }
+  if(f.statut==='Payée'||(f.paiements||[]).length){ f.statut=f.dateRelance2?'Relance 2':(f.dateRelance1?'Relance 1':'Émise'); f.datePaiement=''; f.paiements=[];
+    f.soldeDu=arr2((f.montantTTC!=null&&f.type!=='acompte'?(+f.montantTTC||0)-(+f.acompteVerse||0):factMontant(f)));
+    DB.all('recettes').filter(r=>r.ref===id&&(r.type==='Solde'||r.type==='Paiement partiel')).forEach(r=>DB.remove('recettes',r.id));
+    if(f.idProjet){ const p=DB.get('projets',f.idProjet); if(p&&p.statutAgence==='Payé'){ p.statutAgence='En attente'; DB.save('projets',p); } }
+    msg='Paiement annulé (retiré du livre de recettes)'; }
   else if(f.statut==='Relance 2'){ f.statut='Relance 1'; f.dateRelance2=''; rmMail('relanceR2'); msg='Relance 2 annulée'; }
   else if(f.statut==='Relance 1'){ f.statut='Émise'; f.dateRelance1=''; rmMail('relanceR1'); msg='Relance 1 annulée'; }
   else if(f.dateEnvoi||mailDate('facture',id)){ f.dateEnvoi=''; rmMail('facture'); msg='Envoi annulé'; }
@@ -3190,8 +3240,8 @@ RENDERERS.clients=function(){
   if(_fCli) all=all.filter(c=>c.type===_fCli);
   all.sort((a,b)=>b.caTotal-a.caTotal);
 
-  const body=all.length?all.map(c=>`<tr class="cli-row" data-s="${esc((c.prenom+' '+c.nom+' '+(c.email||'')+' '+(c.adresse||'')+' '+c.type).toLowerCase())}">
-    <td class="td-strong" data-label="Nom">${esc((c.prenom+' '+c.nom).trim())}<div class="td-dim">${esc(c.email||'')}</div></td>
+  const body=all.length?all.map(c=>`<tr class="cli-row" data-s="${esc(((c.prenom||'')+' '+(c.nom||'')+' '+(c.email||'')+' '+(c.adresse||'')+' '+c.type).toLowerCase())}">
+    <td class="td-strong" data-label="Nom">${esc(((c.prenom||'')+' '+(c.nom||'')).trim())}<div class="td-dim">${esc(c.email||'')}</div></td>
     <td data-label="Type">${badge(c.type||'particulier')}</td>
     <td data-label="Ville">${esc(c.adresse||'—')}</td>
     <td data-label="Activité">${c.nbDevis||0} devis · ${c.nbPrestations||0} presta.</td>
@@ -3200,7 +3250,7 @@ RENDERERS.clients=function(){
     :'<tr><td colspan="6"><div class="empty"><div class="empty-icon">👥</div><div class="empty-text">Aucun client</div></div></td></tr>';
 
   const topHtml=top.map((c,i)=>`<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--anthr)">
-    <span>${i+1}. ${esc((c.prenom+' '+c.nom).trim())}</span><span class="td-strong" style="color:var(--or)">${fmtEur(c.caTotal)}</span></div>`).join('')||'<div class="td-dim">—</div>';
+    <span>${i+1}. ${esc(((c.prenom||'')+' '+(c.nom||'')).trim())}</span><span class="td-strong" style="color:var(--or)">${fmtEur(c.caTotal)}</span></div>`).join('')||'<div class="td-dim">—</div>';
 
   const opt=(v,l)=>`<option value="${v}"${v===_fCli?' selected':''}>${l}</option>`;
   document.getElementById('view-clients').innerHTML=`
@@ -3317,7 +3367,7 @@ function voirClient(id){
   const histFac=fac.length?fac.map(f=>`<div style="display:flex;justify-content:space-between;padding:5px 0"><span>${esc(f.id)}</span><span>${badge(f.statut)} ${fmtEur(f.montantTTC)}</span></div>`).join(''):'<div class="td-dim">Aucune facture.</div>';
   let prescriHtml='';
   if(c.type==='partenaire'){
-    const nomP=(c.prenom+' '+c.nom).trim();
+    const nomP=((c.prenom||'')+' '+(c.nom||'')).trim();
     const refs=DB.all('clients').filter(x=>x.id!==id&&(x.sourceInitiale||'').toLowerCase().includes(c.nom.toLowerCase()));
     const caApporte=refs.reduce((s,x)=>s+(+x.caTotal||0),0);
     prescriHtml=`<div class="panel-title" style="margin-top:14px;font-size:13px">Prescriptions (${refs.length}) · CA apporté ${fmtEur(caApporte)}</div>
@@ -3345,14 +3395,14 @@ function voirClient(id){
   ${blocActualitesFiche(c)}
   <div class="panel-title" style="margin-top:16px;font-size:13px">Devis (${dv.length})</div>${histDevis}
   <div class="panel-title" style="margin-top:14px;font-size:13px">Factures (${fac.length})</div>${histFac}`;
-  openModal('Fiche · '+esc((c.prenom+' '+c.nom).trim()),body,
+  openModal('Fiche · '+esc(((c.prenom||'')+' '+(c.nom||'')).trim()),body,
     `${c.email?`<button class="btn btn-ghost" onclick="closeModal();mailClient('${id}')">✉ Email</button>`:''}
      <button class="btn btn-ghost" onclick="closeModal();editClient('${id}')">Modifier</button>
      <button class="btn btn-or" onclick="closeModal();nav('devis-create',{clientId:'${id}'})">→ Nouveau devis</button>`);
 }
 function mailMarketing(id,type){
   const c=DB.get('clients',id); if(!c)return;
-  const nom=(c.prenom+' '+c.nom).trim();
+  const nom=((c.prenom||'')+' '+(c.nom||'')).trim();
   if(estDesabo(c.email)){ const le=dateDesabo(c.email);
     toast(nom+' ne reçoit plus tes actualités'+(le?' depuis le '+fmtDateShort(le):'')+' : pas d\'email marketing. Devis et factures restent possibles.','err'); return; }
   let tpl;
@@ -3538,7 +3588,7 @@ function mailInterlocuteur(idClient,idContact){
 }
 function mailClient(id){
   const c=DB.get('clients',id); if(!c)return;
-  openMailComposer({titre:'Email · '+(c.prenom+' '+c.nom).trim(), to:c.email||'', subject:'', body:`Bonjour ${prenomDe(c.prenom||c.nom)},\n\n\n\n${sig()}`, kind:'libre', ref:id});
+  openMailComposer({titre:'Email · '+((c.prenom||'')+' '+(c.nom||'')).trim(), to:c.email||'', subject:'', body:`Bonjour ${prenomDe(c.prenom||c.nom)},\n\n\n\n${sig()}`, kind:'libre', ref:id});
 }
 function csvCell(v){ v=(v==null?'':String(v)); return /[",;\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; }
 function exportClientsCSV(){
@@ -3595,14 +3645,21 @@ RENDERERS['devis-create']=function(params){
   const cfg=DB.config();
   let d;
   if(params.id){ d=Object.assign({},DB.get('devis',params.id)); editionBase('devis',DB.get('devis',params.id)); }
+  else if(params.dupliquer&&DB.get('devis',params.dupliquer)){   // copie d'un devis existant : nouveau numéro, sans statut ni signature
+    const src=DB.get('devis',params.dupliquer);
+    d=JSON.parse(JSON.stringify(src));
+    ['id','cle','_base','updatedAt','statut','dateEnvoi','dateAcceptation','acompteRecu','dateAcompte','signataire','signatureImg','signedAt','relances','mailSignatureFait','signToken','token','notesSuivi'].forEach(k=>delete d[k]);
+    d.id=''; d.statut='Brouillon'; d.dateCreation=todayISO();
+  }
   else if(cloudUrl()&&_pullOk) cloudReprise(true);   // nouveau devis : on récupère d'abord les numéros pris sur l'autre appareil
   else {
-    d={id:'',dateCreation:todayISO(),idClient:'',nomClient:'',email:'',tel:'',dateEvenement:'',creneau:'Soirée',horaire:'',lieu:'',distanceKm:0,nbInvites:'',prestations:[{label:'',prix:0,duree:''}],montantHT:0,fraisDeplacement:0,tva:0,montantTTC:0,remise:0,acomptePct:cfg.acompteDefautPct||30,statut:'Brouillon',dateEnvoi:'',dateAcceptation:'',notes:'',idDemandeOrigine:''};
+    d={id:'',dateCreation:todayISO(),idClient:'',nomClient:'',email:'',tel:'',dateEvenement:'',creneau:'Soirée',horaire:'',lieu:'',distanceKm:0,nbInvites:'',prestations:[{label:'',prix:0,duree:''}],montantHT:0,fraisDeplacement:0,tva:0,montantTTC:0,remise:0,acomptePct:(cfg.acompteDefautPct??30),statut:'Brouillon',dateEnvoi:'',dateAcceptation:'',notes:'',idDemandeOrigine:''};
     if(params.demandeId){ const dem=DB.get('demandes',params.demandeId); if(dem){
       Object.assign(d,{nomClient:dem.nom,email:dem.email,tel:dem.tel,typeEvenement:dem.typeEvenement||'',dateEvenement:dem.dateEvenement,creneau:dem.creneau||'Soirée',lieu:dem.lieu,distanceKm:dem.distanceKm||0,nbInvites:dem.nbInvites,idDemandeOrigine:dem.id,prestations:[{label:dem.prestationSouhaitee||'',prix:0,duree:dem.duree||''}]}); } }
     if(params.clientId){ const c=DB.get('clients',params.clientId); if(c){
-      Object.assign(d,{idClient:c.id,nomClient:(c.prenom+' '+c.nom).trim(),email:c.email,tel:c.tel,lieu:c.adresse}); } }
+      Object.assign(d,{idClient:c.id,nomClient:((c.prenom||'')+' '+(c.nom||'')).trim(),email:c.email,tel:c.tel,lieu:c.adresse}); } }
   }
+  const verrou=params.id?devisVerrou(DB.get('devis',params.id)):'';
   _dvCle=dvCleDe(params);
   const brouillon=dvBrouillonLire(_dvCle);
   const restaure=brouillon&&(!params.id||!d.updatedAt||brouillon.ts>d.updatedAt);
@@ -3624,7 +3681,7 @@ RENDERERS['devis-create']=function(params){
       <div class="form-grid">
         <div class="form-group"><label class="form-label">Nom du client <span class="req">*</span></label>
           <input class="form-control" id="dv-nomClient" list="dv-clients" value="${esc(d.nomClient)}" oninput="dvPickClient(this.value)">
-          <datalist id="dv-clients">${clients.map(c=>`<option value="${esc((c.prenom+' '+c.nom).trim())}">`).join('')}</datalist></div>
+          <datalist id="dv-clients">${clients.map(c=>`<option value="${esc(((c.prenom||'')+' '+(c.nom||'')).trim())}">`).join('')}</datalist></div>
         <div class="form-group"><label class="form-label">Email</label><input class="form-control" id="dv-email" value="${esc(d.email)}" type="email"></div>
         <div class="form-group"><label class="form-label">Téléphone</label><input class="form-control" id="dv-tel" value="${esc(d.tel)}"></div>
       </div></div>
@@ -3654,8 +3711,8 @@ RENDERERS['devis-create']=function(params){
     <div class="panel"><div class="panel-title">Récapitulatif</div>
       <div class="form-grid c3">
         <div class="form-group"><label class="form-label">Remise (€)</label><input class="form-control" id="dv-remise" type="number" value="${d.remise||0}" oninput="dvRecalc()"></div>
-        <div class="form-group"><label class="form-label">Acompte (%)</label><input class="form-control" id="dv-acomptePct" type="number" value="${d.acomptePct||30}" oninput="dvRecalc()"></div>
-        <div class="form-group"><label class="form-label">Frais /km (config)</label><input class="form-control" value="${(cfg.fraisKm||0.55)} €" disabled></div>
+        <div class="form-group"><label class="form-label">Acompte (%)</label><input class="form-control" id="dv-acomptePct" type="number" value="${d.acomptePct??30}" oninput="dvRecalc()"></div>
+        <div class="form-group"><label class="form-label">Frais /km (config)</label><input class="form-control" value="${((cfg.fraisKm??0.55))} €" disabled></div>
       </div>
       <div id="dv-recap"></div>
       <div class="form-group" style="margin-top:10px"><label class="form-label">Notes</label><textarea class="form-control" id="dv-notes">${esc(d.notes)}</textarea></div>
@@ -3663,9 +3720,12 @@ RENDERERS['devis-create']=function(params){
 
     <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-bottom:30px">
       <button class="btn btn-ghost" onclick="nav('devis')">Annuler</button>
-      <button class="btn btn-ghost" onclick="if(dvSave(false))apercuPdf('Devis',DV.id)">👁 Aperçu PDF</button>
-      <button class="btn btn-or" onclick="dvSave(true)">${d.id?'Enregistrer':'Enregistrer le brouillon'}</button>
+      ${verrou?`<button class="btn btn-ghost" onclick="apercuPdf('Devis','${d.id}')">👁 PDF</button><button class="btn btn-or" onclick="dupliquerDevis('${d.id}')">📋 Dupliquer en nouveau devis</button>`
+        :`<button class="btn btn-ghost" onclick="if(dvSave(false))apercuPdf('Devis',DV.id)">👁 Aperçu PDF</button>
+      <button class="btn btn-or" onclick="dvSave(true)">${d.id?'Enregistrer':'Enregistrer le brouillon'}</button>`}
     </div></div>`;
+  if(verrou){ const v=document.getElementById('view-devis-create'); if(v){ v.querySelectorAll('input,textarea,select').forEach(e=>e.disabled=true);
+    v.insertAdjacentHTML('afterbegin','<div class="alert warning"><span class="alert-icon">🔒</span><div><strong>Devis '+esc(verrou)+'</strong> : il ne peut plus être modifié, le client a accepté ce contenu. Pour changer quelque chose, duplique-le en nouveau devis.</div></div>'); } }
   dvRenderLines(); dvRecalc();
   // Indicateur d'enregistrement local + bandeau si un brouillon a été restauré
   const vue=document.getElementById('view-devis-create'), boite=vue&&vue.firstElementChild;
@@ -3724,13 +3784,13 @@ function dvRecalc(){
   const dist=+(document.getElementById('dv-distanceKm')||{}).value||0;
   const remise=+(document.getElementById('dv-remise')||{}).value||0;
   const pct=+(document.getElementById('dv-acomptePct')||{}).value||0;
-  const frais=Math.round(dist*(cfg.fraisKm||0.55));
+  const frais=Math.round(dist*((cfg.fraisKm??0.55)));
   const ttc=ht+frais-remise;
   const acompte=Math.round(ttc*pct/100);
   const el=document.getElementById('dv-recap'); if(!el)return;
   el.innerHTML=`<div class="dv-recap-box" style="background:var(--noir);border:1px solid var(--anthr);border-radius:var(--rsm);padding:14px 16px">
     <div style="display:flex;justify-content:space-between;padding:3px 0"><span class="td-dim">Sous-total prestations</span><span>${fmtEur(ht)}</span></div>
-    <div style="display:flex;justify-content:space-between;padding:3px 0"><span class="td-dim">Frais déplacement (${dist} km × ${cfg.fraisKm||0.55} €)</span><span>${fmtEur(frais)}</span></div>
+    <div style="display:flex;justify-content:space-between;padding:3px 0"><span class="td-dim">Frais déplacement (${dist} km × ${(cfg.fraisKm??0.55)} €)</span><span>${fmtEur(frais)}</span></div>
     ${remise?`<div style="display:flex;justify-content:space-between;padding:3px 0;color:var(--ok)"><span>Remise</span><span>- ${fmtEur(remise)}</span></div>`:''}
     <div style="display:flex;justify-content:space-between;padding:8px 0 3px;border-top:1px solid var(--anthr);margin-top:6px"><span class="td-strong">Total TTC</span><span class="td-strong" style="color:var(--or);font-size:18px;font-family:'Syne','Trebuchet MS',sans-serif">${fmtEur(ttc)}</span></div>
     <div style="display:flex;justify-content:space-between;padding:3px 0"><span class="td-dim">Acompte réservation (${pct} %)</span><span>${fmtEur(acompte)}</span></div></div>`;
@@ -3742,6 +3802,7 @@ function dvSave(go){
   DV.typeEvenement=g('type'); DV.dateEvenement=g('dateEvenement'); DV.creneau=g('creneau'); DV.horaire=g('horaire');
   DV.lieu=g('lieu'); DV.distanceKm=+g('distanceKm')||0; DV.nbInvites=g('nbInvites'); DV.notes=g('notes');
   DV.remise=+g('remise')||0; DV.acomptePct=+g('acomptePct')||0;
+  { const v=DV.id&&devisVerrou(DB.get('devis',DV.id)); if(v){ toast('Ce devis est '+v+' : il ne peut plus être modifié. Utilise « Dupliquer » pour en faire un nouveau.','err'); return false; } }
   if(!DV.nomClient){ toast('Le nom du client est requis','err'); return false; }
   if(!DV.dateEvenement){ toast('La date de l\'événement est requise','err'); return false; }
   dvRecalc();
@@ -3759,10 +3820,10 @@ function dvSave(go){
     }
     if(!c){
     if(DV.entreprise||DV.siren){
-      c={id:uid('CLI'),nom:DV.nomClient,prenom:'',email:DV.email,tel:DV.tel,adresse:DV.lieu,type:'entreprise',siren:DV.siren||'',naf:DV.naf||'',date1erDevis:todayISO(),nbDevis:0,nbPrestations:0,caTotal:0,sourceInitiale:(DB.get('demandes',DV.idDemandeOrigine)||{}).source||''};
+      c={id:uid('CLI'),nom:DV.nomClient,prenom:'',email:DV.email,tel:DV.tel,adresse:DV.lieu,type:'prospect',typeCible:'entreprise',siren:DV.siren||'',naf:DV.naf||'',date1erDevis:todayISO(),nbDevis:0,nbPrestations:0,caTotal:0,sourceInitiale:(DB.get('demandes',DV.idDemandeOrigine)||{}).source||''};
     } else {
       const parts=DV.nomClient.split(' '); const nom=parts.length>1?parts.slice(1).join(' '):parts[0]; const prenom=parts.length>1?parts[0]:'';
-      c={id:uid('CLI'),nom,prenom,email:DV.email,tel:DV.tel,adresse:DV.lieu,type:'particulier',date1erDevis:todayISO(),nbDevis:0,nbPrestations:0,caTotal:0,sourceInitiale:(DB.get('demandes',DV.idDemandeOrigine)||{}).source||''};
+      c={id:uid('CLI'),nom,prenom,email:DV.email,tel:DV.tel,adresse:DV.lieu,type:'prospect',date1erDevis:todayISO(),nbDevis:0,nbPrestations:0,caTotal:0,sourceInitiale:(DB.get('demandes',DV.idDemandeOrigine)||{}).source||''};
     }
     DB.save('clients',c); DV.idClient=c.id;
     }
@@ -3784,7 +3845,7 @@ function sig(){ return (DB.config().signature||'LouisMagie'); }
 function prenomDe(nom){ return (nom||'').trim().split(' ')[0]||''; }
 
 const EMAIL_TPL={
-  devis(d){ const ac=Math.round((+d.montantTTC||0)*(d.acomptePct||0)/100);
+  devis(d){ const ac=montantAcompte(d);
     const lien=signUrl(d); const ct=contactDevis(d);
     const bloc=lien?`\n\n✍️ Pour accepter, signez votre devis en ligne en 1 clic (bon pour accord) :\n${lien}\n`:'';
     return { to:ct.email, subject:'Votre devis LouisMagie — '+d.id,
@@ -3793,7 +3854,7 @@ const EMAIL_TPL={
   bonjour(d){ const c=clientDeDevis(d)||{}; const i=d.idContact&&typeof interlocuteur==='function'?interlocuteur(c.id,d.idContact):null;
     const pi=i&&(i.prenom||'').trim(); if(pi) return 'Bonjour '+pi+',';
     const RS=/^(mairie|ville|commune|sarl|sas|sa|eurl|association|agence|soci[ée]t[ée]|h[ôo]tel|ch[âa]teau|restaurant|domaine|cabinet|groupe|office|c[ce]as?)\b/i;
-    const pro=['entreprise','partenaire','collectivite','collectivité','agence','association'].includes(String(c.type||'').toLowerCase())||!!c.siren
+    const pro=['entreprise','partenaire','collectivite','collectivité','agence','association'].includes(String(c.typeCible||c.type||'').toLowerCase())||!!c.siren
       ||RS.test(d.nomClient||'')||RS.test(((c.prenom||'')+' '+(c.nom||'')).trim());   // « Mairie » enregistré comme prénom par un ancien découpage
     if(pro) return 'Bonjour,';
     if((c.prenom||'').trim()) return 'Bonjour '+c.prenom.trim()+',';
@@ -4041,7 +4102,7 @@ RENDERERS.compta=function(){
   if(!_comptaYear) _comptaYear=new Date().getFullYear();
   const an=_comptaYear, cfg=DB.config();
   const tauxC=cotisTaux(), tauxI=impotTaux();
-  const moisT=Math.floor(new Date().getMonth()/3)+1;
+  const moisT=(+an===new Date().getFullYear())?Math.floor(new Date().getMonth()/3)+1:4;   // autre année : dernier trimestre
   const caCour=caTrimestre(an,moisT), caAn=caAnnee(an);
   const prochain=trimsADeclarer()[0];
 
@@ -4086,7 +4147,7 @@ RENDERERS.compta=function(){
   document.getElementById('view-compta').innerHTML=`
     <div class="kpi-grid">
       ${kpi('vert','CA encaissé '+an,fmtEur(caAn))}
-      ${kpi('or','CA trimestre courant',fmtEur(caCour),'T'+moisT)}
+      ${kpi('or',(+an===new Date().getFullYear())?'CA trimestre courant':'CA T4 '+an,fmtEur(caCour),'T'+moisT)}
       ${kpi('warn','Cotisations estimées (T'+moisT+')',fmtEur(Math.round(caCour*tauxC/100)),tauxC+' %')}
       ${kpi('info','Prochaine déclaration',prochain?TRIM_LABEL[prochain.t-1].split(' · ')[0]:'À jour',prochain?('échéance '+fmtDateShort(trimEcheance(prochain.an,prochain.t))):'rien à déclarer')}
     </div>
@@ -4157,7 +4218,9 @@ async function doImport(){ const j=window._importData; if(!j)return;
   if(j.config) DB.saveConfig(j.config);
   closeModal(); toast('Sauvegarde restaurée','ok'); setTimeout(()=>location.reload(),800);
 }
-function supprimerRecette(id){ DB.remove('recettes',id); RENDERERS.compta(); toast('Recette supprimée','ok'); }
+function supprimerRecette(id){ const r=DB.get('recettes',id); if(!r) return;
+  if(!confirm('Supprimer la recette de '+fmtEur(r.montant)+' du '+fmtDateShort(r.date)+' ('+(r.designation||r.type||'')+') ?'+(r.ref?'\n\nElle est liée à '+r.ref+' : le statut de ce document ne change pas.':''))) return;
+  DB.remove('recettes',id); logActivite('Recette supprimée · '+fmtEur(r.montant)+' '+(r.ref||'')); RENDERERS.compta(); toast('Recette supprimée','ok'); }
 function addRecetteManuelle(){
   const body=`<div class="form-grid">
     <div class="form-group"><label class="form-label">Date</label><input class="form-control" id="rec-date" type="date" value="${todayISO()}"></div>
@@ -4212,7 +4275,7 @@ let _mktTestSig='';                             // mémoire seule : contenu du d
 /* Listes prêtes à l'emploi, calculées depuis les données */
 const MKT_SEGMENTS=[
   {key:'tous',      label:'📋 Tous mes contacts',      f:c=>true},
-  {key:'clients',   label:'✅ Clients (ont réservé)',   f:c=>['particulier','entreprise','partenaire'].includes(c.type)&&(c.nbDevis||0)>0},
+  {key:'clients',   label:'✅ Clients (ont réservé)',   f:c=>['particulier','entreprise','partenaire'].includes(c.type)&&DB.all('devis').some(d=>d.idClient===c.id&&['Accepté','Acompte reçu'].includes(d.statut)||(d.idClient===c.id&&factSoldeDe(d.id)))},
   {key:'prospects', label:'🌱 Prospects (jamais réservé)', f:c=>c.type==='prospect'||!(c.nbDevis>0)},
   {key:'entreprise',label:'🏢 Entreprises',            f:c=>c.type==='entreprise'},
   {key:'particulier',label:'👤 Particuliers',          f:c=>c.type==='particulier'},
@@ -4420,9 +4483,9 @@ RENDERERS.marketing=function(){
   const liste=segContacts(_mktSeg);
   const ex=segExclus(_mktSeg,parId,Dm);
   const exclTxt=[ex.desabo?ex.desabo+' désabonné(s) exclu(s)':'',ex.sansEmail?ex.sansEmail+' sans email ou supprimé(s)':''].filter(Boolean).join(' · ');
-  const cbList=liste.map(c=>`<label class="mkt-row" data-s="${esc((c.prenom+' '+c.nom+' '+c.email).toLowerCase())}" style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--anthr);cursor:pointer">
+  const cbList=liste.map(c=>`<label class="mkt-row" data-s="${esc(((c.prenom||'')+' '+(c.nom||'')+' '+c.email).toLowerCase())}" style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--anthr);cursor:pointer">
       <input type="checkbox" class="mkt-cb" value="${c.id}"${_mktDecoches.has(c.id)?'':' checked'}>
-      <span style="flex:1">${esc((c.prenom+' '+c.nom).trim())}<span class="td-dim"> · ${esc(c.email)}</span></span>
+      <span style="flex:1">${esc(((c.prenom||'')+' '+(c.nom||'')).trim())}<span class="td-dim"> · ${esc(c.email)}</span></span>
       <span class="badge ${c.type==='partenaire'?'accepte':c.type==='entreprise'?'nouveau':'brouillon'}">${esc(c.type)}</span></label>`).join('');
 
   const saved=DB.all('templates');
@@ -5181,8 +5244,8 @@ RENDERERS.reglages=function(){
 
     <div class="panel"><div class="panel-title">Paramètres facturation & déplacement</div>
       <div class="form-grid c3">
-        <div class="form-group"><label class="form-label">Frais kilométriques (€/km)</label><input class="form-control" id="cfg-fraisKm" type="number" step="0.01" value="${cfg.fraisKm||0.55}"></div>
-        <div class="form-group"><label class="form-label">Acompte par défaut (%)</label><input class="form-control" id="cfg-acompteDefautPct" type="number" value="${cfg.acompteDefautPct||30}"></div>
+        <div class="form-group"><label class="form-label">Frais kilométriques (€/km)</label><input class="form-control" id="cfg-fraisKm" type="number" step="0.01" value="${(cfg.fraisKm??0.55)}"></div>
+        <div class="form-group"><label class="form-label">Acompte par défaut (%)</label><input class="form-control" id="cfg-acompteDefautPct" type="number" value="${(cfg.acompteDefautPct??30)}"></div>
         <div class="form-group"><label class="form-label">Délai 1ère relance (jours)</label><input class="form-control" id="cfg-delaiRelance1" type="number" value="${cfg.delaiRelance1||30}"></div>
         <div class="form-group"><label class="form-label">Délai 2ème relance (jours)</label><input class="form-control" id="cfg-delaiRelance2" type="number" value="${cfg.delaiRelance2||15}"></div>
         <div class="form-group"><label class="form-label">Email expéditeur</label><input class="form-control" id="cfg-emailLouis" value="${esc(cfg.emailLouis||'')}"></div>
@@ -5864,6 +5927,8 @@ function devisDepuisProjet(pid){
   const p=getP(pid); if(!p)return;
   const exist=devisProjetDe(pid);
   if(exist){ toast('Un devis existe déjà pour ce projet','err'); nav('devis-create',{id:exist.id}); return; }
+  const fp=factureProjetDe(pid);
+  if(fp){ toast('Ce projet est déjà facturé ('+fp.id+') : un devis créerait une seconde facture','err'); return; }
   if(!(p.agence||'').trim()){ toast('Renseigne d\'abord l\'agence cliente','err'); return; }
   if(!p.date){ toast('Renseigne d\'abord la date de l\'événement','err'); return; }
   const nbMag=(p.equipe||[]).length||(+p.nbMagiciensCible||0);
@@ -5882,7 +5947,7 @@ function devisDepuisProjet(pid){
     email:co.email||p.agenceEmail||'',tel:co.tel||p.agenceTel||'',typeEvenement:p.typeEvenement||'',
     dateEvenement:p.date,creneau:p.creneau||'Soirée',horaire:p.horaire||'',lieu:p.lieu||'',distanceKm:0,nbInvites:p.nbInvites||'',
     prestations:lignes,montantHT:total,fraisDeplacement:0,tva:0,montantTTC:total,remise:0,
-    acomptePct:cfg.acompteDefautPct||30,statut:'Brouillon',dateEnvoi:'',dateAcceptation:'',
+    acomptePct:(cfg.acompteDefautPct??30),statut:'Brouillon',dateEnvoi:'',dateAcceptation:'',
     notes:'Projet Imagine the Impossible'+(p.theme?(' — '+p.theme):''),idDemandeOrigine:''};
   DB.save('devis',d); syncPrestationDevis(d);
   p.idDevis=d.id; if(c&&!p.idAgence) p.idAgence=c.id; if(p.statut==='Prospect') p.statut='En préparation'; saveP(p);

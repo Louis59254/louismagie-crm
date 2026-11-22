@@ -1823,6 +1823,7 @@ if ($action === 'sign' || $action === 'signSubmit') {
   if ($action === 'signSubmit') {
     if(!$valid) out(['ok'=>false,'error'=>'lien invalide']);
     if(!empty($d['signataire'])) out(['ok'=>true,'already'=>true]);
+    if(($d['statut'] ?? '') === 'Refusé') out(['ok'=>false,'error'=>'ce devis n\'est plus valable, contactez Louis']);
     $signataire = trim($req['signataire'] ?? '');
     $img = $req['signatureImg'] ?? '';
     // Anti-XSS stocké : n'accepte que des vraies images PNG/JPEG en base64, taille bornée ; sinon on ignore le tracé
@@ -1834,6 +1835,7 @@ if ($action === 'sign' || $action === 'signSubmit') {
       foreach ($devis as &$x) {
         if (($x['id'] ?? '') !== $id) continue;
         if (!empty($x['signataire'])) { $deja = true; return false; }
+        if (($x['statut'] ?? '') === 'Refusé') return false;   // refusé entre-temps : pas de signature
         // Garde : la signature ne fait AVANCER le statut que depuis Brouillon/Envoyé (jamais rétrograder « Acompte reçu » etc.)
         if (in_array($x['statut'] ?? '', ['Brouillon','Envoyé',''])) {
           $x['statut'] = 'Accepté';
@@ -1935,6 +1937,7 @@ if ($action === 'sign' || $action === 'signSubmit') {
     .($acPct>0?'<tr><td class="dim">Acompte de réservation ('.rtrim(rtrim(number_format($acPct,1,',',''),'0'),',').' %)</td><td class="r dim">'.$ac.' €</td></tr>':'')
     .'</table>';
   if($already){ echo $okBlock; }
+  elseif(($d['statut'] ?? '') === 'Refusé'){ echo '<div class="done">Ce devis n\'est plus valable. Pour une nouvelle proposition, contactez Louis : contact@louismagie.fr</div>'; }
   else {
     echo '<form id="f"><h2>Signature</h2>'
       .'<label>Votre nom et prénom <button type="button" class="clr" onclick="clr()">effacer le tracé</button></label>'
