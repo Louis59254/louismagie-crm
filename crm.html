@@ -1457,6 +1457,7 @@ function applySignatures(sigs){
     d.signataire=s.signataire||''; d.signatureImg=s.signatureImg||''; d.signedAt=s.signedAt||'';
     if(d.statut==='Brouillon'||d.statut==='Envoyé'){ d.statut='Accepté'; if(!d.dateAcceptation)d.dateAcceptation=(s.signedAt||'').slice(0,10); promouvoirProspect(d); }
     DB.save('devis',d); syncPrestationDevis(d); logActivite('Devis '+d.id+' signé en ligne par '+(s.signataire||'client'));
+    const did=d.id; setTimeout(()=>{ try{ const doc=pdfDevis(did,true); if(doc) archivePdfCloud(doc,'Devis',did+'-signe.pdf',(DB.get('devis',did).dateCreation||'').slice(0,4)||new Date().getFullYear()); }catch(_){} },1500);
   });
 }
 /* Timeline de suivi : reconstruit le cycle de vie complet d'un devis depuis toutes les données */
@@ -2178,6 +2179,33 @@ function pdfReglement(doc,y,condTitle,condLines){
   }
   return ry;
 }
+/* Devis signé en ligne : le cadre « Bon pour accord » porte la signature, le nom et l'horodatage */
+function signeLeTexte(iso){ const t=new Date(iso); if(isNaN(t)) return '';
+  const o={timeZone:'Europe/Paris'}; return t.toLocaleDateString('fr-FR',{...o,day:'2-digit',month:'2-digit',year:'numeric'})+' à '+t.toLocaleTimeString('fr-FR',{...o,hour:'2-digit',minute:'2-digit'}); }
+function pdfSigneEnLigne(doc,d,y){
+  const h=40, x=112, w=83, OK=[39,174,96];
+  doc.setFillColor(...P_BLANC); doc.setDrawColor(...OK); doc.setLineWidth(.5); doc.roundedRect(x,y,w,h,2.5,2.5,'FD');
+  doc.setFillColor(...OK); doc.rect(x,y+3,1.8,h-6,'F');
+  doc.setFont('helvetica','bold'); doc.setFontSize(6.6); doc.setTextColor(...OK);
+  doc.text('BON POUR ACCORD · SIGNÉ EN LIGNE',x+6,y+6.5,{charSpace:.6});
+  const img=safeDataImg(d.signatureImg);
+  if(img){ try{ const pr=doc.getImageProperties(img); const mw=w-14, mh=17; let iw=mw, ih=iw*pr.height/pr.width; if(ih>mh){ ih=mh; iw=ih*pr.width/pr.height; }
+      doc.addImage(img,'PNG',x+6+(mw-iw)/2,y+9+(mh-ih)/2,iw,ih,undefined,'FAST'); }catch(_){} }
+  else { doc.setFont('times','italic'); let fs=17; doc.setFontSize(fs); doc.setTextColor(...P_NOIR);
+    const nom=d.signataire||''; while(doc.getTextWidth(nom)>w-14&&fs>8){ fs-=0.5; doc.setFontSize(fs); }
+    doc.text(nom,x+w/2,y+20.5,{align:'center'}); }
+  doc.setDrawColor(...P_LINE); doc.setLineWidth(.3); doc.line(x+6,y+27.5,x+w-6,y+27.5);
+  doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(...P_NOIR);
+  doc.text(doc.splitTextToSize(d.signataire||'Client',w-12)[0],x+6,y+32);
+  doc.setFont('helvetica','normal'); doc.setFontSize(7); doc.setTextColor(...P_GRIS);
+  const quand=signeLeTexte(d.signedAt); doc.text('Signé le '+(quand||'—')+(img?'':' · par saisie du nom'),x+6,y+36.2);
+  // à gauche : explication
+  doc.setFont('helvetica','bold'); doc.setFontSize(7.6); doc.setTextColor(...OK);
+  doc.text('Devis accepté et signé en ligne',15,y+8);
+  doc.setFont('helvetica','normal'); doc.setFontSize(7.2); doc.setTextColor(...P_GRIS);
+  doc.splitTextToSize('Signature électronique horodatée, enregistrée sur le serveur LouisMagie avec le devis'+(d.signedAt?' le '+quand:'')+'.',92)
+    .forEach((l,i)=>doc.text(l,15,y+13.5+i*4.2));
+}
 /* Cadre « Bon pour accord » ancré en bas de page (devis) */
 function pdfBonPourAccord(doc){
   const y=232, h=40;
@@ -2244,80 +2272,111 @@ function pdfEtoile(doc,cx,cy,r,rgb){   // helvetica n'a pas le glyphe ★ : on d
   doc.setFillColor(...rgb); doc.lines(rel,pts[0][0],pts[0][1],[1,1],'F',true);
 }
 function pdfEtoiles(doc,x,cy,r,n,rgb){ for(let k=0;k<(n||5);k++) pdfEtoile(doc,x+r+k*r*2.35,cy,r,rgb); }
+function pdfInitiales(n){ const m=String(n||'').replace(/[^A-Za-zÀ-ÿ\s]/g,' ').trim().split(/\s+/).filter(Boolean);
+  return ((m[0]||'?')[0]+((m[1]||'')[0]||'')).toUpperCase(); }
+/* Coupe un avis trop long à la fin d'une phrase, sinon avec […] : la carte garde une hauteur lisible */
+function pdfAvisLignes(doc,txt,w,maxL){
+  let l=doc.splitTextToSize(txt,w); if(l.length<=maxL) return l;
+  const court=l.slice(0,maxL).join(' '); const k=Math.max(court.lastIndexOf('. '),court.lastIndexOf('! '),court.lastIndexOf('? '));
+  const t=k>court.length*0.5 ? court.slice(0,k+1)+' […]' : court.replace(/\s+\S*$/,'')+' […]';
+  l=doc.splitTextToSize(t,w); return l.slice(0,maxL);
+}
 function pdfReferences(doc,d){
   const e=emetteur(), cfg=DB.config();
   const marques=refMarques(), avis=refAvisPour(d||{});
   if(!marques.length&&!avis.length) return;
   doc.addPage();
-  // bandeau noir + filet orange (même grammaire que l'en-tête)
-  doc.setFillColor(...P_NOIR); doc.rect(0,0,210,36,'F');
-  doc.setFillColor(...P_OR); doc.rect(0,36,210,2.4,'F');
+  doc.setFillColor(...P_LIGHT); doc.rect(0,0,210,280,'F');              // fond crème : les cartes blanches ressortent
+  // ── En-tête
+  doc.setFillColor(...P_NOIR); doc.rect(0,0,210,40,'F');
+  doc.setFillColor(...P_OR); doc.rect(0,40,210,1.6,'F');
   doc.setFillColor(30,18,8); doc.circle(196,4,26,'F');
-  pdfLogo(doc,15,9,18,true,60);
-  doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(...P_OR);
-  doc.text('RÉFÉRENCES',195,15,{align:'right',charSpace:1.1});
-  doc.setFontSize(18); doc.setTextColor(...P_BLANC); doc.text("Ils m'ont fait confiance",195,25.5,{align:'right'});
-  let y=50;
-  // ── Marques : grille typographique 4 colonnes
+  pdfLogo(doc,15,10,20,true,58);
+  doc.setFont('helvetica','bold'); doc.setFontSize(7.6); doc.setTextColor(...P_OR);
+  doc.text('RÉFÉRENCES',195,15,{align:'right',charSpace:1.2});
+  doc.setFontSize(20); doc.setTextColor(...P_BLANC); doc.text("Ils m'ont fait confiance",195,26,{align:'right'});
+  doc.setFont('helvetica','normal'); doc.setFontSize(8.4); doc.setTextColor(170,165,158);
+  doc.text('Marques, lieux et particuliers qui m’ont confié leur événement',195,32.5,{align:'right'});
+  let y=53;
+  const label=(t,yy)=>{ doc.setFont('helvetica','bold'); doc.setFontSize(7); doc.setTextColor(...P_OR); doc.text(t,15,yy,{charSpace:1}); };
+  // ── Mur de marques : un seul bloc blanc, filets fins entre les cases
   if(marques.length){
-    doc.setFont('helvetica','bold'); doc.setFontSize(7); doc.setTextColor(...P_OR);
-    doc.text('MARQUES, ÉTABLISSEMENTS ET LIEUX',15,y,{charSpace:.9}); y+=4.5;
-    const cols=4, gap=3, cw=(180-gap*(cols-1))/cols, ch=13;
-    marques.forEach((m,i)=>{ const cx=15+(i%cols)*(cw+gap), cy=y+Math.floor(i/cols)*(ch+gap);
-      doc.setFillColor(...P_LIGHT); doc.roundedRect(cx,cy,cw,ch,2,2,'F');
-      const t=m.toUpperCase(), larg=x=>doc.getTextWidth(x)+x.length*0.35, max=cw-7;
-      let fs=9.6; doc.setFont('helvetica','bold'); doc.setFontSize(fs); doc.setTextColor(...P_NOIR);
+    label('MARQUES ET LIEUX',y); y+=4;
+    const cols=4, cw=180/cols, ch=12.5, rows=Math.ceil(marques.length/cols), H=rows*ch;
+    doc.setFillColor(...P_BLANC); doc.setDrawColor(...P_LINE); doc.setLineWidth(.3); doc.roundedRect(15,y,180,H,3,3,'FD');
+    for(let c=1;c<cols;c++) doc.line(15+c*cw,y+2.5,15+c*cw,y+H-2.5);
+    for(let r=1;r<rows;r++) doc.line(18,y+r*ch,192,y+r*ch);
+    marques.forEach((m,i)=>{ const cx=15+(i%cols)*cw, cy=y+Math.floor(i/cols)*ch;
+      const t=m.toUpperCase(), larg=x=>doc.getTextWidth(x)+x.length*0.5, max=cw-8;
+      let fs=8.8; doc.setFont('helvetica','bold'); doc.setFontSize(fs); doc.setTextColor(...P_ANTHR);
       let lignes=[t];
-      if(larg(t)>max){                                   // nom long : deux lignes plutôt qu'un texte minuscule
-        const mots=t.split(' '); let best=null;
+      if(larg(t)>max){ const mots=t.split(' '); let best=null;
         for(let k=1;k<mots.length;k++){ const a=mots.slice(0,k).join(' '), b=mots.slice(k).join(' '), w=Math.max(larg(a),larg(b)); if(!best||w<best.w) best={l:[a,b],w}; }
-        fs=9; doc.setFontSize(fs); if(best) lignes=best.l;
-      }
+        fs=7.8; doc.setFontSize(fs); if(best) lignes=best.l; }
       while(Math.max(...lignes.map(larg))>max&&fs>5.6){ fs-=0.3; doc.setFontSize(fs); }
-      const lh=fs*0.42, y0=cy+ch/2-(lignes.length-1)*lh/2+fs*0.13;
-      lignes.forEach((l,j)=>doc.text(l,cx+cw/2,y0+j*lh,{align:'center',charSpace:.35})); });
-    y+=Math.ceil(marques.length/cols)*(ch+gap)+6;
+      const lh=fs*0.42, y0=cy+ch/2-(lignes.length-1)*lh/2+fs*0.14;
+      lignes.forEach((l,j)=>doc.text(l,cx+cw/2,y0+j*lh,{align:'center',charSpace:.5})); });
+    y+=H+9;
   }
-  // ── Bloc Google : note + lien vers les avis publics
-  const gUrl=(cfg.googleAvisUrl||'').trim()||'https://maps.google.com/?cid=14259098102434497440';   // fiche Google (avis visibles)
-  doc.setFillColor(...P_NOIR); doc.roundedRect(15,y,180,22,2.5,2.5,'F');
-  pdfEtoiles(doc,22,y+8.6,2.6,5,P_OR);
-  doc.setFont('helvetica','bold'); doc.setFontSize(13); doc.setTextColor(...P_BLANC);
-  doc.text((cfg.refNoteGoogle||'').trim()||'5,0 · 31 avis Google',22,y+17);
-  doc.setFont('helvetica','normal'); doc.setFontSize(8.4); doc.setTextColor(200,195,187);
-  doc.text('Avis publics, à lire sur ma fiche Google.',112,y+9.2);
-  doc.setFont('helvetica','bold'); doc.setTextColor(...P_OR);
-  doc.textWithLink('Voir les avis Google  >',112,y+15.6,{url:gUrl});
-  y+=31;
-  // ── Avis : cartes 2 colonnes, hauteur calculée sur le texte
-  if(avis.length){
-    doc.setFont('helvetica','bold'); doc.setFontSize(7); doc.setTextColor(...P_OR);
-    doc.text('CE QUE DISENT MES CLIENTS',15,y,{charSpace:.9}); y+=4.5;
-    const cw=88.5, bas=252; let i=0;
-    while(i<avis.length&&i<6){
-      const pair=avis.slice(i,i+2).map(a=>{ doc.setFont('helvetica','italic'); doc.setFontSize(8.5);
-        const lignes=doc.splitTextToSize(a.txt,cw-14); return {a,lignes,h:20+lignes.length*4+ (a.role?4:0)}; });
-      const h=Math.max(...pair.map(p=>p.h));
+  // ── Bandeau Google : grosse note, étoiles, bouton vers la fiche
+  const gUrl=(cfg.googleAvisUrl||'').trim()||'https://maps.google.com/?cid=14259098102434497440';
+  const note=(cfg.refNoteGoogle||'').trim()||'5,0 · 31 avis Google';
+  const nm=note.match(/^\s*(\d[.,]\d)\s*[·•\-–—|]?\s*(.*)$/);
+  const gros=nm?nm[1]:'', petit=nm?(nm[2]||'sur Google'):note;
+  doc.setFillColor(...P_NOIR); doc.roundedRect(15,y,180,25,3,3,'F');
+  let gx=23;
+  if(gros){ doc.setFont('helvetica','bold'); doc.setFontSize(30); doc.setTextColor(...P_OR); doc.text(gros,gx,y+17); gx+=doc.getTextWidth(gros)+6; }
+  pdfEtoiles(doc,gx,y+9.2,2.3,5,P_OR);
+  doc.setFont('helvetica','bold'); doc.setFontSize(10.5); doc.setTextColor(...P_BLANC); doc.text(petit,gx,y+18.2);
+  const bx=148, bw=40, by=y+7.5, bh=10;                                   // bouton contour orange, cliquable
+  doc.setDrawColor(...P_OR); doc.setLineWidth(.5); doc.roundedRect(bx,by,bw,bh,5,5,'S');
+  doc.setFont('helvetica','bold'); doc.setFontSize(8.6); doc.setTextColor(...P_OR);
+  doc.text('Lire les avis',bx+bw/2-2.5,by+6.4,{align:'center'});
+  const ax=bx+bw-7.5, ay=by+bh/2; doc.setLineWidth(.45); doc.line(ax-3,ay,ax,ay); doc.line(ax-1.3,ay-1.4,ax,ay); doc.line(ax-1.3,ay+1.4,ax,ay);
+  doc.link(bx,by,bw,bh,{url:gUrl});
+  doc.setFont('helvetica','normal'); doc.setFontSize(7.4); doc.setTextColor(150,145,138);
+  doc.textWithLink('Avis publics sur ma fiche Google',bx+bw/2,by+bh+4.4,{align:'center',url:gUrl});
+  y+=34;
+  // ── Avis : cartes blanches, texte droit et aéré, initiales en pastille
+  const bas=249;
+  if(avis.length&&y+30<bas){
+    label('AVIS GOOGLE DE MES CLIENTS',y); y+=4;
+    const gap=4, cw=(180-gap)/2, pad=7, tw=cw-2*pad, fs=9, lh=4.35;
+    const prep=a=>{ doc.setFont('helvetica','normal'); doc.setFontSize(fs); const lignes=pdfAvisLignes(doc,a.txt,tw,7);
+      return {a,lignes,h:pad+11+3.5+lignes.length*lh+pad-1}; };
+    let i=0;
+    while(i<avis.length&&i<4){
+      const pair=avis.slice(i,i+2).map(prep); const h=Math.max(...pair.map(p=>p.h));
       if(y+h>bas) break;
-      pair.forEach((p,k)=>{ const cx=15+k*(cw+3);
-        doc.setFillColor(...P_LIGHT); doc.roundedRect(cx,y,cw,h,2.5,2.5,'F');
-        doc.setFillColor(...P_OR); doc.rect(cx,y+3,1.8,h-6,'F');
-        pdfEtoiles(doc,cx+7,y+6.5,1.5,5,P_OR);
-        doc.setFont('helvetica','italic'); doc.setFontSize(8.5); doc.setTextColor(...P_ANTHR);
-        p.lignes.forEach((l,j)=>doc.text(l,cx+7,y+13.5+j*4));
-        const ny=y+13.5+p.lignes.length*4+2.5;
-        doc.setFont('helvetica','bold'); doc.setFontSize(8.4); doc.setTextColor(...P_NOIR); doc.text(p.a.nom||'',cx+7,ny);
-        if(p.a.role){ doc.setFont('helvetica','normal'); doc.setFontSize(7.4); doc.setTextColor(...P_GRIS); doc.text(doc.splitTextToSize(p.a.role,cw-14)[0],cx+7,ny+4); }
+      pair.forEach((p,k)=>{ const cx=15+k*(cw+gap);
+        doc.setFillColor(...P_BLANC); doc.setDrawColor(...P_LINE); doc.setLineWidth(.3); doc.roundedRect(cx,y,cw,h,3,3,'FD');
+        // pastille initiales
+        doc.setFillColor(...P_NOIR); doc.circle(cx+pad+4.5,y+pad+4.5,4.5,'F');
+        doc.setFont('helvetica','bold'); doc.setFontSize(7.6); doc.setTextColor(...P_OR);
+        doc.text(pdfInitiales(p.a.nom),cx+pad+4.5,y+pad+5.8,{align:'center'});
+        // nom + contexte (tronqués pour ne jamais toucher les étoiles)
+        const nx=cx+pad+12, nw=cw-pad*2-12-19;
+        doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(...P_NOIR);
+        doc.text(doc.splitTextToSize(p.a.nom||'',nw)[0]||'',nx,y+pad+3.6);
+        const role=(p.a.role||'').replace(/\s*·\s*avis google\s*$/i,'');   // la section dit déjà « Google »
+        if(role){ doc.setFont('helvetica','normal'); doc.setFontSize(7.2); doc.setTextColor(...P_GRIS);
+          doc.text(doc.splitTextToSize(role,cw-pad*2-12)[0],nx,y+pad+8); }
+        pdfEtoiles(doc,cx+cw-pad-16.5,y+pad+2.6,1.45,5,P_OR);
+        // texte de l'avis
+        doc.setFont('helvetica','normal'); doc.setFontSize(fs); doc.setTextColor(...P_ANTHR);
+        const ty=y+pad+11+3.5+3;
+        p.lignes.forEach((l,j)=>doc.text(l,cx+pad,ty+j*lh));
       });
-      y+=h+3; i+=2;
+      y+=h+gap; i+=2;
     }
   }
-  // ── Appel à l'action, ancré au-dessus du pied de page
+  // ── Appel à l'action, au-dessus du pied de page
   const tel=e.tel||'06 46 89 08 87';
-  doc.setFillColor(...P_OR); doc.roundedRect(15,258,180,16,2.5,2.5,'F');
-  doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.setTextColor(...P_BLANC);
-  doc.text('Une question avant de signer ? Appelez-moi au '+tel,105,265,{align:'center'});
-  doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.text('ou répondez simplement à l\'email qui accompagne ce devis.',105,270.4,{align:'center'});
+  doc.setFillColor(...P_OR); doc.roundedRect(15,257,180,16,3,3,'F');
+  doc.setFont('helvetica','bold'); doc.setFontSize(10.5); doc.setTextColor(...P_BLANC);
+  doc.text('Une question avant de signer ?',23,263.8);
+  doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.text('Appelez-moi ou répondez à l’email du devis.',23,268.8);
+  doc.setFont('helvetica','bold'); doc.setFontSize(14); doc.text(tel,187,267.2,{align:'right'});
 }
 function refSave(){
   const c=DB.config();
@@ -2367,7 +2426,9 @@ function pdfDevis(id,returnDoc){
   const acompte=Math.round((+d.montantTTC||0)*(d.acomptePct||0)/100);
   const valid=new Date(d.dateCreation); valid.setDate(valid.getDate()+30);
   const doc=pdfNew();
-  let y=pdfHeader(doc,'DEVIS',d.id,[['Date',fmtDateShort(d.dateCreation)],['Validité',fmtDateShort(valid.toISOString().slice(0,10))]]);
+  const datesH=[['Date',fmtDateShort(d.dateCreation)],['Validité',fmtDateShort(valid.toISOString().slice(0,10))]];
+  if((d.signataire||d.signatureImg)&&d.signedAt) datesH[1]=['Signé en ligne',fmtDateShort(String(d.signedAt).slice(0,10))];
+  let y=pdfHeader(doc,'DEVIS',d.id,datesH);
   const ct=contactDevis(d);
   const aTiers=ct.societe&&ct.nom&&ct.societe!==ct.nom;
   y=pdfBlocs(doc,y,
@@ -2377,6 +2438,7 @@ function pdfDevis(id,returnDoc){
   const body=(d.prestations||[]).map(p=>[p.label||'Prestation',p.duree||'—',fmtEurPdf(p.prix)]);
   pdfTable(doc,y,['Prestation','Durée','Montant'],body);
   let ty=doc.lastAutoTable.finalY+9;
+  if(ty>214){ doc.addPage(); ty=22; }       // tableau long : totaux + règlement sur la page suivante, jamais sous le pied de page
   const rows=[['Sous-total prestations',fmtEurPdf(d.montantHT)],['Frais de déplacement ('+(d.distanceKm||0)+' km)',fmtEurPdf(d.fraisDeplacement)]];
   if(d.remise) rows.push(['Remise','- '+fmtEurPdf(d.remise)]);
   pdfTotaux(doc,ty,rows,['TOTAL TTC',fmtEurPdf(d.montantTTC)]);
@@ -2385,8 +2447,13 @@ function pdfDevis(id,returnDoc){
        'La date n\'est confirmée et bloquée qu\'à réception de l\'acompte.',
        'Devis valable 30 jours. Solde réglé après la prestation.']
     : ['Devis valable 30 jours.','Règlement à réception après la prestation.'];
-  pdfReglement(doc,doc.lastAutoTable.finalY+9,'CONDITIONS',cond);
-  if(doc.internal.getNumberOfPages()===1) pdfBonPourAccord(doc);   // cadre signature manuscrite (repli au lien en ligne)
+  const finReg=pdfReglement(doc,ty,'CONDITIONS',cond);
+  const signe=!!(d.signataire||d.signatureImg);
+  if(signe){                                                        // signé en ligne : signature + horodatage, même si le devis est long
+    if(doc.internal.getNumberOfPages()===1&&finReg<226) pdfSigneEnLigne(doc,d,232);
+    else if(finReg+48<272) pdfSigneEnLigne(doc,d,finReg+6);
+    else { doc.addPage(); pdfSigneEnLigne(doc,d,20); }
+  } else if(doc.internal.getNumberOfPages()===1) pdfBonPourAccord(doc);   // cadre signature manuscrite (repli au lien en ligne)
   if(DB.config().refPage!==false) pdfReferences(doc,d);            // page 2 : marques + avis (après le bon pour accord)
   pdfFooter(doc);
   if(returnDoc) return doc;
@@ -2962,8 +3029,9 @@ function pdfFacture(id,returnDoc){
   if(f.statut==='Annulée'&&f.type!=='avoir'){ const av=DB.all('factures').find(x=>x.avoirDe===f.id);
     cond=['Facture ANNULÉE'+(av?(' par l\'avoir '+av.id):'')+' — ce document n\'est plus valable.']; totalLabel='ANNULÉE'; }
   pdfTable(doc,y,['Désignation','Montant'],body);
-  pdfTotaux(doc,doc.lastAutoTable.finalY+9,totaux,[totalLabel,totalVal]);
-  pdfReglement(doc,doc.lastAutoTable.finalY+9,f.type==='avoir'?'AVOIR':'CONDITIONS DE PAIEMENT',cond);
+  let tyF=doc.lastAutoTable.finalY+9; if(tyF>214){ doc.addPage(); tyF=22; }   // jamais sous le pied de page
+  pdfTotaux(doc,tyF,totaux,[totalLabel,totalVal]);
+  pdfReglement(doc,tyF,f.type==='avoir'?'AVOIR':'CONDITIONS DE PAIEMENT',cond);
   if(f.statut==='Payée'&&f.type!=='avoir') pdfCachet(doc,'ACQUITTÉE',[46,158,99],196);
   // Filigrane bien visible pour avoir / facture annulée
   if((f.type==='avoir'||f.statut==='Annulée')&&doc.setGState){
