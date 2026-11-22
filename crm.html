@@ -1953,6 +1953,7 @@ function enregistrerAcompte(id,after){
 
 /* ═══════════ MODULE PDF (template pro partagé) ═══════════ */
 /* Palette PDF = charte graphique officielle LouisMagie */
+const P_INK=[30,28,24], P_TXT=[96,91,85], P_HAIR=[226,222,215], P_TINT=[255,243,232], P_CREAM=[248,246,242];
 const P_OR=[255,119,0], P_ORD=[229,98,0], P_NOIR=[10,10,8], P_ANTHR=[44,44,40], P_GRIS=[138,133,128], P_GRISC=[200,195,187], P_LIGHT=[245,242,238], P_LINE=[237,234,229], P_BLANC=[253,252,251];
 function emetteur(){ const c=DB.config();
   return {
@@ -1969,8 +1970,34 @@ function emetteur(){ const c=DB.config();
     delaiPaiement:c.delaiPaiement||'Paiement sous 1 mois à compter de la date d\'émission, par virement bancaire.'
   };
 }
-function pdfNew(){ const {jsPDF}=window.jspdf; return new jsPDF({unit:'mm',format:'a4'}); }
-
+/* Polices de la charte (DM Sans + Syne), servies par le serveur et chargées une fois au
+   démarrage. Tant qu'elles ne sont pas là (hors ligne, fichier local), repli sur Helvetica. */
+let _pdfPolices=null;
+function chargerPolicesPdf(){
+  if(_pdfPolices||location.protocol.indexOf('http')!==0) return Promise.resolve();
+  const f=['DMSans-Regular','DMSans-Medium','DMSans-Bold','Syne-Bold'];
+  return Promise.all(f.map(n=>fetch('/fonts/'+n+'.ttf').then(r=>{ if(!r.ok) throw new Error(n); return r.arrayBuffer(); })
+    .then(b=>{ let t=''; const u=new Uint8Array(b); for(let i=0;i<u.length;i+=8192) t+=String.fromCharCode.apply(null,u.subarray(i,i+8192)); return [n,btoa(t)]; })))
+    .then(a=>{ _pdfPolices=Object.fromEntries(a); }).catch(()=>{});
+}
+/* Texte espacé aligné à droite : jsPDF ne compte pas l'espacement des lettres dans l'alignement */
+function pdfTexteDroite(doc,t,xd,y,cs){ t=String(t); const w=doc.getTextWidth(t)+cs*Math.max(0,t.length-1); doc.text(t,xd-w,y,{charSpace:cs}); }
+function pdfNew(){ const {jsPDF}=window.jspdf; const doc=new jsPDF({unit:'mm',format:'a4'});
+  if(_pdfPolices){
+    try{
+      [['DMSans-Regular','DMSans','normal'],['DMSans-Bold','DMSans','bold'],['DMSans-Medium','DMSansMedium','normal'],['Syne-Bold','Syne','bold']]
+        .forEach(([n,fam,st])=>{ doc.addFileToVFS(n+'.ttf',_pdfPolices[n]); doc.addFont(n+'.ttf',fam,st); });
+      // tout le code existant écrit en « helvetica » : on le redirige vers DM Sans
+      const orig=doc.setFont.bind(doc);
+      doc.setFont=function(nom,style,w){ if(nom==='helvetica') return orig('DMSans',style==='bold'||style==='bolditalic'?'bold':'normal');
+        if(nom==='titre') return orig('Syne','bold'); if(nom==='medium') return orig('DMSansMedium','normal'); return orig(nom,style,w); };
+      doc.setFont('helvetica','normal');
+    }catch(_){}
+  } else {
+    const orig=doc.setFont.bind(doc);
+    doc.setFont=function(nom,style,w){ if(nom==='titre') return orig('helvetica','bold'); if(nom==='medium') return orig('helvetica','bold'); return orig(nom,style,w); };
+  }
+  return doc; }
 /* ── Logo : mesure du ratio + variantes lisibles sur fond clair ET sur fond sombre ──
    Corrige le logo invisible (clair sur blanc) et l'écrasement du ratio dans les PDF. */
 let _logoMeta=null;
@@ -2059,123 +2086,93 @@ function pdfLogo(doc,x,y,maxH,onDark,maxW){
 
 /* En-tête : bandeau noir (charte 70/25/5), logo lisible, cartouche document */
 function pdfHeader(doc,type,num,dates){
-  const e=emetteur();
-  const H=46;
-  // bandeau noir pleine largeur + filet orange signature
-  doc.setFillColor(...P_NOIR); doc.rect(0,0,210,H,'F');
-  doc.setFillColor(...P_OR);   doc.rect(0,H,210,2.4,'F');
-  // halo orange discret (rappel du site)
-  doc.setFillColor(30,18,8); doc.circle(196,4,26,'F');
-
-  // ── Identité (gauche) : le logo est la marque ; le nom écrit n'apparaît qu'à la demande (ou sans logo)
-  const cfgH=DB.config();
+  const e=emetteur(), cfgH=DB.config();
   const ratio=(_logoMeta&&_logoMeta.ratio>0)?_logoMeta.ratio:1;
-  const aLogo=!!logoSrc();
-  const ecrireNom=aLogo ? (cfgH.pdfAfficherNom===true) : true;
-  const large=ratio>=1.6;                                  // logo horizontal → il prend toute la colonne
-  let tx=15, ty=27.5, ly=34.5, ly2=38.6;
-
-  if(aLogo && !ecrireNom){
-    if(large){                                             // logo horizontal : grand, infos dessous
-      pdfLogo(doc,15,6,22,true,88);
-      tx=15; ty=34; ly=39; ly2=43;
-    } else {                                               // logo carré/vertical : grand, infos à droite
-      const lw=pdfLogo(doc,15,7,32,true,46);
-      tx=15+(lw||32)+10; ty=20.5; ly=28; ly2=32.5;
-    }
-  } else {
-    const lw=pdfLogo(doc,15,10,17,true,26);
-    if(lw) tx=15+lw+7;
-    doc.setFont('helvetica','bold'); doc.setFontSize(20);
-    doc.setTextColor(...P_BLANC); doc.text('Louis',tx,22);
-    const w=doc.getTextWidth('Louis');
-    doc.setTextColor(...P_OR); doc.text('Magie',tx+w,22);
-  }
-  doc.setFont('helvetica','normal'); doc.setFontSize(6.4); doc.setTextColor(150,145,138);
-  doc.text('M A G I C I E N   ·   C L O S E - U P   ·   M E N T A L I S M E',tx,ty);
-  // coordonnées émetteur, discrètes dans le bandeau
-  doc.setFontSize(7.4); doc.setTextColor(125,120,113);
-  doc.text([e.contact,e.adresse].filter(Boolean).join('  ·  '),tx,ly);
-  doc.text([e.tel,e.email].filter(Boolean).join('  ·  '),tx,ly2);
-
-  // ── Cartouche document (droite)
-  const bx=138,bw=57;
-  doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(...P_OR);
-  doc.text(String(type).toUpperCase(),195,15.5,{align:'right',charSpace:1.1});
-  // numéro / titre : taille adaptée pour ne jamais chevaucher l'identité à gauche
-  const txt=String(num); let fs=17;
-  doc.setFontSize(fs); while(doc.getTextWidth(txt)>72 && fs>8){ fs-=0.5; doc.setFontSize(fs); }
-  doc.setTextColor(...P_BLANC); doc.text(txt,195,24.5,{align:'right'});
-  doc.setDrawColor(58,56,50); doc.setLineWidth(.3); doc.line(bx,28.5,195,28.5);
-  doc.setFontSize(7.8); let dy=34;
-  (dates||[]).forEach(d=>{
-    doc.setFont('helvetica','normal'); doc.setTextColor(140,135,128); doc.text(d[0],bx,dy);
-    doc.setFont('helvetica','bold');   doc.setTextColor(...P_BLANC);  doc.text(String(d[1]),195,dy,{align:'right'});
-    dy+=5.2;
-  });
-  return H+12;
+  const aLogo=!!logoSrc(), ecrireNom=aLogo?(cfgH.pdfAfficherNom===true):true;
+  let tx=15, ty=35;
+  if(aLogo){ const large=ratio>=1.6; const lw=pdfLogo(doc,15,11,large?17:22,false,large?60:36);
+    if(ecrireNom){ tx=15+(lw||0)+5; } else ty=large?34:39; }
+  if(ecrireNom){ doc.setFont('titre'); doc.setFontSize(18); doc.setTextColor(...P_INK); doc.text('Louis',tx,22);
+    const w=doc.getTextWidth('Louis'); doc.setTextColor(...P_OR); doc.text('Magie',tx+w,22); if(!aLogo) ty=29; }
+  doc.setFont('helvetica','normal'); doc.setFontSize(6.6); doc.setTextColor(...P_GRIS);
+  doc.text('MAGICIEN  ·  CLOSE-UP  ·  MENTALISME',15,ty,{charSpace:.8});
+  doc.setFontSize(7.6); doc.setTextColor(...P_TXT);
+  doc.text([e.contact,e.adresse].filter(Boolean).join('  ·  '),15,ty+5);
+  doc.text([e.tel,e.email].filter(Boolean).join('  ·  '),15,ty+9.2);
+  // cartouche à droite
+  doc.setFont('helvetica','bold'); doc.setFontSize(7.6); doc.setTextColor(...P_OR);
+  pdfTexteDroite(doc,String(type).toUpperCase(),195,15,1.2);
+  const txt=String(num); let fs=19; doc.setFont('titre'); doc.setFontSize(fs);
+  while(doc.getTextWidth(txt)>78&&fs>9){ fs-=0.5; doc.setFontSize(fs); }
+  doc.setTextColor(...P_INK); doc.text(txt,195,24,{align:'right'});
+  let dy=31.5;
+  (dates||[]).forEach(d=>{ doc.setFont('helvetica','normal'); doc.setFontSize(7.8); doc.setTextColor(...P_GRIS);
+    const v=String(d[1]); doc.setFont('helvetica','bold'); const vw=doc.getTextWidth(v);
+    doc.setTextColor(...P_INK); doc.text(v,195,dy,{align:'right'});
+    doc.setFont('helvetica','normal'); doc.setTextColor(...P_GRIS); doc.text(d[0],195-vw-4,dy,{align:'right'}); dy+=4.8; });
+  const yl=Math.max(ty+14,dy+2.5);
+  doc.setDrawColor(...P_HAIR); doc.setLineWidth(.3); doc.line(15,yl,195,yl);
+  doc.setDrawColor(...P_OR); doc.setLineWidth(.9); doc.line(15,yl,32,yl);
+  return yl+10;
 }
 function pdfBlocs(doc,y,client,presta){
-  const lh=4.6, cl=(client.lines||[]).filter(Boolean), pl=presta?(presta.lines||[]).filter(Boolean):[];
-  const h=Math.max(30, 19+Math.max(cl.length,pl.length)*lh+3);
-  // carte destinataire : crème + accent orange à gauche (charte)
-  doc.setFillColor(...P_LIGHT); doc.roundedRect(15,y,88,h,2.5,2.5,'F');
-  doc.setFillColor(...P_OR); doc.rect(15,y+3,1.8,h-6,'F');
-  doc.setFont('helvetica','bold'); doc.setFontSize(6.6); doc.setTextColor(...P_OR);
-  doc.text(client.titre||'ADRESSÉ À',21,y+6.5,{charSpace:.9});
-  doc.setFontSize(11.5); doc.setTextColor(...P_NOIR);
-  doc.splitTextToSize(client.nom||'—',78).slice(0,2).forEach((s,i)=>doc.text(s,21,y+13+i*5));
-  doc.setFont('helvetica','normal'); doc.setFontSize(8.6); doc.setTextColor(...P_GRIS); let cy=y+19.5;
-  cl.forEach(l=>{ doc.splitTextToSize(l,76).forEach(s=>{ doc.text(s,21,cy); cy+=lh; }); });
-  // carte prestation
-  if(presta){
-    doc.setFillColor(...P_LIGHT); doc.roundedRect(107,y,88,h,2.5,2.5,'F');
-    doc.setFillColor(...P_OR); doc.rect(107,y+3,1.8,h-6,'F');
-    doc.setFont('helvetica','bold'); doc.setFontSize(6.6); doc.setTextColor(...P_OR);
-    doc.text(presta.titre||'PRESTATION',113,y+6.5,{charSpace:.9});
-    doc.setFont('helvetica','normal'); doc.setFontSize(8.8); doc.setTextColor(...P_NOIR); let py=y+13;
-    pl.forEach(l=>{ doc.splitTextToSize(l,76).forEach(s=>{ doc.text(s,113,py); py+=lh; }); });
-  }
-  return y+h+9;
+  const lh=4.5, cl=(client.lines||[]).filter(Boolean), pl=presta?(presta.lines||[]).filter(Boolean):[];
+  const col=(x,w,titre,nom,lines)=>{ let yy=y;
+    doc.setFont('helvetica','bold'); doc.setFontSize(6.8); doc.setTextColor(...P_OR); doc.text(titre,x,yy,{charSpace:1}); yy+=6;
+    if(nom){ doc.setFont('titre'); doc.setFontSize(12); doc.setTextColor(...P_INK);
+      doc.splitTextToSize(nom,w).slice(0,2).forEach(s=>{ doc.text(s,x,yy); yy+=5.4; }); yy+=0.6; }
+    doc.setFont('helvetica','normal'); doc.setFontSize(8.8); doc.setTextColor(...P_TXT);
+    lines.forEach(l=>{ doc.splitTextToSize(l,w).forEach(s=>{ doc.text(s,x,yy); yy+=lh; }); });
+    return yy; };
+  const y1=col(15,82,client.titre||'ADRESSÉ À',client.nom||'—',cl);
+  let y2=y;
+  if(presta){ doc.setDrawColor(...P_HAIR); doc.setLineWidth(.3);
+    y2=col(110,85,presta.titre||'PRESTATION','',pl); }
+  const fin=Math.max(y1,y2);
+  if(presta){ doc.setDrawColor(...P_HAIR); doc.setLineWidth(.3); doc.line(104,y-3,104,fin-2); }
+  return fin+7;
 }
 function pdfTable(doc,y,head,body,amtWidth){
   const three=head.length===3;
-  doc.autoTable({startY:y,head:[head],body,theme:'grid',
-    headStyles:{fillColor:P_NOIR,textColor:P_BLANC,fontStyle:'bold',fontSize:9.5,cellPadding:3.8,lineWidth:0},
-    alternateRowStyles:{fillColor:[249,246,242]},
-    styles:{fontSize:10,cellPadding:3.8,textColor:P_NOIR,lineColor:P_LINE,lineWidth:.1,valign:'middle'},
+  doc.autoTable({startY:y,head:[head.map(h=>String(h).toUpperCase())],body,theme:'plain',
+    headStyles:{textColor:P_GRIS,fontStyle:'bold',fontSize:7.2,cellPadding:{top:2.5,bottom:2.8,left:2,right:2}},
+    styles:{fontSize:9.6,cellPadding:{top:3.6,bottom:3.6,left:2,right:2},textColor:P_INK,valign:'middle',font:'helvetica'},
     columnStyles: three
-      ? {0:{fontStyle:'bold'},1:{halign:'center',cellWidth:26,textColor:P_GRIS},2:{halign:'right',cellWidth:amtWidth||34,fontStyle:'bold'}}
+      ? {0:{fontStyle:'bold'},1:{halign:'center',cellWidth:26,textColor:P_TXT},2:{halign:'right',cellWidth:amtWidth||34,fontStyle:'bold'}}
       : {0:{fontStyle:'bold'},1:{halign:'right',cellWidth:amtWidth||42,fontStyle:'bold'}},
+    didParseCell:d=>{ if(d.section==='head'&&d.column.index===head.length-1) d.cell.styles.halign='right';
+      if(d.section==='head'&&three&&d.column.index===1) d.cell.styles.halign='center'; },
+    didDrawCell:d=>{ const c=d.cell; const yb=c.y+c.height;
+      if(d.section==='head'){ doc.setDrawColor(...P_INK); doc.setLineWidth(.35); doc.line(c.x,yb,c.x+c.width,yb); }
+      else { doc.setDrawColor(...P_HAIR); doc.setLineWidth(.25); doc.line(c.x,yb,c.x+c.width,yb); } },
     margin:{left:15,right:15}});
   return doc.lastAutoTable.finalY;
 }
 function pdfTotaux(doc,y,rows,total){
-  const x0=120,x1=193,bw=75;
-  doc.setFontSize(9.2);
-  rows.forEach(r=>{ doc.setFont('helvetica','normal'); doc.setTextColor(...P_GRIS); doc.text(r[0],x0,y);
-    doc.setFont('helvetica','bold'); doc.setTextColor(...P_NOIR); doc.text(r[1],x1,y,{align:'right'}); y+=6.2; });
-  y+=2;
-  // bloc total : orange plein, texte blanc (hiérarchie CTA de la charte)
-  doc.setFillColor(...P_OR); doc.roundedRect(x0-5,y-6,bw+5,13.5,2,2,'F');
-  doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(...P_BLANC);
-  doc.text(String(total[0]).toUpperCase(),x0,y-0.6,{charSpace:.7});
-  doc.setFontSize(13.5); doc.text(total[1],x1,y+2.6,{align:'right'});
-  return y+15;
+  const x0=122,x1=195;
+  rows.forEach(r=>{ doc.setFont('helvetica','normal'); doc.setFontSize(8.8); doc.setTextColor(...P_TXT); doc.text(r[0],x0,y);
+    doc.setFont('medium'); doc.setTextColor(...P_INK); doc.text(r[1],x1,y,{align:'right'}); y+=5.8; });
+  y+=1;
+  doc.setFillColor(...P_TINT); doc.roundedRect(x0-5,y-4,x1-x0+5,15,2.5,2.5,'F');
+  doc.setFont('helvetica','bold'); doc.setFontSize(7.2); doc.setTextColor(...P_OR);
+  doc.text(String(total[0]).toUpperCase(),x0,y+4.8,{charSpace:.9});
+  doc.setFont('titre'); doc.setFontSize(15.5); doc.setTextColor(...P_INK); doc.text(total[1],x1-3,y+5.6,{align:'right'});
+  return y+16;
 }
 function pdfReglement(doc,y,condTitle,condLines){
   const e=emetteur();
-  doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(...P_OR); doc.text('RÈGLEMENT',15,y);
-  let ry=y+6; doc.setFontSize(9);
-  const kv=(label,val)=>{ doc.setFont('helvetica','bold'); doc.setTextColor(...P_NOIR); doc.text(label,15,ry);
-    const w=doc.getTextWidth(label); doc.setFont('helvetica','normal'); doc.text(' '+val,15+w,ry); ry+=4.8; };
-  kv('IBAN :',e.iban); if(e.bic) kv('BIC :',e.bic);
-  doc.setFont('helvetica','normal'); doc.setTextColor(...P_GRIS);
-  doc.splitTextToSize(e.delaiPaiement,98).forEach(l=>{ doc.text(l,15,ry); ry+=4.4; });
+  doc.setFont('helvetica','bold'); doc.setFontSize(6.8); doc.setTextColor(...P_OR); doc.text('RÈGLEMENT',15,y,{charSpace:1});
+  let ry=y+5.5;
+  const kv=(label,val)=>{ doc.setFont('helvetica','bold'); doc.setFontSize(8.6); doc.setTextColor(...P_INK); doc.text(label,15,ry);
+    const w=doc.getTextWidth(label); doc.setFont('helvetica','normal'); doc.text(' '+val,15+w,ry); ry+=4.6; };
+  kv('IBAN',e.iban); if(e.bic) kv('BIC',e.bic);
+  doc.setFont('helvetica','normal'); doc.setFontSize(8.2); doc.setTextColor(...P_TXT);
+  doc.splitTextToSize(e.delaiPaiement,96).forEach(l=>{ doc.text(l,15,ry); ry+=4.2; });
   if(condLines&&condLines.length){
-    ry+=3; doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(...P_OR); doc.text(condTitle||'CONDITIONS',15,ry); ry+=5;
-    doc.setFont('helvetica','normal'); doc.setFontSize(8.4); doc.setTextColor(...P_GRIS);
-    condLines.forEach(c=>{ doc.splitTextToSize('•  '+c,100).forEach(l=>{ doc.text(l,15,ry); ry+=4.1; }); });
+    ry+=3.5; doc.setFont('helvetica','bold'); doc.setFontSize(6.8); doc.setTextColor(...P_OR); doc.text(condTitle||'CONDITIONS',15,ry,{charSpace:1}); ry+=5.2;
+    doc.setFont('helvetica','normal'); doc.setFontSize(8.2); doc.setTextColor(...P_TXT);
+    condLines.forEach(c=>{ doc.setFillColor(...P_OR); doc.circle(16,ry-1.1,.55,'F');
+      doc.splitTextToSize(c,94).forEach(l=>{ doc.text(l,19,ry); ry+=4.1; }); ry+=.6; });
   }
   return ry;
 }
@@ -2184,8 +2181,7 @@ function signeLeTexte(iso){ const t=new Date(iso); if(isNaN(t)) return '';
   const o={timeZone:'Europe/Paris'}; return t.toLocaleDateString('fr-FR',{...o,day:'2-digit',month:'2-digit',year:'numeric'})+' à '+t.toLocaleTimeString('fr-FR',{...o,hour:'2-digit',minute:'2-digit'}); }
 function pdfSigneEnLigne(doc,d,y){
   const h=40, x=112, w=83, OK=[39,174,96];
-  doc.setFillColor(...P_BLANC); doc.setDrawColor(...OK); doc.setLineWidth(.5); doc.roundedRect(x,y,w,h,2.5,2.5,'FD');
-  doc.setFillColor(...OK); doc.rect(x,y+3,1.8,h-6,'F');
+  doc.setFillColor(240,249,243); doc.setDrawColor(...OK); doc.setLineWidth(.35); doc.roundedRect(x,y,w,h,2.5,2.5,'FD');
   doc.setFont('helvetica','bold'); doc.setFontSize(6.6); doc.setTextColor(...OK);
   doc.text('BON POUR ACCORD · SIGNÉ EN LIGNE',x+6,y+6.5,{charSpace:.6});
   const img=safeDataImg(d.signatureImg);
@@ -2194,8 +2190,8 @@ function pdfSigneEnLigne(doc,d,y){
   else { doc.setFont('times','italic'); let fs=17; doc.setFontSize(fs); doc.setTextColor(...P_NOIR);
     const nom=d.signataire||''; while(doc.getTextWidth(nom)>w-14&&fs>8){ fs-=0.5; doc.setFontSize(fs); }
     doc.text(nom,x+w/2,y+20.5,{align:'center'}); }
-  doc.setDrawColor(...P_LINE); doc.setLineWidth(.3); doc.line(x+6,y+27.5,x+w-6,y+27.5);
-  doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(...P_NOIR);
+  doc.setDrawColor(200,228,210); doc.setLineWidth(.3); doc.line(x+6,y+27.5,x+w-6,y+27.5);
+  doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(...P_INK);
   doc.text(doc.splitTextToSize(d.signataire||'Client',w-12)[0],x+6,y+32);
   doc.setFont('helvetica','normal'); doc.setFontSize(7); doc.setTextColor(...P_GRIS);
   const quand=signeLeTexte(d.signedAt); doc.text('Signé le '+(quand||'—')+(img?'':' · par saisie du nom'),x+6,y+36.2);
@@ -2209,19 +2205,17 @@ function pdfSigneEnLigne(doc,d,y){
 /* Cadre « Bon pour accord » ancré en bas de page (devis) */
 function pdfBonPourAccord(doc){
   const y=232, h=40;
-  doc.setDrawColor(...P_LINE); doc.setLineWidth(.4); doc.roundedRect(112,y,83,h,2.5,2.5,'S');
-  doc.setFillColor(...P_OR); doc.rect(112,y+3,1.8,h-6,'F');
-  doc.setFont('helvetica','bold'); doc.setFontSize(6.6); doc.setTextColor(...P_OR);
-  doc.text('BON POUR ACCORD',118,y+7,{charSpace:.9});
-  doc.setFont('helvetica','normal'); doc.setFontSize(7.6); doc.setTextColor(...P_GRIS);
+  doc.setDrawColor(...P_HAIR); doc.setLineWidth(.35); doc.roundedRect(112,y,83,h,2.5,2.5,'S');
+  doc.setFont('helvetica','bold'); doc.setFontSize(6.8); doc.setTextColor(...P_OR);
+  doc.text('BON POUR ACCORD',118,y+7,{charSpace:1});
+  doc.setFont('helvetica','normal'); doc.setFontSize(7.6); doc.setTextColor(...P_TXT);
   doc.text('Date et signature du client',118,y+12.5);
   doc.text('précédées de la mention « Bon pour accord »',118,y+16.6);
-  doc.setDrawColor(...P_LINE); doc.setLineWidth(.3); doc.line(118,y+h-6,189,y+h-6);
-  // rappel signature en ligne, à gauche du cadre
-  doc.setFont('helvetica','bold'); doc.setFontSize(7.4); doc.setTextColor(...P_NOIR);
+  doc.setDrawColor(...P_HAIR); doc.setLineWidth(.3); doc.line(118,y+h-6,189,y+h-6);
+  doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(...P_INK);
   doc.text('Plus simple : signez en ligne',15,y+8);
-  doc.setFont('helvetica','normal'); doc.setFontSize(7.2); doc.setTextColor(...P_GRIS);
-  doc.splitTextToSize("Le lien de signature électronique se trouve dans l'email accompagnant ce devis. Valeur juridique identique.",92)
+  doc.setFont('helvetica','normal'); doc.setFontSize(7.6); doc.setTextColor(...P_TXT);
+  doc.splitTextToSize("Le lien de signature électronique se trouve dans l'email qui accompagne ce devis. Valeur juridique identique.",88)
     .forEach((l,i)=>doc.text(l,15,y+13.5+i*4.2));
 }
 /* Cachet incliné (ex. ACQUITTÉE) — discret, en bas de la zone de contenu */
@@ -2286,24 +2280,23 @@ function pdfReferences(doc,d){
   const marques=refMarques(), avis=refAvisPour(d||{});
   if(!marques.length&&!avis.length) return;
   doc.addPage();
-  doc.setFillColor(...P_LIGHT); doc.rect(0,0,210,280,'F');              // fond crème : les cartes blanches ressortent
-  // ── En-tête
-  doc.setFillColor(...P_NOIR); doc.rect(0,0,210,40,'F');
-  doc.setFillColor(...P_OR); doc.rect(0,40,210,1.6,'F');
-  doc.setFillColor(30,18,8); doc.circle(196,4,26,'F');
-  pdfLogo(doc,15,10,20,true,58);
+  // ── En-tête clair, même grammaire que la page 1
+  pdfLogo(doc,15,11,17,false,52);
   doc.setFont('helvetica','bold'); doc.setFontSize(7.6); doc.setTextColor(...P_OR);
-  doc.text('RÉFÉRENCES',195,15,{align:'right',charSpace:1.2});
-  doc.setFontSize(20); doc.setTextColor(...P_BLANC); doc.text("Ils m'ont fait confiance",195,26,{align:'right'});
-  doc.setFont('helvetica','normal'); doc.setFontSize(8.4); doc.setTextColor(170,165,158);
-  doc.text('Marques, lieux et particuliers qui m’ont confié leur événement',195,32.5,{align:'right'});
-  let y=53;
+  pdfTexteDroite(doc,'RÉFÉRENCES',195,15,1.2);
+  doc.setFont('titre'); doc.setFontSize(19); doc.setTextColor(...P_INK); doc.text("Ils m'ont fait confiance",195,24.5,{align:'right'});
+  doc.setFont('helvetica','normal'); doc.setFontSize(8.2); doc.setTextColor(...P_TXT);
+  doc.text('Marques, lieux et particuliers qui m’ont confié leur événement',195,30.5,{align:'right'});
+  doc.setDrawColor(...P_HAIR); doc.setLineWidth(.3); doc.line(15,37,195,37);
+  doc.setDrawColor(...P_OR); doc.setLineWidth(.9); doc.line(15,37,32,37);
+  let y=49;
   const label=(t,yy)=>{ doc.setFont('helvetica','bold'); doc.setFontSize(7); doc.setTextColor(...P_OR); doc.text(t,15,yy,{charSpace:1}); };
   // ── Mur de marques : un seul bloc blanc, filets fins entre les cases
   if(marques.length){
     label('MARQUES ET LIEUX',y); y+=4;
     const cols=4, cw=180/cols, ch=12.5, rows=Math.ceil(marques.length/cols), H=rows*ch;
-    doc.setFillColor(...P_BLANC); doc.setDrawColor(...P_LINE); doc.setLineWidth(.3); doc.roundedRect(15,y,180,H,3,3,'FD');
+    doc.setFillColor(...P_CREAM); doc.roundedRect(15,y,180,H,3,3,'F');
+    doc.setDrawColor(...P_BLANC); doc.setLineWidth(.7);
     for(let c=1;c<cols;c++) doc.line(15+c*cw,y+2.5,15+c*cw,y+H-2.5);
     for(let r=1;r<rows;r++) doc.line(18,y+r*ch,192,y+r*ch);
     marques.forEach((m,i)=>{ const cx=15+(i%cols)*cw, cy=y+Math.floor(i/cols)*ch;
@@ -2323,24 +2316,24 @@ function pdfReferences(doc,d){
   const note=(cfg.refNoteGoogle||'').trim()||'5,0 · 31 avis Google';
   const nm=note.match(/^\s*(\d[.,]\d)\s*[·•\-–—|]?\s*(.*)$/);
   const gros=nm?nm[1]:'', petit=nm?(nm[2]||'sur Google'):note;
-  doc.setFillColor(...P_NOIR); doc.roundedRect(15,y,180,25,3,3,'F');
+  doc.setFillColor(...P_TINT); doc.roundedRect(15,y,180,25,3,3,'F');
   let gx=23;
-  if(gros){ doc.setFont('helvetica','bold'); doc.setFontSize(30); doc.setTextColor(...P_OR); doc.text(gros,gx,y+17); gx+=doc.getTextWidth(gros)+6; }
+  if(gros){ doc.setFont('titre'); doc.setFontSize(28); doc.setTextColor(...P_OR); doc.text(gros,gx,y+16.8); gx+=doc.getTextWidth(gros)+6; }
   pdfEtoiles(doc,gx,y+9.2,2.3,5,P_OR);
-  doc.setFont('helvetica','bold'); doc.setFontSize(10.5); doc.setTextColor(...P_BLANC); doc.text(petit,gx,y+18.2);
+  doc.setFont('helvetica','bold'); doc.setFontSize(10.5); doc.setTextColor(...P_INK); doc.text(petit,gx,y+18.2);
   const bx=148, bw=40, by=y+7.5, bh=10;                                   // bouton contour orange, cliquable
   doc.setDrawColor(...P_OR); doc.setLineWidth(.5); doc.roundedRect(bx,by,bw,bh,5,5,'S');
   doc.setFont('helvetica','bold'); doc.setFontSize(8.6); doc.setTextColor(...P_OR);
   doc.text('Lire les avis',bx+bw/2-2.5,by+6.4,{align:'center'});
   const ax=bx+bw-7.5, ay=by+bh/2; doc.setLineWidth(.45); doc.line(ax-3,ay,ax,ay); doc.line(ax-1.3,ay-1.4,ax,ay); doc.line(ax-1.3,ay+1.4,ax,ay);
   doc.link(bx,by,bw,bh,{url:gUrl});
-  doc.setFont('helvetica','normal'); doc.setFontSize(7.4); doc.setTextColor(150,145,138);
+  doc.setFont('helvetica','normal'); doc.setFontSize(7.2); doc.setTextColor(...P_TXT);
   doc.textWithLink('Avis publics sur ma fiche Google',bx+bw/2,by+bh+4.4,{align:'center',url:gUrl});
   y+=34;
   // ── Avis : cartes blanches, texte droit et aéré, initiales en pastille
   const bas=249;
   if(avis.length&&y+30<bas){
-    label('AVIS GOOGLE DE MES CLIENTS',y); y+=4;
+    label('AVIS GOOGLE DE MES CLIENTS',y); y+=4.5;
     const gap=4, cw=(180-gap)/2, pad=7, tw=cw-2*pad, fs=9, lh=4.35;
     const prep=a=>{ doc.setFont('helvetica','normal'); doc.setFontSize(fs); const lignes=pdfAvisLignes(doc,a.txt,tw,7);
       return {a,lignes,h:pad+11+3.5+lignes.length*lh+pad-1}; };
@@ -2349,21 +2342,21 @@ function pdfReferences(doc,d){
       const pair=avis.slice(i,i+2).map(prep); const h=Math.max(...pair.map(p=>p.h));
       if(y+h>bas) break;
       pair.forEach((p,k)=>{ const cx=15+k*(cw+gap);
-        doc.setFillColor(...P_BLANC); doc.setDrawColor(...P_LINE); doc.setLineWidth(.3); doc.roundedRect(cx,y,cw,h,3,3,'FD');
+        doc.setFillColor(...P_CREAM); doc.roundedRect(cx,y,cw,h,3,3,'F');
         // pastille initiales
-        doc.setFillColor(...P_NOIR); doc.circle(cx+pad+4.5,y+pad+4.5,4.5,'F');
+        doc.setFillColor(...P_BLANC); doc.circle(cx+pad+4.5,y+pad+4.5,4.5,'F');
         doc.setFont('helvetica','bold'); doc.setFontSize(7.6); doc.setTextColor(...P_OR);
         doc.text(pdfInitiales(p.a.nom),cx+pad+4.5,y+pad+5.8,{align:'center'});
         // nom + contexte (tronqués pour ne jamais toucher les étoiles)
         const nx=cx+pad+12, nw=cw-pad*2-12-19;
-        doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(...P_NOIR);
+        doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(...P_INK);
         doc.text(doc.splitTextToSize(p.a.nom||'',nw)[0]||'',nx,y+pad+3.6);
         const role=(p.a.role||'').replace(/\s*·\s*avis google\s*$/i,'');   // la section dit déjà « Google »
         if(role){ doc.setFont('helvetica','normal'); doc.setFontSize(7.2); doc.setTextColor(...P_GRIS);
           doc.text(doc.splitTextToSize(role,cw-pad*2-12)[0],nx,y+pad+8); }
         pdfEtoiles(doc,cx+cw-pad-16.5,y+pad+2.6,1.45,5,P_OR);
         // texte de l'avis
-        doc.setFont('helvetica','normal'); doc.setFontSize(fs); doc.setTextColor(...P_ANTHR);
+        doc.setFont('helvetica','normal'); doc.setFontSize(fs); doc.setTextColor(...P_INK);
         const ty=y+pad+11+3.5+3;
         p.lignes.forEach((l,j)=>doc.text(l,cx+pad,ty+j*lh));
       });
@@ -2376,7 +2369,7 @@ function pdfReferences(doc,d){
   doc.setFont('helvetica','bold'); doc.setFontSize(10.5); doc.setTextColor(...P_BLANC);
   doc.text('Une question avant de signer ?',23,263.8);
   doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.text('Appelez-moi ou répondez à l’email du devis.',23,268.8);
-  doc.setFont('helvetica','bold'); doc.setFontSize(14); doc.text(tel,187,267.2,{align:'right'});
+  doc.setFont('titre'); doc.setFontSize(14); doc.text(tel,187,267.2,{align:'right'});
 }
 function refSave(){
   const c=DB.config();
@@ -2402,23 +2395,20 @@ function pdfFooter(doc){
   const n=doc.internal.getNumberOfPages();
   for(let p=1;p<=n;p++){
     doc.setPage(p);
-    doc.setFillColor(...P_LIGHT); doc.rect(0,280,210,17,'F');
-    doc.setFillColor(...P_OR);    doc.rect(0,280,210,.9,'F');
-    doc.setFont('helvetica','bold'); doc.setFontSize(7.4); doc.setTextColor(...P_NOIR);
-    doc.text('LouisMagie',15,286);
-    const w=doc.getTextWidth('LouisMagie');
-    doc.setFont('helvetica','normal'); doc.setTextColor(...P_GRIS);
-    doc.text('  ·  '+[e.contact,e.statut].filter(Boolean).join('  ·  '),15+w,286);
-    doc.setFontSize(6.9);
-    doc.text([e.siret?('SIRET '+e.siret):'',e.adresse,e.email,e.site].filter(Boolean).join('  ·  '),15,290.4);
-    doc.setFont('helvetica','bold'); doc.setTextColor(...P_OR); doc.setFontSize(6.9);
-    doc.text(e.mentionTva,15,294.6);
-    if(n>1){ doc.setFont('helvetica','normal'); doc.setTextColor(...P_GRIS); doc.setFontSize(7.4);
-      doc.text('Page '+p+' / '+n,195,294.6,{align:'right'}); }
+    doc.setFillColor(...P_BLANC); doc.rect(0,279.5,210,17.5,'F');
+    doc.setDrawColor(...P_HAIR); doc.setLineWidth(.3); doc.line(15,281,195,281);
+    doc.setFont('titre'); doc.setFontSize(7.6); doc.setTextColor(...P_INK);
+    doc.text('Louis',15,286.5); const w=doc.getTextWidth('Louis'); doc.setTextColor(...P_OR); doc.text('Magie',15+w,286.5);
+    const w2=doc.getTextWidth('Magie');
+    doc.setFont('helvetica','normal'); doc.setFontSize(7); doc.setTextColor(...P_GRIS);
+    doc.text('  ·  '+[e.contact,e.statut].filter(Boolean).join('  ·  '),15+w+w2,286.5);
+    doc.setFontSize(6.7);
+    doc.text([e.siret?('SIRET '+e.siret):'',e.adresse,e.email,e.site].filter(Boolean).join('  ·  '),15,290.6);
+    doc.setTextColor(...P_TXT); doc.text(e.mentionTva,15,294.4);
+    if(n>1){ doc.setTextColor(...P_GRIS); doc.setFontSize(7); doc.text(p+' / '+n,195,294.4,{align:'right'}); }
   }
   doc.setPage(n);
 }
-
 /* ───── PDF devis ───── */
 function pdfDevis(id,returnDoc){
   const d=DB.get('devis',id); if(!d)return;
@@ -6988,6 +6978,7 @@ function ficheProjetOpen(pid){ const doc=pdfFicheProjet(pid); if(!doc)return; sh
 (async function boot(){
   try{ applyTheme(localStorage.getItem('lm_theme')||'dark'); }catch(_){ applyTheme('dark'); }
   prepareLogo(); appliquerLogos();                       // mesure ratio + variantes claires/sombres pour les PDF
+  chargerPolicesPdf();                                   // DM Sans + Syne pour les PDF (repli Helvetica)
   await ensureSeed();
   if(cloudUrl()) peindrePastille(); else setCloudStatus('off');   // état réel dès l'ouverture, pas un orange par défaut
   // pull se fait après login (showApp), car l'API exige le mot de passe

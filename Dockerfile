@@ -14,6 +14,8 @@ COPY api.php  /var/www/html/api.php
 COPY robots.txt /var/www/html/robots.txt
 # App sur l'écran d'accueil + notifications push
 COPY sw.js manifest.webmanifest icon-192.png icon-512.png apple-touch-icon.png /var/www/html/
+# Polices de la charte pour les PDF (DM Sans, Syne), en sous-ensemble latin
+COPY fonts/ /var/www/html/fonts/
 
 # Dossiers de données + PDF (persistés via volume Coolify), accessibles en écriture
 RUN mkdir -p /var/www/html/data /var/www/html/pdf \
