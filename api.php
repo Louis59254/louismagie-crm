@@ -623,26 +623,29 @@ function pushNotifier($DATA_DIR, $titre, $corps, $url = '/', $tag = 'crm'){
 /* Sauvegarde hors serveur : une fois par jour (ou par semaine), toutes les données compressées
    envoyées à Louis par email. Si le serveur disparaît, la boîte mail garde de quoi tout restaurer
    (Réglages → Restaurer une sauvegarde accepte le .json.gz). */
-function sauvegardeEmail($DATA_DIR, $ENTITIES){
+function sauvegardeEmail($DATA_DIR, $ENTITIES, $force = false){
+  $etat = function($res, $extra = []) use ($DATA_DIR) {
+    @file_put_contents("$DATA_DIR/_sauvegarde_etat.json", json_encode(['at'=>gmdate('c'), 'resultat'=>$res] + $extra, JSON_UNESCAPED_UNICODE));
+    return $res; };
   try {
     $cfg = readJson("$DATA_DIR/config.json"); if (!is_array($cfg)) $cfg = [];
     $freq = (string)($cfg['sauvegardeMail'] ?? 'jour');
-    if ($freq === 'non') return 'désactivée';
+    if ($freq === 'non' && !$force) return 'désactivée';
     $now = new DateTime('now', new DateTimeZone('Europe/Paris'));
-    if ((int)$now->format('H') < 3) return 'trop tôt';
+    if (!$force && (int)$now->format('H') < 3) return 'trop tôt';
     $f = "$DATA_DIR/_sauvegarde_mail.txt"; $der = is_file($f) ? trim((string)file_get_contents($f)) : '';
     $cle = $freq === 'semaine' ? $now->format('o-\\WW') : $now->format('Y-m-d');
-    if ($der === $cle) return 'déjà faite';
+    if (!$force && $der === $cle) return 'déjà faite';
     $to = (string)($cfg['emailLouis'] ?? '') ?: (getenv('SMTP_FROM') ?: getenv('SMTP_USER'));
-    if (!$to) return 'aucune adresse';
+    if (!$to) return $etat('aucune adresse');
     $data = []; $n = 0;
     foreach ($ENTITIES as $e) { $v = readJson("$DATA_DIR/$e.json"); $data[$e] = is_array($v) ? $v : []; $n += count($data[$e]); }
-    if ($n === 0) return 'aucune donnée';
+    if ($n === 0) return $etat('aucune donnée');
     $c2 = $cfg; unset($c2['desaboKey'], $c2['agendaKey'], $c2['desaboLegacy'], $c2['desaboLegacyJusqua']);
     $blob = ['_app'=>'CRM LouisMagie','_version'=>1,'_date'=>gmdate('c'),'_source'=>'sauvegarde automatique du serveur','config'=>$c2,'data'=>$data];
     $gz = gzencode(json_encode($blob, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE), 9);
-    if ($gz === false) return 'compression impossible';
-    if (strlen($gz) > 9 * 1048576) return 'trop volumineuse ('.round(strlen($gz)/1048576,1).' Mo)';
+    if ($gz === false) return $etat('compression impossible');
+    if (strlen($gz) > 9 * 1048576) return $etat('trop volumineuse ('.round(strlen($gz)/1048576,1).' Mo)');
     $nom = 'sauvegarde_louismagie_'.$now->format('Y-m-d').'.json.gz';
     $res = smtpSend($to, '💾 Sauvegarde CRM du '.$now->format('d/m/Y').' ('.$n.' fiches)',
       "Sauvegarde automatique de ton CRM, en pièce jointe.\n\n".$n." fiches, ".round(strlen($gz)/1024)." Ko compressés.\n\n"
@@ -650,8 +653,8 @@ function sauvegardeEmail($DATA_DIR, $ENTITIES){
       ."Garde ces emails : ce sont tes copies hors serveur.\n\nPour changer la fréquence : Réglages → Mes données.", $nom, base64_encode($gz));
     $ok = is_array($res) ? !empty($res[0]) : (bool)$res;
     if ($ok) @file_put_contents($f, $cle);
-    return $ok ? 'envoyée' : 'échec';
-  } catch (\Throwable $e) { return 'erreur'; }
+    return $etat($ok ? 'envoyée' : 'échec', ['fiches'=>$n, 'ko'=>round(strlen($gz)/1024), 'a'=>$to, 'detail'=>is_array($res) ? (string)($res[1] ?? '') : '']);
+  } catch (\Throwable $e) { return $etat('erreur'); }
 }
 function pushRappels($DATA_DIR){
   try {
@@ -1980,6 +1983,7 @@ if ($action === 'runScheduled') {
   // ligne par ligne ci-dessous protège aussi le cas où ce verrou n'a pas pu s'ouvrir)
   $lockF = $DATA_DIR.'/_cron.lock'; $lock = @fopen($lockF,'c');
   if ($lock && !@flock($lock, LOCK_EX | LOCK_NB)) out(['ok'=>false,'error'=>'envoi déjà en cours']);
+  @file_put_contents("$DATA_DIR/_cron_dernier.txt", gmdate('c'));   // preuve que la tâche planifiée de Coolify tourne
   $rappelsPush = pushRappels($DATA_DIR);   // récap du matin + rendez-vous dans l'heure (best effort)
   $sauvegarde = sauvegardeEmail($DATA_DIR, $ENTITIES);   // copie hors serveur, dans la boîte mail de Louis
   // Allège les envois déjà traités (anciennes campagnes comprises) : une écriture au plus, aucune si rien à faire.
@@ -2316,6 +2320,17 @@ switch ($action) {
       });
     }
     out(['ok'=>true, 'n'=>$n, 'copie'=>"restauration-$stamp"]);
+  }
+  case 'etatServeur': {
+    // ce que Louis ne voit pas d'habitude : la tâche planifiée tourne-t-elle, la sauvegarde est-elle partie
+    $cron = is_file("$DATA_DIR/_cron_dernier.txt") ? trim((string)file_get_contents("$DATA_DIR/_cron_dernier.txt")) : '';
+    $sv = readJson("$DATA_DIR/_sauvegarde_etat.json");
+    $subs = readJson("$DATA_DIR/_push.json");
+    out(['ok'=>true, 'cronDernier'=>$cron, 'sauvegarde'=>is_array($sv) ? $sv : null, 'appareilsNotifies'=>is_array($subs) ? count($subs) : 0, 'maintenant'=>gmdate('c')]);
+  }
+  case 'sauvegardeMaintenant': {
+    $r = sauvegardeEmail($DATA_DIR, $ENTITIES, true);
+    out(['ok'=>$r === 'envoyée', 'resultat'=>$r, 'etat'=>readJson("$DATA_DIR/_sauvegarde_etat.json")]);
   }
   case 'pushCle': {
     $v = vapidCles($DATA_DIR);

@@ -588,6 +588,23 @@ function collisionsSave(a){ try{ localStorage.setItem(LS_COLL,JSON.stringify(a))
 /* Occupation du stockage local (Safari iPhone : environ 5 Mo par site) */
 function stockageLocal(){ let n=0; try{ for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); n+=(k.length+(localStorage.getItem(k)||'').length)*2; } }catch(_){}
   return {octets:n, mo:(n/1048576).toFixed(1), pct:Math.round(n/(5*1048576)*100)}; }
+async function etatServeurAfficher(){
+  const box=document.getElementById('etat-serveur'); if(!box||!cloudUrl()) return;
+  const j=await cloudPost({action:'etatServeur'}); if(!document.getElementById('etat-serveur')) return;
+  if(!j||!j.ok){ box.innerHTML='<div class="td-dim">État du serveur indisponible.</div>'; return; }
+  const depuis=iso=>{ const m=Math.round((Date.now()-Date.parse(iso))/60000); return m<60?'il y a '+m+' min':(m<1440?'il y a '+Math.round(m/60)+' h':'il y a '+Math.round(m/1440)+' j'); };
+  const cronOk=j.cronDernier&&(Date.now()-Date.parse(j.cronDernier))<40*60000;
+  const sv=j.sauvegarde;
+  box.innerHTML=`<div class="alert ${cronOk?'success':'warning'}" style="margin:0 0 8px"><span class="alert-icon">${cronOk?'✓':'⚠'}</span><div><strong>Tâche planifiée</strong> : ${j.cronDernier?'dernier passage '+depuis(j.cronDernier):'jamais vue'}${cronOk?'.':'. Sans elle, ni sauvegarde par email, ni envois programmés, ni rappels. À régler dans Coolify → Scheduled Tasks (toutes les 15 min).'}</div></div>
+    <div class="td-dim" style="font-size:12.5px">Dernière sauvegarde par email : ${sv?esc(sv.resultat)+' '+depuis(sv.at)+(sv.fiches?' · '+sv.fiches+' fiches, '+sv.ko+' Ko':'')+(sv.detail&&sv.resultat!=='envoyée'?' · '+esc(sv.detail):''):'aucune pour l\'instant'} · appareils avec notifications : ${j.appareilsNotifies}</div>`;
+}
+async function sauvegardeMaintenant(){
+  toast('Envoi de la sauvegarde…');
+  const j=await cloudPost({action:'sauvegardeMaintenant'});
+  if(j&&j.ok) toast('💾 Sauvegarde envoyée sur ta boîte mail ('+((j.etat||{}).fiches||'?')+' fiches)','ok');
+  else toast('Sauvegarde non envoyée : '+((j&&(j.resultat||j.error))||'serveur injoignable')+((j&&j.etat&&j.etat.detail)?' · '+j.etat.detail:''),'err');
+  etatServeurAfficher();
+}
 function majSauvegardeMail(v){ const c=DB.config(); c.sauvegardeMail=v; DB.saveConfig(c);
   toast(v==='non'?'Sauvegarde par email désactivée':'Sauvegarde par email : '+(v==='jour'?'chaque jour':'chaque semaine'),'ok'); }
 /* Le serveur avait une version que cet appareil n'avait pas vue (modifiée sur l'autre appareil) :
@@ -5561,9 +5578,11 @@ RENDERERS.reglages=function(){
             ${[['jour','Chaque jour'],['semaine','Chaque semaine'],['non','Désactivée']].map(([v,l])=>`<option value="${v}"${(cfg.sauvegardeMail||'jour')===v?' selected':''}>${l}</option>`).join('')}
           </select></div>
         <div class="form-group"><label class="form-label">Mémoire utilisée sur cet appareil</label>
-          <div class="td-dim" style="padding-top:9px">${(()=>{ const st=stockageLocal(); return st.mo+' Mo sur environ 5 Mo ('+st.pct+' %)'; })()}</div></div>
+          <div class="td-dim" style="padding-top:9px">${(()=>{ const st=stockageLocal(); setTimeout(etatServeurAfficher,0); return st.mo+' Mo sur environ 5 Mo ('+st.pct+' %)'; })()}</div></div>
       </div>
       <div class="td-dim" style="font-size:12.5px">Le fichier <strong>.json.gz</strong> reçu par email se restaure avec « Restaurer une sauvegarde » (Réglages, plus bas). Si le serveur disparaissait, ta boîte mail garde tout.</div>
+      <div id="etat-serveur" style="margin-top:12px">${cloudUrl()?'<div class="td-dim">Lecture de l\'état du serveur…</div>':''}</div>
+      ${cloudUrl()?'<button class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="sauvegardeMaintenant()">💾 Envoyer une sauvegarde maintenant</button>':''}
     </div>
 
     <div class="panel"><div class="panel-title">☁️ Backend de synchronisation</div>
