@@ -2212,6 +2212,129 @@ function pdfCachet(doc,texte,rgb,y){
   doc.restoreGraphicsState(); doc.setTextColor(0,0,0);
 }
 
+/* ── Page « Références » des devis : marques + avis clients ──
+   Contenu modifiable dans Réglages ; valeurs par défaut = celles du site louismagie.fr. */
+const REF_MARQUES_DEFAUT="Dior\nLancôme\nKiehl's\nClub Med\nAuchan\nTotal\nIntermarché\nLOSC\nUSL Dunkerque\nBompard\nCasino de Dunkerque\nHôtels 5 étoiles";
+const REF_AVIS_DEFAUT=[
+ "Louis est un magicien irréprochable, à la fois professionnel, fiable et d'une grande qualité humaine. Il sait parfaitement s'adapter à tout type de clientèle. Sa prestation fait toujours l'unanimité.\nCasino de Dunkerque — Client professionnel récurrent",
+ "Nos invités sont encore sous le choc ! Louis a animé notre cocktail de mariage avec une classe et une énergie incroyables. Drôle, élégant, surprenant. Exactement ce qu'on voulait. Merci Louis !\nSophie & Romain — Mariage · Valenciennes · 120 invités",
+ "Nos collaborateurs parlent encore de la soirée trois mois après. Louis a su briser la glace dès les premières minutes, créer une ambiance extraordinaire et fédérer tout le groupe. On le rebooke sans hésiter.\nDirecteur événementiel — Soirée entreprise · 200 personnes",
+ "Intervention au Club Med dans un contexte international, public anglophone et francophone mélangé. Louis a géré les deux langues avec une fluidité remarquable. Les clients ont adoré, la direction aussi.\nClub Med · G.O. Animation — Prestation internationale",
+ "On a intégré Louis à notre lancement produit avec magie digitale personnalisée à notre marque. Le résultat était bluffant. Notre logo apparaissait de façon impossible. Les invités ont filmé, ça a tourné sur LinkedIn.\nAgence de communication · Lille — Lancement produit · B2B",
+ "Un vrai professionnel, ponctuel, discret et d'une gentillesse rare. Il s'est adapté à notre public senior avec beaucoup de bienveillance. Tout le monde est reparti avec le sourire. Je le recommande les yeux fermés.\nMarie-France — Anniversaire privé · 60 personnes"
+].join('\n\n');
+function refMarques(){ const c=DB.config(); return String(c.refMarques!=null?c.refMarques:REF_MARQUES_DEFAUT).split('\n').map(x=>x.trim()).filter(Boolean).slice(0,16); }
+function refAvis(){ const c=DB.config();
+  return String(c.refAvis!=null?c.refAvis:REF_AVIS_DEFAUT).split(/\n\s*\n/).map(b=>{
+    const l=b.split('\n').map(x=>x.trim()).filter(Boolean); if(!l.length) return null;
+    const sig=l.length>1?l.pop():''; const m=sig.split(/\s+[—–-]\s+/);
+    return {txt:l.join(' '),nom:(m[0]||'').trim(),role:m.slice(1).join(' — ').trim()}; }).filter(a=>a&&a.txt); }
+/* Les avis les plus proches de l'événement du devis passent devant (mariage → mariés, entreprise → organisateurs) */
+function refAvisPour(d){
+  const t=[d.typeEvenement,d.lieu,...(d.prestations||[]).map(p=>p.label)].join(' ').toLowerCase();
+  const fam=[['mariage','mari'],['entreprise','soirée','séminaire','seminaire','salon','corporate','client','comité','arbre de noël'],['anniversaire','anniv','famille','privé'],['agence','lancement','marque','digitale','b2b']];
+  const score=a=>{ const r=(a.role+' '+a.txt).toLowerCase(); let n=0;
+    fam.forEach(f=>{ if(f.some(k=>t.includes(k))&&f.some(k=>r.includes(k))) n+=2; }); return n; };
+  return refAvis().map((a,i)=>({a,i,s:score(a)})).sort((x,y)=>y.s-x.s||x.i-y.i).map(x=>x.a);
+}
+function pdfEtoile(doc,cx,cy,r,rgb){   // helvetica n'a pas le glyphe ★ : on dessine l'étoile
+  const pts=[]; for(let k=0;k<10;k++){ const a=-Math.PI/2+k*Math.PI/5, rr=k%2?r*0.45:r; pts.push([cx+rr*Math.cos(a),cy+rr*Math.sin(a)]); }
+  const rel=pts.slice(1).map((p,i)=>[p[0]-pts[i][0],p[1]-pts[i][1]]);
+  doc.setFillColor(...rgb); doc.lines(rel,pts[0][0],pts[0][1],[1,1],'F',true);
+}
+function pdfEtoiles(doc,x,cy,r,n,rgb){ for(let k=0;k<(n||5);k++) pdfEtoile(doc,x+r+k*r*2.35,cy,r,rgb); }
+function pdfReferences(doc,d){
+  const e=emetteur(), cfg=DB.config();
+  const marques=refMarques(), avis=refAvisPour(d||{});
+  if(!marques.length&&!avis.length) return;
+  doc.addPage();
+  // bandeau noir + filet orange (même grammaire que l'en-tête)
+  doc.setFillColor(...P_NOIR); doc.rect(0,0,210,36,'F');
+  doc.setFillColor(...P_OR); doc.rect(0,36,210,2.4,'F');
+  doc.setFillColor(30,18,8); doc.circle(196,4,26,'F');
+  pdfLogo(doc,15,9,18,true,60);
+  doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(...P_OR);
+  doc.text('RÉFÉRENCES',195,15,{align:'right',charSpace:1.1});
+  doc.setFontSize(18); doc.setTextColor(...P_BLANC); doc.text("Ils m'ont fait confiance",195,25.5,{align:'right'});
+  let y=50;
+  // ── Marques : grille typographique 4 colonnes
+  if(marques.length){
+    doc.setFont('helvetica','bold'); doc.setFontSize(7); doc.setTextColor(...P_OR);
+    doc.text('MARQUES, ÉTABLISSEMENTS ET LIEUX',15,y,{charSpace:.9}); y+=4.5;
+    const cols=4, gap=3, cw=(180-gap*(cols-1))/cols, ch=13;
+    marques.forEach((m,i)=>{ const cx=15+(i%cols)*(cw+gap), cy=y+Math.floor(i/cols)*(ch+gap);
+      doc.setFillColor(...P_LIGHT); doc.roundedRect(cx,cy,cw,ch,2,2,'F');
+      const t=m.toUpperCase(), larg=x=>doc.getTextWidth(x)+x.length*0.35, max=cw-7;
+      let fs=9.6; doc.setFont('helvetica','bold'); doc.setFontSize(fs); doc.setTextColor(...P_NOIR);
+      let lignes=[t];
+      if(larg(t)>max){                                   // nom long : deux lignes plutôt qu'un texte minuscule
+        const mots=t.split(' '); let best=null;
+        for(let k=1;k<mots.length;k++){ const a=mots.slice(0,k).join(' '), b=mots.slice(k).join(' '), w=Math.max(larg(a),larg(b)); if(!best||w<best.w) best={l:[a,b],w}; }
+        fs=9; doc.setFontSize(fs); if(best) lignes=best.l;
+      }
+      while(Math.max(...lignes.map(larg))>max&&fs>5.6){ fs-=0.3; doc.setFontSize(fs); }
+      const lh=fs*0.42, y0=cy+ch/2-(lignes.length-1)*lh/2+fs*0.13;
+      lignes.forEach((l,j)=>doc.text(l,cx+cw/2,y0+j*lh,{align:'center',charSpace:.35})); });
+    y+=Math.ceil(marques.length/cols)*(ch+gap)+6;
+  }
+  // ── Bloc Google : note + lien vers les avis publics
+  const gUrl=(cfg.googleAvisUrl||'').trim()||'https://g.page/r/CaADDh0tfuLFEBM/review';
+  doc.setFillColor(...P_NOIR); doc.roundedRect(15,y,180,22,2.5,2.5,'F');
+  pdfEtoiles(doc,22,y+8.6,2.6,5,P_OR);
+  doc.setFont('helvetica','bold'); doc.setFontSize(13); doc.setTextColor(...P_BLANC);
+  doc.text('5/5 sur Google',22,y+17);
+  doc.setFont('helvetica','normal'); doc.setFontSize(8.4); doc.setTextColor(200,195,187);
+  doc.text('Les avis sont publics : lisez-les avant de choisir.',112,y+9.2);
+  doc.setFont('helvetica','bold'); doc.setTextColor(...P_OR);
+  doc.textWithLink('Voir les avis Google  >',112,y+15.6,{url:gUrl});
+  y+=31;
+  // ── Avis : cartes 2 colonnes, hauteur calculée sur le texte
+  if(avis.length){
+    doc.setFont('helvetica','bold'); doc.setFontSize(7); doc.setTextColor(...P_OR);
+    doc.text('CE QUE DISENT MES CLIENTS',15,y,{charSpace:.9}); y+=4.5;
+    const cw=88.5, bas=252; let i=0;
+    while(i<avis.length&&i<6){
+      const pair=avis.slice(i,i+2).map(a=>{ doc.setFont('helvetica','italic'); doc.setFontSize(8.5);
+        const lignes=doc.splitTextToSize(a.txt,cw-14); return {a,lignes,h:20+lignes.length*4+ (a.role?4:0)}; });
+      const h=Math.max(...pair.map(p=>p.h));
+      if(y+h>bas) break;
+      pair.forEach((p,k)=>{ const cx=15+k*(cw+3);
+        doc.setFillColor(...P_LIGHT); doc.roundedRect(cx,y,cw,h,2.5,2.5,'F');
+        doc.setFillColor(...P_OR); doc.rect(cx,y+3,1.8,h-6,'F');
+        pdfEtoiles(doc,cx+7,y+6.5,1.5,5,P_OR);
+        doc.setFont('helvetica','italic'); doc.setFontSize(8.5); doc.setTextColor(...P_ANTHR);
+        p.lignes.forEach((l,j)=>doc.text(l,cx+7,y+13.5+j*4));
+        const ny=y+13.5+p.lignes.length*4+2.5;
+        doc.setFont('helvetica','bold'); doc.setFontSize(8.4); doc.setTextColor(...P_NOIR); doc.text(p.a.nom||'',cx+7,ny);
+        if(p.a.role){ doc.setFont('helvetica','normal'); doc.setFontSize(7.4); doc.setTextColor(...P_GRIS); doc.text(doc.splitTextToSize(p.a.role,cw-14)[0],cx+7,ny+4); }
+      });
+      y+=h+3; i+=2;
+    }
+  }
+  // ── Appel à l'action, ancré au-dessus du pied de page
+  const tel=e.tel||'06 46 89 08 87';
+  doc.setFillColor(...P_OR); doc.roundedRect(15,258,180,16,2.5,2.5,'F');
+  doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.setTextColor(...P_BLANC);
+  doc.text('Une question avant de signer ? Appelez-moi au '+tel,105,265,{align:'center'});
+  doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.text('ou répondez simplement à l\'email qui accompagne ce devis.',105,270.4,{align:'center'});
+}
+function refSave(){
+  const c=DB.config();
+  c.refPage=document.getElementById('ref-page').checked;
+  c.refMarques=document.getElementById('ref-marques').value.trim();
+  c.refAvis=document.getElementById('ref-avis').value.trim();
+  c.googleAvisUrl=document.getElementById('ref-google').value.trim();
+  DB.saveConfig(c); toast('Page Références enregistrée','ok');
+}
+function refApercu(){
+  refSave();
+  const d=DB.all('devis').slice().sort((a,b)=>String(b.dateCreation||'').localeCompare(String(a.dateCreation||'')))[0];
+  if(!d){ toast('Crée d\'abord un devis pour voir l\'aperçu','err'); return; }
+  const doc=pdfDevis(d.id,true); if(doc) doc.output('dataurlnewwindow');
+}
+function refReinit(){ if(!confirm('Remettre les marques et les avis du site ?')) return;
+  document.getElementById('ref-marques').value=REF_MARQUES_DEFAUT; document.getElementById('ref-avis').value=REF_AVIS_DEFAUT; }
+
 /* Pied de page appliqué à TOUTES les pages, avec pagination */
 function pdfFooter(doc){
   const e=emetteur();
@@ -2262,6 +2385,7 @@ function pdfDevis(id,returnDoc){
     : ['Devis valable 30 jours.','Règlement à réception après la prestation.'];
   pdfReglement(doc,doc.lastAutoTable.finalY+9,'CONDITIONS',cond);
   if(doc.internal.getNumberOfPages()===1) pdfBonPourAccord(doc);   // cadre signature manuscrite (repli au lien en ligne)
+  if(DB.config().refPage!==false) pdfReferences(doc,d);            // page 2 : marques + avis (après le bon pour accord)
   pdfFooter(doc);
   if(returnDoc) return doc;
   doc.output('dataurlnewwindow'); logActivite('PDF généré · devis '+id);
@@ -4877,6 +5001,20 @@ RENDERERS.reglages=function(){
       </div>
       <div class="form-group"><label class="form-label">Signature email</label><textarea class="form-control" id="cfg-signature">${esc(cfg.signature||'')}</textarea></div>
       <div style="text-align:right;margin-top:10px"><button class="btn btn-or" onclick="saveParams()">Enregistrer les paramètres</button></div>
+    </div>
+
+    <div class="panel"><div class="panel-title">⭐ Page « Références » des devis</div>
+      <div class="td-dim" style="margin-bottom:12px">Une 2ᵉ page ajoutée à chaque devis PDF : les marques qui t'ont fait confiance, ta note Google et des avis clients. Les avis les plus proches de l'événement passent devant (mariage, entreprise, anniversaire…).</div>
+      <label style="display:flex;align-items:center;gap:9px;font-size:14px;cursor:pointer;margin-bottom:12px"><input type="checkbox" id="ref-page" ${cfg.refPage===false?'':'checked'} style="width:18px;height:18px">Ajouter la page Références aux devis</label>
+      <div class="form-grid">
+        <div class="form-group"><label class="form-label">Marques et lieux (une par ligne, 16 max)</label><textarea class="form-control" id="ref-marques" style="min-height:190px">${esc(cfg.refMarques!=null?cfg.refMarques:REF_MARQUES_DEFAUT)}</textarea></div>
+        <div class="form-group"><label class="form-label">Avis (séparés par une ligne vide ; dernière ligne = Nom — contexte)</label><textarea class="form-control" id="ref-avis" style="min-height:190px">${esc(cfg.refAvis!=null?cfg.refAvis:REF_AVIS_DEFAUT)}</textarea></div>
+      </div>
+      <div class="form-group"><label class="form-label">Lien vers tes avis Google</label><input class="form-control" id="ref-google" value="${esc(cfg.googleAvisUrl||'')}" placeholder="https://g.page/r/CaADDh0tfuLFEBM/review"></div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-top:10px">
+        <button class="btn btn-ghost" onclick="refReinit()">Remettre ceux du site</button>
+        <button class="btn btn-ghost" onclick="refApercu()">👁 Aperçu sur mon dernier devis</button>
+        <button class="btn btn-or" onclick="refSave()">Enregistrer</button></div>
     </div>
 
     <div class="panel"><div class="panel-title">Émetteur & mentions (PDF devis / facture)</div>
