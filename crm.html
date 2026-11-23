@@ -358,6 +358,12 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
   /* agenda : liste au lieu de la grille de 7 colonnes */
   .ag-liste-mob{display:block}
   .cal-header{flex-wrap:wrap;gap:8px}
+  .cal-grid{grid-template-columns:repeat(7,minmax(0,1fr))!important}
+  .cal-cell{min-width:0;overflow:hidden}
+  .cal-cell{min-height:46px!important;padding:4px!important}
+  .cal-cell.sel{outline:2px solid var(--or);outline-offset:-2px}
+  .cal-dots{display:flex;flex-wrap:wrap;gap:3px;margin-top:4px}
+  .cal-dots i{display:block;width:7px;height:7px;border-radius:50%}
   .cal-header .cal-month{order:-1;width:100%;font-size:17px}
   .charts-grid>*{min-width:0}
   /* anti-zoom iOS : tout champ de saisie >=16px, y compris styles inline */
@@ -2726,7 +2732,8 @@ function pdfDevis(id,returnDoc){
 let _calRef=null;
 RENDERERS.agenda=function(){
   if(!_calRef){ const n=new Date(); _calRef={y:n.getFullYear(),m:n.getMonth()}; }
-  const {y,m}=_calRef;
+  const {y,m}=_calRef; const mob=window.innerWidth<680;
+  if(mob&&(!_agJour||_agJour.slice(0,7)!==`${y}-${String(m+1).padStart(2,'0')}`)) _agJour=(todayISO().slice(0,7)===`${y}-${String(m+1).padStart(2,'0')}`)?todayISO():'';
   const prestations=DB.all('prestations');
   const first=new Date(y,m,1), startDow=(first.getDay()+6)%7; // lundi=0
   const nbDays=new Date(y,m+1,0).getDate();
@@ -2747,6 +2754,10 @@ RENDERERS.agenda=function(){
     const rq=risqueJour(ds,null);
     const rqHtml=rq?`<div class="cal-risk ${rq.niveau==='risque'?'soft':''}" onclick="event.stopPropagation();analyseJour('${ds}')">⚠ ${rq.niveau==='conflit'?'conflit':'serré'}</div>`:'';
     const rdvHtml=DB.all('rdv').filter(r=>r.date===ds).sort((a,b)=>(a.debut||'').localeCompare(b.debut||'')).map(r=>`<div class="cal-evt rdv" onclick="event.stopPropagation();rdvForm('${r.id}')">🗓 ${esc(r.debut||'')} ${esc((r.titre||'RDV').slice(0,16))}</div>`).join('');
+    if(mob){   // téléphone : un point par événement, le détail du jour s'affiche sous le calendrier
+      const pts=evts.map(p=>p.statutRealisation==='Option'?'var(--info)':(p.statutRealisation==='Réalisée'?'var(--ok)':'var(--or)')).concat(projs.map(()=>'#9C27B0'),DB.all('rdv').filter(r=>r.date===ds).map(()=>'var(--gm)'));
+      cells+=`<div class="cal-cell ${ds===todayStr?'today':''} ${ds===_agJour?'sel':''}" onclick="agJour('${ds}')"><div class="cal-day">${day}</div><div class="cal-dots">${pts.slice(0,6).map(c=>`<i style="background:${c}"></i>`).join('')}</div>${rq?'<div class="cal-dots"><i style="background:var(--er)"></i></div>':''}</div>`;
+    } else
     cells+=`<div class="cal-cell ${ds===todayStr?'today':''}" onclick="rdvForm(null,'${ds}')" title="Ajouter un rendez-vous"><div class="cal-day">${day}</div>${evtHtml}${projHtml}${rdvHtml}${rqHtml}</div>`;
   }
   const moisLabel=first.toLocaleDateString('fr-FR',{month:'long',year:'numeric'});
@@ -2778,7 +2789,8 @@ RENDERERS.agenda=function(){
           <div class="cal-month" style="display:flex;align-items:center;gap:8px;justify-content:center">${moisLabel} <button class="btn btn-ghost btn-sm" onclick="_calRef=null;RENDERERS.agenda()" title="Revenir au mois courant">Aujourd'hui</button></div>
           <button class="btn btn-ghost btn-sm" onclick="calNav(1)">Suiv. ›</button>
         </div>
-        ${window.innerWidth<680?agendaListeMois(y,m):`<div class="cal-grid">${dows}${cells}</div>`}
+        ${window.innerWidth<680?`<div style="display:flex;gap:6px;margin-bottom:10px"><button class="btn btn-sm ${agVue()==='liste'?'btn-or':'btn-ghost'}" style="flex:1" onclick="agChoisirVue('liste')">☰ Liste</button><button class="btn btn-sm ${agVue()==='grille'?'btn-or':'btn-ghost'}" style="flex:1" onclick="agChoisirVue('grille')">▦ Calendrier</button></div>`:''}
+        ${window.innerWidth<680&&agVue()==='liste'?agendaListeMois(y,m):`<div class="cal-grid">${dows}${cells}</div>`+(mob?`<div id="ag-jour" style="margin-top:12px">${_agJour?agendaListeMois(y,m,_agJour):'<div class="td-dim">Touche un jour pour voir son programme.</div>'}</div>`:'')}
         <div class="td-dim" style="margin-top:12px;display:flex;gap:14px;flex-wrap:wrap">
           <span><span style="display:inline-block;width:10px;height:10px;border:1px dashed var(--info);border-radius:2px;vertical-align:middle"></span> Option (devis en cours)</span>
           <span><span style="display:inline-block;width:10px;height:10px;background:var(--or);border-radius:2px;vertical-align:middle"></span> Confirmée</span>
@@ -2840,14 +2852,20 @@ function rdvDel(id){ const r=DB.get('rdv',id); if(!r) return;
   if(_currentView==='agenda') RENDERERS.agenda(); else if(_currentView==='dashboard') RENDERERS.dashboard();
 }
 /* Téléphone : la grille de 7 colonnes est illisible → liste des jours qui ont quelque chose */
-function agendaListeMois(y,m){
+/* iPhone : liste ou calendrier, au choix (mémorisé sur l'appareil) */
+let _agJour='';
+function agJour(ds){ _agJour=ds; RENDERERS.agenda(); const el=document.getElementById('ag-jour'); if(el) el.scrollIntoView({behavior:'smooth',block:'nearest'}); }
+function agVue(){ try{ return localStorage.getItem('lm_ag_vue')||'grille'; }catch(_){ return 'grille'; } }
+function agChoisirVue(v){ try{ localStorage.setItem('lm_ag_vue',v); }catch(_){} RENDERERS.agenda(); }
+function agendaListeMois(y,m,seul){
   const nb=new Date(y,m+1,0).getDate(), auj=todayISO(); let html='';
   for(let day=1;day<=nb;day++){
     const ds=`${y}-${String(m+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+    if(seul&&ds!==seul) continue;
     const pr=DB.all('prestations').filter(p=>p.dateEvenement===ds);
     const pj=DB.all('projets').filter(x=>x.date===ds&&x.statut!=='Annulé'&&!(x.idDevis&&pr.some(p=>p.idDevis===x.idDevis)));
     const rv=DB.all('rdv').filter(r=>r.date===ds).sort((a,b)=>(a.debut||'').localeCompare(b.debut||''));
-    if(!pr.length&&!pj.length&&!rv.length) continue;
+    if(!pr.length&&!pj.length&&!rv.length&&!seul) continue;
     const lab=new Date(ds+'T12:00:00').toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'});
     const lig=(ic,txt,sous,clic,cls)=>`<div class="kb-card" onclick="${clic}" style="margin:0 0 6px;${cls||''}"><div class="kb-card-title">${ic} ${txt}</div>${sous?`<div class="kb-card-sub">${sous}</div>`:''}</div>`;
     html+=`<div style="margin:12px 0 6px;font-weight:600;${ds===auj?'color:var(--or)':''}">${esc(lab.charAt(0).toUpperCase()+lab.slice(1))}${ds===auj?' · aujourd\'hui':''}</div>`
@@ -2855,8 +2873,9 @@ function agendaListeMois(y,m){
       +pj.map(x=>lig('🎭',esc(x.nom||'Projet'),esc(x.lieu||''),`nav('projet',{id:'${x.id}'})`,'border-left:3px solid #9C27B0')).join('')
       +rv.map(r=>lig('🗓',esc((r.debut?r.debut+' · ':'')+(r.titre||'Rendez-vous')),esc(r.lieu||r.avec||''),`rdvForm('${r.id}')`,'border-left:3px solid var(--gm)')).join('');
   }
+  if(seul&&!/kb-card/.test(html)) html+='<div class="td-dim" style="padding:4px 0">Rien de prévu ce jour-là.</div>';
   return `<div class="ag-liste-mob">${html||'<div class="td-dim" style="padding:14px 0">Rien de prévu ce mois-ci.</div>'}
-    <button class="btn btn-or" style="width:100%;margin-top:10px" onclick="rdvForm(null,'')">+ Rendez-vous</button></div>`;
+    <button class="btn btn-or" style="width:100%;margin-top:10px" onclick="rdvForm(null,'${seul||''}')">+ Rendez-vous${seul?' ce jour-là':''}</button></div>`;
 }
 function calNav(delta){ _calRef.m+=delta; if(_calRef.m<0){_calRef.m=11;_calRef.y--;} if(_calRef.m>11){_calRef.m=0;_calRef.y++;} RENDERERS.agenda(); }
 function voirPrestation(id){
