@@ -7471,64 +7471,84 @@ function ficheMagicienOpen(pid,mid){ const doc=pdfFicheMagicien(pid,mid); if(!do
 function ficheProjetOpen(pid){ const doc=pdfFicheProjet(pid); if(!doc)return; showDocPreview(doc,'Fiche projet · '+(getP(pid).nom||''),'fiche-projet'); }
 
 /* ═══════════════════════════════════════════════════════════════════════
-   Module « Réseaux » : planning, relecture, validation et publication
-   des posts Facebook / Instagram / Google / Story. Entité 'contenus'
-   (synchronisée), registre de publication côté serveur (action publications).
-   Les posts arrivent du Mac (pole-contenu/envoyer_crm.py) ; Louis relit,
-   corrige, valide. Un post validé part à son heure si la publication
-   automatique est active (Réglages du module), sinon au clic.
+   Module « Réseaux » : planning des posts Facebook / Instagram / Google / Story.
+   Entité 'contenus' (synchronisée). Le serveur tient le registre de ce qui est
+   vraiment parti (action publications) et publie les posts validés à leur heure.
+   Vues : Calendrier (glisser-déposer), Liste, Idées. Fiche : textes, photos,
+   date, validation, publication. Toute action de planning peut s'annuler.
    ═══════════════════════════════════════════════════════════════════════ */
 VIEW_TITLES.reseaux='Réseaux sociaux';
 const RS_RES=[
-  {k:'facebook', nom:'Facebook', court:'FB', api:true,  max:63206},
-  {k:'instagram',nom:'Instagram',court:'IG', api:true,  max:2200},
-  {k:'google',   nom:'Google Business',court:'G', api:false, max:1500},
-  {k:'story',    nom:'Story Instagram',court:'St', api:false, max:0},
+  {k:'facebook', nom:'Facebook', court:'FB', api:true,  max:63206, coul:'var(--info)'},
+  {k:'instagram',nom:'Instagram',court:'IG', api:true,  max:2200,  coul:'var(--or)'},
+  {k:'google',   nom:'Google',   court:'G',  api:false, max:1500,  coul:'var(--ok)'},
+  {k:'story',    nom:'Story Instagram',court:'Story', api:false, max:0, coul:'var(--gm)'},
 ];
-let _rs={filtre:'avenir', meta:null, pubs:{}, charge:0, enCours:false, edit:null, editBase:''};
+const RS_FORMAT={lien:'lien vers l’article',photo:'photo',album:'album',carrousel:'carrousel',video:'vidéo',reel:'Reel',story:'story'};
+const RS_ETAT={'publié':'publié','manuel':'publié à la main','préparation':'Instagram traite la vidéo','envoi':'envoi en cours','échec':'échec','incertain':'à vérifier'};
+const RS_MOIS=['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
+let _rs={vue:'calendrier', filtre:'avenir', recherche:'', mois:null, jour:'', meta:null, pubs:{}, charge:0, enCours:false,
+  edit:null, editBase:'', ordre:[], annuler:null, glisse:null};
 
+/* ───── Petits outils ───── */
+const rsMob=()=>window.innerWidth<=680;
 function rsMediaUrl(nom){ const u=cloudUrl(); return u&&nom ? u+'?action=media&f='+encodeURIComponent(nom) : ''; }
 function rsPub(row,res){ return _rs.pubs[row.id+'|'+res]||null; }
 function rsEtat(row,res){ const p=rsPub(row,res); return p&&p.etat ? p.etat : ''; }
 function rsActifs(row){ return RS_RES.filter(r=>row.reseaux&&row.reseaux[r.k]&&row.reseaux[r.k].actif); }
 function rsFait(row,res){ return ['publié','manuel'].includes(rsEtat(row,res)); }
+function rsUnFait(row){ return rsActifs(row).some(r=>rsFait(row,r.k)||['envoi','préparation','incertain'].includes(rsEtat(row,r.k))); }
 function rsToutFait(row){ const a=rsActifs(row); return a.length>0 && a.every(r=>rsFait(row,r.k)); }
 function rsProbleme(row){ return rsActifs(row).some(r=>['échec','incertain'].includes(rsEtat(row,r.k))); }
-function rsDateHeure(row){ return (row.date||'')+'T'+(row.heure||'12:00'); }
-function rsEnRetard(row){ return row.statut==='validé' && !rsToutFait(row) && rsDateHeure(row) < (todayISO()+'T'+new Date().toTimeString().slice(0,5)); }
+function rsDateHeure(row){ return (row.date||'9999')+'T'+(row.heure||'12:00'); }
+function rsMaintenant(){ return todayISO()+'T'+new Date().toTimeString().slice(0,5); }
+function rsEnRetard(row){ return row.statut==='validé' && row.date && !rsToutFait(row) && rsDateHeure(row) < rsMaintenant(); }
+function rsJour(ds,h){ if(!ds) return 'Pas de date'; const d=new Date(ds+'T12:00:00'); if(isNaN(d)) return ds;
+  return d.toLocaleDateString('fr-FR',{weekday:'short',day:'numeric',month:'short'})+(h?' · '+h.replace(':','h'):''); }
+function rsAjout(ds,n){ const d=new Date((ds||todayISO())+'T12:00:00'); d.setDate(d.getDate()+n); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function rsStatut(row){
+  if(rsToutFait(row)) return {t:'Publié',c:'payee'};
+  if(rsUnFait(row)) return {t:'En partie publié',c:'encours'};
+  return ({'idée':{t:'Idée',c:'brouillon'},'à filmer':{t:'À filmer',c:'brouillon'},'à valider':{t:'À valider',c:'nouveau'},'validé':{t:'Validé',c:'confirmee'}})[row.statut]||{t:row.statut||'',c:'brouillon'};
+}
+function rsFlux(row){ const r=row.reseaux||{}; return (r.instagram&&r.instagram.format!=='lien'?r.instagram:null)||(r.facebook&&r.facebook.format!=='lien'?r.facebook:null)||{medias:[]}; }
+function rsVignetteNom(row){ const f=rsFlux(row); let n=(f.medias||[])[0]; if(n&&/\.mp4$/.test(n)) n=f.couverture||'';
+  if(!n){ const s=(row.reseaux||{}).google||(row.reseaux||{}).story; n=s&&(s.medias||[])[0]; } return n||''; }
+function rsMeta(row,nom){ return (row.medias||[]).find(m=>m.nom===nom)||{}; }
 
-/* ───── Contrôles avant validation ───── */
-function rsControles(row){
+/* ───── Vérifications ───── */
+function rsControles(row,carte){
   const L=[]; const err=m=>L.push({n:'erreur',m}); const av=m=>L.push({n:'avert',m});
-  if(row.statut==='à filmer') err('Vidéo à tourner : le post n’a pas encore de visuel.');
-  if(!row.date) err('Pas de date.');
+  if(row.statut==='à filmer') err('La vidéo n’est pas encore tournée.');
+  if(!row.date) err('Pas de date : choisissez un jour pour programmer ce post.');
   const actifs=rsActifs(row);
   if(!actifs.length) err('Aucun réseau coché.');
   actifs.forEach(r=>{
-    const c=row.reseaux[r.k]; const t=String(c.texte||''); const medias=(c.medias||[]);
+    const c=row.reseaux[r.k]; const t=String(c.texte||''); const medias=c.medias||[];
     if(r.k!=='story' && !t.trim()) err(r.nom+' : texte vide.');
     if(r.max && t.length>r.max) err(r.nom+' : '+t.length+' caractères, '+r.max+' au plus.');
-    if(c.format!=='lien' && !medias.length) err(r.nom+' : pas de visuel.');
-    if(r.k==='facebook' && c.format==='lien' && !c.lien) err('Facebook : lien manquant.');
+    if(c.format!=='lien' && !medias.length) err(r.nom+' : pas de photo ni de vidéo.');
+    if(r.k==='facebook' && c.format==='lien' && !c.lien) err('Facebook : lien de l’article manquant.');
     if(r.k==='instagram'){
       const ht=(t.match(/#[\p{L}\p{N}_]+/gu)||[]).length;
       if(ht>30) err('Instagram : '+ht+' hashtags, 30 au plus.'); else if(ht>5) av('Instagram : '+ht+' hashtags, 3 à 5 suffisent.');
-      if(medias.length>10) err('Instagram : '+medias.length+' images, 10 au plus dans un carrousel.');
-      const v=(row.medias||[]).find(m=>m.nom===medias[0]); if(v&&v.duree&&v.duree>90) err('Instagram : vidéo de '+Math.round(v.duree)+' s, 90 s au plus pour un Reel.');
+      if(medias.length>10) err('Instagram : '+medias.length+' photos, 10 au plus.');
+      medias.forEach((n,i)=>{ const m=rsMeta(row,n);
+        if(m.type==='video'&&m.duree>90) err('Instagram : vidéo de '+Math.round(m.duree)+' s, 90 s au plus.');
+        if(m.largeur&&m.hauteur){ const q=m.largeur/m.hauteur; if(q<0.79||q>1.92) err('Instagram : la photo '+(i+1)+' a un format refusé (entre 4:5 et 1,91:1). Retirez-la et ajoutez-la de nouveau pour la recadrer.'); } });
     }
     if(r.k==='google' && /0[1-9](?:[ .-]?\d{2}){4}/.test(t)) av('Google : un numéro de téléphone dans le texte fait souvent refuser le post.');
-    if(/[—–]/.test(t)) av(r.nom+' : tiret cadratin dans le texte.');
-    if(/louismagie\.fr\/[^\s]*/.test(t) && !/utm_source=/.test(t) && r.k==='facebook') av('Facebook : lien vers le site sans suivi UTM.');
+    if(/[—–]/.test(t)) av(r.nom+' : tiret long dans le texte.');
+    if(r.k==='facebook' && /louismagie\.fr\/\S*/.test(t) && !/utm_source=/.test(t)) av('Facebook : lien vers le site sans suivi des visites.');
   });
-  if(row.date && row.date<todayISO() && !rsToutFait(row)) av('Date passée : le post n’est pas parti partout.');
-  const memeJour=DB.all('contenus').filter(x=>x.id!==row.id&&x.date===row.date&&x.statut!=='à filmer'&&rsActifs(x).some(a=>actifs.some(b=>b.k===a.k)));
-  if(row.date && memeJour.length) av('Un autre post est prévu le même jour sur le même réseau ('+memeJour.map(x=>x.titre).join(', ')+').');
-  const auto=DB.config().reseauxAuto!==false;
-  if(auto && actifs.some(r=>r.api) && _rs.meta && !_rs.meta.connecte) av('Meta n’est pas connecté : Facebook et Instagram ne partiront pas tout seuls.');
+  if(row.date && row.date<todayISO() && !rsToutFait(row)) av('La date est passée et le post n’est pas parti partout.');
+  const meme=DB.all('contenus').filter(x=>x.id!==row.id&&x.date&&x.date===row.date&&x.statut!=='idée'&&rsActifs(x).some(a=>actifs.some(b=>b.k===a.k)));
+  if(row.date && meme.length) av('Même jour que « '+meme.map(x=>x.titre).join(' », « ')+' ».');
+  if(!carte && DB.config().reseauxAuto!==false && actifs.some(r=>r.api) && _rs.meta && !_rs.meta.connecte) av('Meta n’est pas connecté : rien ne partira tout seul sur Facebook et Instagram.');
   return L;
 }
 
-/* ───── Chargement des états serveur (connexion Meta + registre) ───── */
+/* ───── États serveur ───── */
 async function rsCharger(forcer){
   if(!cloudUrl()||_rs.enCours) return;
   if(!forcer && Date.now()-_rs.charge<60000) return;
@@ -7544,253 +7564,545 @@ async function rsCharger(forcer){
 }
 function rsBadge(){ return DB.all('contenus').filter(r=>r.statut==='à valider'||rsProbleme(r)).length; }
 
-/* ───── Vue principale ───── */
-const RS_STATUT_BADGE={'à valider':'nouveau','validé':'confirmee','à filmer':'brouillon','archivé':'annulee'};
-const RS_ETAT_TXT={'publié':['✓','publié'],'manuel':['✓','publié à la main'],'préparation':['⏳','Meta prépare la vidéo'],'envoi':['⏳','envoi en cours'],
-  'échec':['⚠','échec'],'incertain':['?','à vérifier']};
-function rsPastilles(row){
-  return RS_RES.filter(r=>row.reseaux&&row.reseaux[r.k]).map(r=>{
-    const c=row.reseaux[r.k]; if(!c.actif) return '';
-    const e=rsEtat(row,r.k); const t=RS_ETAT_TXT[e];
-    const cls=['publié','manuel'].includes(e)?'payee':(['échec','incertain'].includes(e)?'refuse':(e?'encours':'brouillon'));
-    return `<span class="badge ${cls}" title="${esc(r.nom+(t?' : '+t[1]:' : à publier'))}">${t?t[0]+' ':''}${r.court}</span>`;
-  }).join(' ');
+/* ───── Modifications du planning (toutes annulables) ───── */
+function rsMaj(ids,fn,msg){
+  const avant=ids.map(id=>DB.get('contenus',id)).filter(Boolean).map(r=>JSON.parse(JSON.stringify(r)));
+  if(avant.length!==ids.length) return false;
+  const res=fn(avant.map(r=>JSON.parse(JSON.stringify(r))));
+  if(res===false) return false;
+  res.forEach(r=>DB.save('contenus',r));
+  _rs.annuler={avant,msg,at:Date.now()};
+  updateBadges(); if(_currentView==='reseaux') RENDERERS.reseaux();
+  return true;
 }
-function rsSemaine(ds){ const d=new Date(ds+'T12:00:00'); const l=new Date(d); l.setDate(d.getDate()-((d.getDay()+6)%7));
-  return l.toISOString().slice(0,10); }
-function rsJour(ds,h){ const d=new Date(ds+'T12:00:00'); if(isNaN(d)) return '—';
-  return d.toLocaleDateString('fr-FR',{weekday:'short',day:'numeric',month:'short'})+(h?' · '+h:''); }
-function rsVignette(row){
-  const m=(row.reseaux&&(row.reseaux.instagram||row.reseaux.facebook))||{};
-  let nom=(m.medias||[])[0]; if(nom&&/\.mp4$/.test(nom)) nom=m.couverture||'';
-  const u=rsMediaUrl(nom);
-  return u?`<img src="${u}" loading="lazy" alt="" style="width:46px;height:58px;object-fit:cover;border-radius:6px;display:block">`
-          :`<div style="width:46px;height:58px;border-radius:6px;border:1px dashed var(--anthr,#444)"></div>`;
+function rsAnnuler(){ const a=_rs.annuler; if(!a) return; _rs.annuler=null;
+  a.avant.forEach(r=>{ const cur=DB.get('contenus',r.id); if(cur){ r._base=cur.updatedAt; } DB.save('contenus',r); });
+  toast('Annulé','ok'); updateBadges(); RENDERERS.reseaux(); }
+function rsDeplacer(id,date,heure){
+  const r=DB.get('contenus',id); if(!r) return;
+  if(rsUnFait(r)){ toast('Déjà publié : ce post ne se déplace plus','err'); return; }
+  if(r.date===date&&(!heure||heure===r.heure)) return;
+  rsMaj([id],([x])=>{ x.date=date; if(heure) x.heure=heure; if(x.statut==='idée') x.statut='à valider'; return [x]; },
+    '« '+(r.titre||'Post')+' » déplacé au '+rsJour(date,heure||r.heure));
+}
+function rsEchanger(a,b){
+  const A=DB.get('contenus',a), B=DB.get('contenus',b); if(!A||!B) return;
+  if(rsUnFait(A)||rsUnFait(B)){ toast('Un des deux posts est déjà publié','err'); return; }
+  rsMaj([a,b],([x,y])=>{ [x.date,y.date]=[y.date,x.date]; [x.heure,y.heure]=[y.heure,x.heure];
+    [x,y].forEach(z=>{ if(z.statut==='idée'&&z.date) z.statut='à valider'; if(!z.date&&z.statut!=='à filmer'){ z.statut='idée'; delete z.valideAt; } }); return [x,y]; },
+    '« '+(A.titre||'Post')+' » et « '+(B.titre||'Post')+' » ont échangé leur date');
+}
+function rsDeCote(id){
+  const r=DB.get('contenus',id); if(!r) return;
+  if(rsUnFait(r)){ toast('Déjà publié : impossible de le mettre de côté','err'); return; }
+  rsMaj([id],([x])=>{ x.date=''; if(x.statut!=='à filmer') x.statut='idée'; delete x.valideAt; return [x]; },
+    '« '+(r.titre||'Post')+' » rangé dans les idées');
+}
+function rsDupliquer(id){
+  const r=DB.get('contenus',id); if(!r) return;
+  const c=JSON.parse(JSON.stringify(r)); c.id=uid('RS'); c.titre=(r.titre||'Post')+' (copie)'; c.date=''; c.statut='idée';
+  ['valideAt','_base','updatedAt','nouvelleVersion','exportAt','source','dateOrigine','heureOrigine'].forEach(k=>delete c[k]);
+  DB.save('contenus',c); _rs.annuler=null;
+  toast('Copie rangée dans les idées','ok'); updateBadges(); RENDERERS.reseaux(); return c.id;
+}
+function rsValiderRapide(id){
+  const r=DB.get('contenus',id); if(!r) return;
+  const e=rsControles(r).filter(c=>c.n==='erreur');
+  if(e.length){ toast(e[0].m,'err'); rsOuvrir(id); return; }
+  rsMaj([id],([x])=>{ x.statut='validé'; x.valideAt=new Date().toISOString(); return [x]; }, '« '+(r.titre||'Post')+' » validé');
+}
+function rsAction(id,a){
+  if(a==='ouvrir') rsOuvrir(id);
+  else if(a==='deplacer') rsChoisirDate(id);
+  else if(a==='echanger') rsChoisirEchange(id);
+  else if(a==='dupliquer') rsDupliquer(id);
+  else if(a==='decote') rsDeCote(id);
+  else if(a==='valider') rsValiderRapide(id);
+  else if(a==='supprimer') rsSupprimerId(id);
+}
+function rsMenu(id){
+  const r=DB.get('contenus',id); if(!r) return '';
+  const fait=rsUnFait(r);
+  const o=(v,t)=>`<option value="${v}">${t}</option>`;
+  return `<select class="filter-input rs-plus" onclick="event.stopPropagation()" onchange="const v=this.value;this.value='';rsAction('${esc(id)}',v)">
+    <option value="">Plus…</option>${o('ouvrir','Ouvrir')}${fait?'':o('deplacer','Changer la date')+o('echanger','Échanger avec un autre post')}
+    ${o('dupliquer','Dupliquer')}${fait||r.statut==='idée'?'':o('decote','Mettre de côté (idées)')}${o('supprimer','Supprimer')}</select>`;
 }
 
+/* ───── Choix d'une date / d'un post à échanger ───── */
+function rsChoisirDate(id){
+  const r=DB.get('contenus',id); if(!r) return;
+  openModal('Changer la date',`<div class="td-dim" style="margin-bottom:10px">${esc(r.titre||'')}</div>
+    <div class="form-grid"><div class="form-group"><label class="form-label">Jour</label><input type="date" class="form-control" id="rs-cd" value="${esc(r.date||todayISO())}"></div>
+    <div class="form-group"><label class="form-label">Heure</label><input type="time" class="form-control" id="rs-ch" value="${esc(r.heure||'18:30')}"></div></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">${[[-1,'−1 jour'],[1,'+1 jour'],[7,'+1 semaine']].map(([n,t])=>`<button class="btn btn-ghost btn-sm" onclick="document.getElementById('rs-cd').value=rsAjout(document.getElementById('rs-cd').value,${n})">${t}</button>`).join('')}</div>`,
+    `<button class="btn btn-ghost" onclick="closeModal()">Annuler</button><button class="btn btn-or" onclick="const d=document.getElementById('rs-cd').value,h=document.getElementById('rs-ch').value;if(!d){toast('Choisissez un jour','err');return;}closeModal(true);rsDeplacer('${esc(id)}',d,h)">Déplacer</button>`);
+}
+function rsChoisirEchange(id){
+  const r=DB.get('contenus',id); if(!r) return;
+  const autres=DB.all('contenus').filter(x=>x.id!==id&&!rsUnFait(x)&&x.date).sort((a,b)=>rsDateHeure(a).localeCompare(rsDateHeure(b)));
+  if(!autres.length){ toast('Aucun autre post programmé','err'); return; }
+  openModal('Échanger la date',`<div class="td-dim" style="margin-bottom:10px">« ${esc(r.titre||'')} » (${esc(rsJour(r.date,r.heure))}) prendra la date du post choisi, et inversement.</div>
+    <select class="form-control" id="rs-ech" size="${Math.min(10,autres.length)}" style="height:auto">${autres.map(x=>`<option value="${esc(x.id)}">${esc(rsJour(x.date,x.heure))} · ${esc(x.titre||'')}</option>`).join('')}</select>`,
+    `<button class="btn btn-ghost" onclick="closeModal()">Annuler</button><button class="btn btn-or" onclick="const v=document.getElementById('rs-ech').value;if(!v){toast('Choisissez un post','err');return;}closeModal(true);rsEchanger('${esc(id)}',v)">Échanger</button>`);
+}
+
+/* ───── Styles du module (injectés une fois) ───── */
+function rsStyles(){
+  if(document.getElementById('rs-style')) return;
+  const s=document.createElement('style'); s.id='rs-style';
+  s.textContent=`
+  .rs-barre{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+  .rs-onglets{display:inline-flex;border:1px solid var(--anthr);border-radius:var(--rsm);overflow:hidden}
+  .rs-onglets button{background:transparent;border:0;color:inherit;padding:8px 14px;font:inherit;font-size:13px;cursor:pointer}
+  .rs-onglets button.on{background:var(--or-soft);color:var(--or);font-weight:600}
+  .rs-info{font-size:13px;color:var(--gm);display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+  .rs-annul{display:flex;gap:10px;align-items:center;justify-content:space-between;background:var(--noir3);border:1px solid var(--anthr);border-radius:var(--rsm);padding:8px 12px;margin-bottom:12px;font-size:13px}
+  .rs-cal{display:grid;grid-template-columns:minmax(0,1fr) 260px;gap:14px;align-items:start}
+  .rs-cal .cal-grid,#view-reseaux .cal-grid{grid-template-columns:repeat(7,minmax(0,1fr))}
+  .rs-cell{position:relative;transition:background .12s;min-width:0;overflow:hidden}
+  .rs-cell.drop{background:var(--or-soft);border-color:var(--or)}
+  .rs-cell .rs-plus-j{position:absolute;top:4px;right:6px;opacity:0;border:0;background:transparent;color:var(--gm);cursor:pointer;font-size:15px;line-height:1}
+  .rs-cell:hover .rs-plus-j{opacity:1}
+  .rs-chip{display:block;background:var(--noir3);border:1px solid var(--anthr);border-left:3px solid var(--gm);border-radius:5px;padding:4px 6px;margin-bottom:4px;cursor:grab;font-size:11px;line-height:1.3}
+  .rs-chip .h{display:flex;justify-content:space-between;align-items:center;gap:4px;color:var(--gm);font-size:10px;margin-bottom:2px}
+  .rs-chip:hover{border-color:var(--gc)}
+  .rs-chip:active{cursor:grabbing}
+  .rs-chip.st-valide{border-left-color:var(--ok)}.rs-chip.st-avalider{border-left-color:var(--or)}.rs-chip.st-publie{opacity:.65;border-left-color:var(--ok);cursor:pointer}
+  .rs-chip.st-afilmer{border-style:dashed}.rs-chip.st-pb{border-left-color:var(--er)}
+  .rs-chip .t{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
+  .rs-pts{display:flex;gap:2px;flex:0 0 auto}.rs-pts i{width:6px;height:6px;border-radius:50%;display:block}
+  .rs-idees{background:var(--noir2);border:1px solid var(--anthr);border-radius:var(--rsm);padding:10px;min-height:120px}
+  .rs-idees.drop{border-color:var(--or);background:var(--or-soft)}
+  .rs-carte{display:grid;grid-template-columns:52px 1fr auto;gap:12px;align-items:center;background:var(--noir2);border:1px solid var(--anthr);border-radius:var(--rsm);padding:10px 12px;margin-bottom:8px;cursor:pointer}
+  .rs-carte:hover{border-color:var(--gc)}
+  .rs-carte img,.rs-carte .vide{width:52px;height:64px;object-fit:cover;border-radius:6px;display:block}
+  .rs-carte .vide{border:1px dashed var(--anthr)}
+  .rs-carte .titre{font-weight:600;line-height:1.3}
+  .rs-carte .meta{font-size:12px;color:var(--gm);margin-top:3px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .rs-carte .act{display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+  .rs-plus{width:auto;max-width:170px;padding:6px 8px;font-size:12px}
+  #modal-title:has(.rs-titre-fiche){min-width:0;flex:1;overflow:hidden}
+  .rs-semaine{font-size:12px;color:var(--gm);text-transform:uppercase;letter-spacing:1px;margin:16px 0 8px}
+  .rs-photos{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px}
+  .rs-photo{position:relative;flex:0 0 auto}
+  .rs-photo img{height:140px;width:auto;max-width:200px;border-radius:8px;display:block;background:var(--noir3)}
+  .rs-photo video{height:140px;width:79px;object-fit:cover;border-radius:8px;display:block;background:#000}
+  .rs-photo .num{position:absolute;left:5px;top:5px;background:rgba(0,0,0,.7);color:#fff;border-radius:10px;font-size:11px;padding:1px 7px}
+  .rs-photo .outils{position:absolute;right:5px;top:5px;display:flex;gap:3px}
+  .rs-photo .outils button{width:24px;height:24px;background:rgba(0,0,0,.72);color:#fff;border:0;border-radius:50%;cursor:pointer;font-size:12px;line-height:24px;padding:0}
+  .rs-photo .outils button:hover{background:var(--or)}
+  .rs-ajout{flex:0 0 auto;width:105px;height:140px;border:1px dashed var(--anthr);border-radius:8px;display:flex;align-items:center;justify-content:center;text-align:center;font-size:12px;color:var(--gm);cursor:pointer;padding:6px}
+  .rs-sec{border:1px solid var(--anthr);border-radius:var(--rsm);padding:12px;margin:10px 0}
+  .rs-sec.off{opacity:.6}
+  .rs-sec-tete{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+  .rs-outils{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .rs-pret{color:var(--ok)}.rs-err{color:var(--er)}.rs-av{color:var(--warn)}
+  @media(max-width:1080px){.rs-cal{grid-template-columns:1fr}}
+  @media(max-width:680px){
+    .rs-carte{grid-template-columns:44px 1fr}.rs-carte .act{grid-column:1/-1;justify-content:flex-start;flex-wrap:nowrap}
+    .rs-carte .act select{width:auto!important;flex:0 1 auto;min-width:0}
+    .rs-carte img,.rs-carte .vide{width:44px;height:55px}
+    .rs-cell .rs-plus-j{display:none}
+  }`;
+  document.head.appendChild(s);
+}
+
+/* ───── Vue principale ───── */
 RENDERERS.reseaux=function(){
   const v=document.getElementById('view-reseaux'); if(!v) return;
-  rsCharger(false);
-  const tous=DB.all('contenus').filter(r=>r.statut!=='archivé');
-  const today=todayISO(), mois=today.slice(0,7);
-  const nAval=tous.filter(r=>r.statut==='à valider').length;
-  const nVal=tous.filter(r=>r.statut==='validé'&&!rsToutFait(r)).length;
-  const nPub=tous.filter(r=>(r.date||'').slice(0,7)===mois&&rsToutFait(r)).length;
-  const nPb=tous.filter(rsProbleme).length;
-  const filtres={
-    avenir: r=>!rsToutFait(r)||r.date>=today,
-    avalider: r=>r.statut==='à valider',
-    problemes: r=>rsProbleme(r)||rsEnRetard(r),
-    publies: r=>rsToutFait(r),
-    tout: ()=>true,
-  };
-  const liste=tous.filter(filtres[_rs.filtre]||filtres.avenir).sort((a,b)=>rsDateHeure(a).localeCompare(rsDateHeure(b)));
+  rsStyles(); rsCharger(false);
+  const tous=DB.all('contenus');
+  const nAval=tous.filter(r=>r.statut==='à valider').length, nIdees=tous.filter(r=>r.statut==='idée').length;
+  const nPb=tous.filter(r=>rsProbleme(r)||rsEnRetard(r)).length;
   const m=_rs.meta, auto=DB.config().reseauxAuto!==false;
-  const metaTxt=!cloudUrl()?'Hors ligne : la publication passe par le serveur du CRM.'
+  const meta=!cloudUrl()?'Hors ligne : la publication passe par le serveur du CRM.'
     :!m?'Vérification de la connexion Meta…'
-    :m.connecte?`Connecté à <strong>${esc(m.pageNom)}</strong>${m.igNom?' et <strong>@'+esc(m.igNom)+'</strong>':' (aucun compte Instagram relié)'}${m.erreur?' · <span style="color:var(--err,#e55)">'+esc(m.erreur)+'</span>':''}`
-    :'Meta n’est pas connecté : rien ne part automatiquement sur Facebook et Instagram.';
-  let lignes='', sem=null;
-  liste.forEach(r=>{
-    const s=r.date?rsSemaine(r.date):'';
-    if(s!==sem){ sem=s; lignes+=`<tr><td colspan="6" class="td-dim" style="padding-top:14px;font-weight:600">${s?'Semaine du '+new Date(s+'T12:00:00').toLocaleDateString('fr-FR',{day:'numeric',month:'long'}):'Sans date'}</td></tr>`; }
-    const ctr=rsControles(r); const ne=ctr.filter(c=>c.n==='erreur').length, na=ctr.length-ne;
-    const retard=rsEnRetard(r);
-    lignes+=`<tr style="cursor:pointer" onclick="rsOuvrir('${esc(r.id)}')">
-      <td style="white-space:nowrap">${esc(rsJour(r.date,r.heure))}${retard?'<div class="td-dim" style="color:var(--err,#e55)">en retard</div>':''}</td>
-      <td>${rsVignette(r)}</td>
-      <td><div class="td-strong">${esc(r.titre||r.id)}</div><div class="td-dim">${esc(r.serie||'')}${r.nouvelleVersion?' · nouvelle version reçue du Mac':''}</div></td>
-      <td>${rsPastilles(r)}</td>
-      <td><span class="badge ${RS_STATUT_BADGE[r.statut]||'brouillon'}">${esc(r.statut||'')}</span></td>
-      <td class="td-dim" title="${esc(ctr.map(c=>c.m).join('\n'))}">${ne?'⛔ '+ne:''} ${na?'⚠ '+na:''}</td></tr>`;
-  });
-  const opt=(k,l)=>`<option value="${k}"${_rs.filtre===k?' selected':''}>${l}</option>`;
+    :m.connecte?`Facebook et Instagram : connecté à <strong>${esc(m.pageNom)}</strong>${m.igNom?' et <strong>@'+esc(m.igNom)+'</strong>':''}${m.erreur?' · <span class="rs-err">'+esc(m.erreur)+'</span>':''}`
+    :'Facebook et Instagram : pas encore connectés.';
+  const ann=_rs.annuler&&Date.now()-_rs.annuler.at<60000
+    ?`<div class="rs-annul"><span>${esc(_rs.annuler.msg)}</span><button class="btn btn-ghost btn-sm" onclick="rsAnnuler()">Annuler</button></div>`:'';
+  const ong=(k,t)=>`<button class="${_rs.vue===k?'on':''}" onclick="_rs.vue='${k}';RENDERERS.reseaux()">${t}</button>`;
+  let corps='';
+  if(_rs.vue==='liste') corps=rsVueListe(tous);
+  else if(_rs.vue==='idees') corps=rsVueIdees(tous);
+  else corps=rsVueCalendrier(tous);
   v.innerHTML=`
-    <div class="kpi-grid">
-      ${kpi('or','À valider',nAval,'relisez et validez')}
-      ${kpi('info','Validés à venir',nVal,auto?'partent à leur heure':'publication au clic')}
-      ${kpi('vert','Publiés ce mois',nPub)}
-      ${kpi(nPb?'rouge':'vert','Problèmes',nPb,nPb?'échec ou à vérifier':'rien à signaler')}
+    <div class="rs-barre">
+      <div class="rs-onglets">${ong('calendrier','Calendrier')}${ong('liste','Liste'+(nAval?' · '+nAval+' à valider':''))}${ong('idees','Idées'+(nIdees?' ('+nIdees+')':''))}</div>
+      <div style="flex:1"></div>
+      ${nPb?`<button class="btn btn-ghost btn-sm rs-err" onclick="_rs.vue='liste';_rs.filtre='problemes';RENDERERS.reseaux()">⚠ ${nPb} à regarder</button>`:''}
+      <button class="btn btn-or btn-sm" onclick="rsNouveau('')">+ Nouveau post</button>
     </div>
-    <div class="panel" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-      <div style="flex:1;min-width:220px">${metaTxt}</div>
-      <label style="display:flex;gap:6px;align-items:center;white-space:nowrap"><input type="checkbox" ${auto?'checked':''} onchange="rsAuto(this.checked)"> Publication automatique des posts validés</label>
-      <button class="btn btn-ghost btn-sm" onclick="rsConnexion()">${m&&m.connecte?'Connexion Meta':'Connecter Meta'}</button>
-    </div>
-    <div class="table-wrap"><div class="table-header">
-      <div class="table-title">Planning des réseaux</div>
-      <div class="table-filters">
-        <select class="filter-input" onchange="_rs.filtre=this.value;RENDERERS.reseaux()">
-          ${opt('avenir','À venir et en cours')}${opt('avalider','À valider')}${opt('problemes','Problèmes')}${opt('publies','Publiés')}${opt('tout','Tout')}
-        </select>
-        <button class="btn btn-ghost btn-sm" onclick="rsCharger(true)">↻ Actualiser</button>
-      </div></div>
-      <div class="table-scroll"><table><tbody>${lignes||'<tr><td class="td-dim" style="padding:18px">Aucun post dans ce filtre. Les posts arrivent du Mac avec envoyer_crm.py.</td></tr>'}</tbody></table></div>
-    </div>`;
+    <div class="rs-info"><span>${meta}</span>
+      <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" ${auto?'checked':''} onchange="rsAuto(this.checked)"> publier tout seul les posts validés</label>
+      <button class="btn btn-ghost btn-sm" onclick="rsConnexion()">${m&&m.connecte?'Réglages Meta':'Connecter Meta'}</button></div>
+    ${ann}${corps}`;
 };
 function rsAuto(on){ const c=DB.config(); c.reseauxAuto=!!on; DB.saveConfig(c);
-  toast(on?'Les posts validés partiront à leur heure':'Publication au clic uniquement','ok'); RENDERERS.reseaux(); }
+  toast(on?'Les posts validés partiront à leur heure':'Les posts validés attendront votre clic','ok'); RENDERERS.reseaux(); }
+
+function rsChip(r){
+  const st=rsToutFait(r)?'st-publie':rsProbleme(r)?'st-pb':r.statut==='validé'?'st-valide':r.statut==='à filmer'?'st-afilmer':'st-avalider';
+  const pts=rsActifs(r).map(x=>`<i title="${x.nom}${rsFait(r,x.k)?' : publié':''}" style="background:${rsFait(r,x.k)?'var(--ok)':x.coul};${rsFait(r,x.k)?'':'opacity:.75'}"></i>`).join('');
+  const peut=!rsUnFait(r);
+  return `<div class="rs-chip ${st}" ${peut?`draggable="true" ondragstart="_rs.glisse='${esc(r.id)}';event.dataTransfer.setData('text/plain','${esc(r.id)}')" ondragend="_rs.glisse=null"`:''}
+    onclick="event.stopPropagation();rsOuvrir('${esc(r.id)}')" title="${esc((r.heure||'')+' '+(r.titre||'')+' · '+rsStatut(r).t)}">
+    <div class="h"><span>${esc(r.heure?r.heure.replace(':','h'):'')}</span><span class="rs-pts">${pts}</span></div><div class="t">${esc(r.titre||'Sans titre')}</div></div>`;
+}
+function rsDrop(ev,date){ ev.preventDefault(); ev.currentTarget.classList.remove('drop');
+  const id=ev.dataTransfer.getData('text/plain')||_rs.glisse; _rs.glisse=null; if(!id) return;
+  if(date==='idees') rsDeCote(id); else rsDeplacer(id,date); }
+const rsDropAttr=d=>`ondragover="event.preventDefault();this.classList.add('drop')" ondragleave="this.classList.remove('drop')" ondrop="rsDrop(event,'${d}')"`;
+
+function rsVueCalendrier(tous){
+  if(!_rs.mois){ const n=new Date(); _rs.mois={y:n.getFullYear(),m:n.getMonth()}; }
+  const {y,m}=_rs.mois, mob=rsMob(), today=todayISO();
+  const pref=`${y}-${String(m+1).padStart(2,'0')}`;
+  if(mob&&(!_rs.jour||_rs.jour.slice(0,7)!==pref)) _rs.jour=today.slice(0,7)===pref?today:pref+'-01';
+  const premier=new Date(y,m,1), decal=(premier.getDay()+6)%7, nb=new Date(y,m+1,0).getDate();
+  const parJour={}; tous.filter(r=>r.date&&r.statut!=='idée').forEach(r=>(parJour[r.date]=parJour[r.date]||[]).push(r));
+  Object.values(parJour).forEach(l=>l.sort((a,b)=>(a.heure||'').localeCompare(b.heure||'')));
+  let cases=['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'].map(d=>`<div class="cal-dow">${d}</div>`).join('');
+  for(let i=0;i<decal;i++) cases+='<div class="cal-cell empty"></div>';
+  for(let d=1;d<=nb;d++){
+    const ds=`${pref}-${String(d).padStart(2,'0')}`, l=parJour[ds]||[];
+    const cls='cal-cell rs-cell'+(ds===today?' today':'')+(mob&&ds===_rs.jour?' sel':'');
+    if(mob){
+      cases+=`<div class="${cls}" onclick="_rs.jour='${ds}';RENDERERS.reseaux()"><div class="cal-day">${d}</div><div class="cal-dots">${l.map(r=>`<i style="background:${rsToutFait(r)?'var(--ok)':r.statut==='validé'?'var(--ok)':'var(--or)'};${rsToutFait(r)?'opacity:.5':''}"></i>`).join('')}</div></div>`;
+    } else {
+      cases+=`<div class="${cls}" ${rsDropAttr(ds)} ondblclick="rsNouveau('${ds}')"><div class="cal-day">${d}</div>
+        <button class="rs-plus-j" title="Nouveau post ce jour-là" onclick="event.stopPropagation();rsNouveau('${ds}')">+</button>${l.map(rsChip).join('')}</div>`;
+    }
+  }
+  const moisLabel=RS_MOIS[m]+' '+y;
+  const tete=`<div class="cal-header"><button class="btn btn-ghost btn-sm" onclick="rsMois(-1)">‹</button>
+    <div class="cal-month" style="display:flex;align-items:center;gap:8px;justify-content:center">${moisLabel} <button class="btn btn-ghost btn-sm" onclick="_rs.mois=null;_rs.jour='';RENDERERS.reseaux()">Aujourd’hui</button></div>
+    <button class="btn btn-ghost btn-sm" onclick="rsMois(1)">›</button></div>`;
+  const idees=tous.filter(r=>r.statut==='idée').sort((a,b)=>(a.titre||'').localeCompare(b.titre||''));
+  if(mob){
+    const duJour=(parJour[_rs.jour]||[]);
+    return `<div class="panel">${tete}<div class="cal-grid">${cases}</div></div>
+      <div class="rs-semaine">${esc(rsJour(_rs.jour))}</div>
+      ${duJour.map(rsCarte).join('')||'<div class="td-dim">Rien de prévu ce jour-là.</div>'}
+      <button class="btn btn-ghost btn-sm" style="margin-top:6px" onclick="rsNouveau('${_rs.jour}')">+ Post ce jour-là</button>`;
+  }
+  return `<div class="rs-cal"><div class="panel">${tete}<div class="cal-grid">${cases}</div>
+      <div class="td-dim" style="margin-top:10px;font-size:12px">Glissez un post sur un autre jour pour le déplacer. Double-cliquez un jour vide pour créer un post.</div></div>
+    <div class="rs-idees" ${rsDropAttr('idees')}><div class="panel-title" style="margin-bottom:8px">Idées (${idees.length})</div>
+      <div class="td-dim" style="font-size:12px;margin-bottom:8px">Glissez une idée sur un jour pour la programmer, ou un post ici pour le mettre de côté.</div>
+      ${idees.map(rsChip).join('')||'<div class="td-dim" style="font-size:12px">Aucune idée en attente.</div>'}
+      <button class="btn btn-ghost btn-sm" style="margin-top:8px;width:100%" onclick="rsNouveau('')">+ Noter une idée</button></div></div>`;
+}
+function rsMois(n){ if(!_rs.mois){ const d=new Date(); _rs.mois={y:d.getFullYear(),m:d.getMonth()}; }
+  let {y,m}=_rs.mois; m+=n; if(m<0){m=11;y--;} if(m>11){m=0;y++;} _rs.mois={y,m}; _rs.jour=''; RENDERERS.reseaux(); }
+
+function rsCarte(r){
+  const st=rsStatut(r), ctr=rsControles(r,true), ne=ctr.filter(c=>c.n==='erreur').length, na=ctr.length-ne;
+  const n=rsVignetteNom(r), u=rsMediaUrl(n);
+  const res=rsActifs(r).map(x=>{ const e=rsEtat(r,x.k);
+    const c=['publié','manuel'].includes(e)?'payee':['échec','incertain'].includes(e)?'refuse':e?'encours':'brouillon';
+    return `<span class="badge ${c}" title="${esc(x.nom+(e?' : '+(RS_ETAT[e]||e):' : pas encore publié'))}">${['publié','manuel'].includes(e)?'✓ ':''}${x.court}</span>`; }).join(' ');
+  const valider=r.statut==='à valider'&&!ne?`<button class="btn btn-or btn-sm" onclick="event.stopPropagation();rsValiderRapide('${esc(r.id)}')">Valider</button>`:'';
+  const planifier=r.statut==='idée'?`<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();rsChoisirDate('${esc(r.id)}')">Programmer</button>`:'';
+  return `<div class="rs-carte" onclick="rsOuvrir('${esc(r.id)}')">
+    ${u?`<img src="${u}" loading="lazy" alt="">`:'<div class="vide"></div>'}
+    <div style="min-width:0"><div class="titre">${esc(r.titre||'Sans titre')}</div>
+      <div class="meta"><span>${esc(rsJour(r.date,r.heure))}</span><span class="badge ${st.c}">${st.t}</span>${res}
+        ${rsEnRetard(r)?'<span class="rs-err">en retard</span>':''}${r.nouvelleVersion?'<span>nouveau texte reçu du Mac</span>':''}
+        ${ne?`<span class="rs-err" title="${esc(ctr.filter(c=>c.n==='erreur').map(c=>c.m).join('\n'))}">${ne} à corriger</span>`:''}${na&&!ne?`<span class="rs-av" title="${esc(ctr.map(c=>c.m).join('\n'))}">${na} à surveiller</span>`:''}</div></div>
+    <div class="act">${valider}${planifier}${rsMenu(r.id)}</div></div>`;
+}
+function rsVueListe(tous){
+  const today=todayISO(), q=_rs.recherche.trim().toLowerCase();
+  const F={avenir:r=>r.statut!=='idée'&&(!rsToutFait(r)||r.date>=today), avalider:r=>r.statut==='à valider', valides:r=>r.statut==='validé'&&!rsToutFait(r),
+    problemes:r=>rsProbleme(r)||rsEnRetard(r), publies:r=>rsToutFait(r), tout:r=>r.statut!=='idée'};
+  const liste=tous.filter(F[_rs.filtre]||F.avenir).filter(r=>!q||(r.titre||'').toLowerCase().includes(q)||(r.serie||'').toLowerCase().includes(q))
+    .sort((a,b)=>_rs.filtre==='publies'?rsDateHeure(b).localeCompare(rsDateHeure(a)):rsDateHeure(a).localeCompare(rsDateHeure(b)));
+  _rs.ordre=liste.map(r=>r.id);
+  let html='', sem=null;
+  liste.forEach(r=>{ const s=r.date?rsSemaineDe(r.date):'';
+    if(s!==sem){ sem=s; html+=`<div class="rs-semaine">${s?'Semaine du '+new Date(s+'T12:00:00').toLocaleDateString('fr-FR',{day:'numeric',month:'long'}):'Sans date'}</div>`; }
+    html+=rsCarte(r); });
+  const opt=(k,l)=>`<option value="${k}"${_rs.filtre===k?' selected':''}>${l}</option>`;
+  return `<div class="rs-barre"><select class="filter-input" onchange="_rs.filtre=this.value;RENDERERS.reseaux()">
+      ${opt('avenir','À venir')}${opt('avalider','À valider')}${opt('valides','Validés')}${opt('problemes','À regarder')}${opt('publies','Publiés')}${opt('tout','Tous')}</select>
+    <input class="filter-input" placeholder="Chercher un post" value="${esc(_rs.recherche)}" oninput="_rs.recherche=this.value;clearTimeout(window._rsQ);window._rsQ=setTimeout(()=>{RENDERERS.reseaux();const i=document.querySelector('#view-reseaux input[placeholder]');if(i){i.focus();i.setSelectionRange(i.value.length,i.value.length);}},250)">
+    </div>${html||'<div class="td-dim" style="padding:18px 0">Aucun post ici.</div>'}`;
+}
+function rsSemaineDe(ds){ const d=new Date(ds+'T12:00:00'); d.setDate(d.getDate()-((d.getDay()+6)%7)); return rsAjout(d.toISOString().slice(0,10),0); }
+function rsVueIdees(tous){
+  const l=tous.filter(r=>r.statut==='idée').sort((a,b)=>(b.updatedAt||'').localeCompare(a.updatedAt||''));
+  _rs.ordre=l.map(r=>r.id);
+  return `<div class="td-dim" style="margin-bottom:12px">Les idées n’ont pas de date et ne partent jamais. Programmez-en une pour la mettre au planning.</div>
+    ${l.map(rsCarte).join('')||'<div class="td-dim" style="padding:12px 0">Aucune idée pour l’instant.</div>'}
+    <button class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="rsNouveau('')">+ Noter une idée</button>`;
+}
+
+/* ───── Nouveau post ───── */
+function rsNouveau(date){
+  const r={id:uid('RS'), titre:'', date:date||'', heure:'18:30', serie:'Perso', type:'perso', statut:date?'à valider':'idée', medias:[],
+    reseaux:{facebook:{actif:true,format:'photo',texte:'',medias:[]}, instagram:{actif:true,format:'photo',texte:'',medias:[]},
+             google:{actif:false,format:'photo',texte:'',medias:[]}, story:{actif:false,format:'story',texte:'',medias:[]}}};
+  _rs.edit=r; _rs.editBase=JSON.stringify(rsForme(r)); _rs.nouveau=true;
+  if(!_rs.ordre.includes(r.id)) _rs.ordre=[];
+  rsFiche(); setTimeout(()=>{ const t=document.getElementById('rs-titre'); if(t) t.focus(); },50);
+}
 
 /* ───── Fiche d'un post ───── */
 function rsOuvrir(id){
   const row=DB.get('contenus',id); if(!row) return;
-  _rs.edit=JSON.parse(JSON.stringify(row)); _rs.editBase=JSON.stringify(rsForme(row));
+  if(!_rs.ordre.includes(id)) _rs.ordre=DB.all('contenus').filter(r=>r.statut===row.statut||(row.date&&r.date)).sort((a,b)=>rsDateHeure(a).localeCompare(rsDateHeure(b))).map(r=>r.id);
+  _rs.edit=JSON.parse(JSON.stringify(row)); _rs.editBase=JSON.stringify(rsForme(row)); _rs.nouveau=false;
   rsFiche();
 }
-function rsForme(r){ return {date:r.date||'',heure:r.heure||'',reseaux:RS_RES.map(x=>{ const c=(r.reseaux||{})[x.k]; return c?[!!c.actif,c.texte||'']:null; })}; }
-function rsLire(){   // formulaire → fiche en cours d'édition
+function rsForme(r){ return {titre:r.titre||'',date:r.date||'',heure:r.heure||'',medias:(r.medias||[]).map(m=>m.nom),
+  reseaux:RS_RES.map(x=>{ const c=(r.reseaux||{})[x.k]; return c?[!!c.actif,c.texte||'',(c.medias||[]).join(',')]:null; })}; }
+function rsLire(){
   const r=_rs.edit; if(!r) return r;
-  const d=document.getElementById('rs-date'), h=document.getElementById('rs-heure');
-  if(d) r.date=d.value; if(h) r.heure=h.value;
+  const g=id=>document.getElementById(id);
+  if(g('rs-titre')) r.titre=g('rs-titre').value.trim();
+  if(g('rs-date')) r.date=g('rs-date').value; if(g('rs-heure')) r.heure=g('rs-heure').value;
   RS_RES.forEach(x=>{ const c=r.reseaux&&r.reseaux[x.k]; if(!c) return;
-    const t=document.getElementById('rs-t-'+x.k), a=document.getElementById('rs-a-'+x.k);
-    if(t) c.texte=t.value; if(a) c.actif=a.checked; });
+    if(g('rs-t-'+x.k)) c.texte=g('rs-t-'+x.k).value; if(g('rs-a-'+x.k)) c.actif=g('rs-a-'+x.k).checked; });
   return r;
 }
 function rsModifie(){ return _rs.edit && JSON.stringify(rsForme(rsLire()))!==_rs.editBase; }
+function rsContenuChange(avant,apres){   // la date et l'heure ne remettent pas en relecture
+  const a=JSON.parse(avant), b=rsForme(apres); delete a.date; delete a.heure; delete b.date; delete b.heure; return JSON.stringify(a)!==JSON.stringify(b); }
+
+function rsPhotoHtml(r,nom,i,n,cible){
+  const u=rsMediaUrl(nom); if(!u) return '';
+  const fait=rsUnFait(r);
+  const outils=fait?'':`<div class="outils">${cible==='flux'&&i>0?`<button title="Plus tôt" onclick="rsPhotoBouger(${i},-1)">←</button>`:''}${cible==='flux'&&i<n-1?`<button title="Plus tard" onclick="rsPhotoBouger(${i},1)">→</button>`:''}<button title="Retirer" onclick="rsPhotoRetirer('${cible}',${i})">✕</button></div>`;
+  return `<div class="rs-photo">${/\.mp4$/.test(nom)?`<video src="${u}" controls preload="metadata"></video>`:`<a href="${u}" target="_blank"><img src="${u}" alt=""></a>`}${n>1?`<span class="num">${i+1}</span>`:''}${outils}</div>`;
+}
 function rsFiche(){
-  const r=_rs.edit; const ctr=rsControles(r);
-  const medias=(r.medias||[]).filter(m=>m.role!=='couverture');
-  const media=medias.map(m=>{ const u=rsMediaUrl(m.nom); if(!u) return '';
-    return /\.mp4$/.test(m.nom)?`<video src="${u}" controls preload="metadata" style="height:150px;border-radius:8px"></video>`
-      :`<a href="${u}" target="_blank" title="${esc(m.role||'')}"><img src="${u}" loading="lazy" style="height:150px;border-radius:8px"></a>`; }).join('');
+  const r=_rs.edit; const ctr=rsControles(r); const fait=rsUnFait(r);
+  const err=ctr.filter(c=>c.n==='erreur'), av=ctr.filter(c=>c.n==='avert');
+  const flux=rsFlux(r), fluxNoms=flux.medias||[];
+  const fluxHtml=fluxNoms.map((n,i)=>rsPhotoHtml(r,n,i,fluxNoms.length,'flux')).join('');
+  const ajout=(cible,txt)=>fait?'':`<label class="rs-ajout">${txt}<input type="file" accept="image/*,video/mp4,video/quicktime" ${cible==='flux'?'multiple':''} style="display:none" onchange="rsAjouterFichiers(this.files,'${cible}')"></label>`;
+  const autres=['story','google'].filter(k=>r.reseaux&&r.reseaux[k]).map(k=>{ const c=r.reseaux[k]; const nom=(c.medias||[])[0];
+    return `<div><div class="td-dim" style="font-size:12px;margin:8px 0 4px">${k==='story'?'Story':'Google'}</div><div class="rs-photos">${nom?rsPhotoHtml(r,nom,0,1,k):''}${nom?'':ajout(k,'+ Photo')}</div></div>`; }).join('');
+  const idx=_rs.ordre.indexOf(r.id), prec=idx>0?_rs.ordre[idx-1]:null, suiv=idx>=0&&idx<_rs.ordre.length-1?_rs.ordre[idx+1]:null;
   const sections=RS_RES.filter(x=>r.reseaux&&r.reseaux[x.k]).map(x=>{
-    const c=r.reseaux[x.k]; const p=rsPub(r,x.k); const e=p?p.etat:'';
-    const etat=e?`<span class="badge ${['publié','manuel'].includes(e)?'payee':['échec','incertain'].includes(e)?'refuse':'encours'}">${esc((RS_ETAT_TXT[e]||['',e])[1])}</span>${p.publieAt?' <span class="td-dim">'+esc(fmtDateShort(p.publieAt))+'</span>':''}${p.url?' · <a href="'+esc(p.url)+'" target="_blank">voir le post</a>':''}${p.erreur?'<div class="td-dim" style="color:var(--err,#e55)">'+esc(p.erreur)+'</div>':''}`:'<span class="td-dim">pas encore publié</span>';
-    let btn='';
-    if(x.api){
-      if(!e||e==='échec') btn=`<button class="btn btn-or btn-sm" onclick="rsPublier('${x.k}')">${e==='échec'?'Réessayer':'Publier maintenant'}</button>`;
-      if(e==='incertain') btn=`<button class="btn btn-success btn-sm" onclick="rsMarquer('${x.k}','manuel')">C’est bien publié</button> <button class="btn btn-warn btn-sm" onclick="rsPublier('${x.k}',true)">Republier</button>`;
-      btn+=` <button class="btn btn-ghost btn-sm" onclick="rsCopier('${x.k}')">Copier le texte</button>`
-        +(c.lien?` <button class="btn btn-ghost btn-sm" title="${esc(x.k==='instagram'?'Lien à mettre dans la bio':'Lien')}" onclick="navigator.clipboard.writeText(${esc(JSON.stringify(c.lien))});toast('Lien copié','ok')">Copier le lien${x.k==='instagram'?' (bio)':''}</button>`:'');
-    } else {
-      btn=`<button class="btn btn-ghost btn-sm" onclick="rsCopier('${x.k}')">Copier le texte</button>`
-        +((c.medias||[]).map(n=>` <a class="btn btn-ghost btn-sm" href="${rsMediaUrl(n)}" download target="_blank">Image</a>`).join(''))
-        +(c.lien?` <button class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText(${esc(JSON.stringify(c.lien))});toast('Lien copié','ok')">Copier le lien</button>`:'')
-        +(['manuel','publié'].includes(e)?` <button class="btn btn-ghost btn-sm" onclick="rsMarquer('${x.k}','effacer')">Annuler « publié »</button>`
-          :` <button class="btn btn-success btn-sm" onclick="rsMarquer('${x.k}','manuel')">Marquer publié</button>`);
+    const c=r.reseaux[x.k], p=rsPub(r,x.k), e=p?p.etat:'';
+    const etat=e?`<span class="badge ${['publié','manuel'].includes(e)?'payee':['échec','incertain'].includes(e)?'refuse':'encours'}">${esc(RS_ETAT[e]||e)}</span>${p.publieAt?' <span class="td-dim">'+esc(fmtDateShort(p.publieAt))+'</span>':''}${p.url?' · <a href="'+esc(p.url)+'" target="_blank">voir</a>':''}`:'';
+    let btn=`<button class="btn btn-ghost btn-sm" onclick="rsCopier('${x.k}')">Copier</button>`;
+    if(c.lien) btn+=` <button class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText(${esc(JSON.stringify(c.lien))});toast('Lien copié','ok')">${x.k==='instagram'?'Copier le lien (bio)':x.k==='story'?'Copier le lien (sticker)':'Copier le lien'}</button>`;
+    if(x.k!=='facebook'&&r.reseaux.facebook&&!fait) btn+=` <button class="btn btn-ghost btn-sm" title="Remplace ce texte par celui de Facebook" onclick="rsReprendre('${x.k}')">Reprendre le texte Facebook</button>`;
+    if(x.api&&r.id&&!_rs.nouveau){
+      if(!e||e==='échec') btn+=` <button class="btn btn-or btn-sm" onclick="rsPublier('${x.k}')">${e==='échec'?'Réessayer':'Publier maintenant'}</button>`;
+      if(e==='incertain') btn+=` <button class="btn btn-success btn-sm" onclick="rsMarquer('${x.k}','manuel')">C’est bien en ligne</button> <button class="btn btn-warn btn-sm" onclick="rsPublier('${x.k}',true)">Republier</button>`;
     }
+    if(!x.api&&!_rs.nouveau) btn+=['manuel','publié'].includes(e)?` <button class="btn btn-ghost btn-sm" onclick="rsMarquer('${x.k}','effacer')">Pas encore publié</button>`
+      :` <button class="btn btn-success btn-sm" onclick="rsMarquer('${x.k}','manuel')">Je l’ai publié</button>`;
     const nv=(r.nouvelleVersion||{})[x.k];
-    return `<div class="panel" style="margin:10px 0">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
-        <label class="td-strong" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="rs-a-${x.k}" ${c.actif?'checked':''}> ${x.nom}${c.format?' <span class="td-dim">· '+esc(c.format)+'</span>':''}</label>
-        <div>${etat}</div></div>
-      ${nv?`<div class="td-dim" style="margin:6px 0">Nouvelle version reçue du Mac. <a href="#" onclick="event.preventDefault();rsPrendre('${x.k}')">Remplacer mon texte par celle-ci</a></div>`:''}
-      ${x.k==='story'?`<div class="td-dim" style="margin:6px 0">Story : publiez-la depuis l’app Instagram (le sticker lien n’est pas disponible par l’API).</div>`:''}
+    return `<div class="rs-sec ${c.actif?'':'off'}">
+      <div class="rs-sec-tete"><label class="td-strong" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="rs-a-${x.k}" ${c.actif?'checked':''} onchange="this.closest('.rs-sec').classList.toggle('off',!this.checked)"> ${x.nom}
+        ${c.format?'<span class="td-dim" style="font-weight:400">· '+esc(RS_FORMAT[c.format]||c.format)+'</span>':''}</label><div>${etat}</div></div>
+      ${nv?`<div class="td-dim" style="margin-bottom:6px">Un nouveau texte est arrivé du Mac. <a href="#" onclick="event.preventDefault();rsPrendre('${x.k}')">Le mettre à la place du mien</a></div>`:''}
+      ${x.k==='story'?'<div class="td-dim" style="margin-bottom:6px;font-size:12px">À publier vous-même depuis l’app Instagram, avec le sticker lien.</div>':''}
+      ${x.k==='google'?'<div class="td-dim" style="margin-bottom:6px;font-size:12px">À publier vous-même depuis votre fiche Google.</div>':''}
       <textarea class="form-control" id="rs-t-${x.k}" rows="${x.k==='story'?2:6}" oninput="document.getElementById('rs-n-${x.k}').textContent=this.value.length+(${x.max}?' / ${x.max}':'')">${esc(c.texte||'')}</textarea>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;gap:8px;flex-wrap:wrap">
-        <div>${btn}</div><div class="td-dim" id="rs-n-${x.k}">${(c.texte||'').length}${x.max?' / '+x.max:''}</div></div>
-    </div>`;
+        <div class="rs-outils">${btn}</div><div class="td-dim" id="rs-n-${x.k}">${(c.texte||'').length}${x.max?' / '+x.max:''}</div></div></div>`;
   }).join('');
-  const ctrHtml=ctr.length?ctr.map(c=>`<div style="color:${c.n==='erreur'?'var(--err,#e55)':'inherit'}">${c.n==='erreur'?'⛔':'⚠'} ${esc(c.m)}</div>`).join('')
-    :'<div style="color:var(--ok,#4a4)">✓ Tout est correct.</div>';
+  const etatTxt=err.length?err.map(c=>`<div class="rs-err">• ${esc(c.m)}</div>`).join('')
+    :`<div class="rs-pret">${r.statut==='validé'?'Validé':'Prêt à valider'}.</div>`;
+  const avTxt=av.map(c=>`<div class="rs-av">• ${esc(c.m)}</div>`).join('');
+  const st=rsStatut(r);
+  const titre=`<span class="rs-titre-fiche" style="display:flex;align-items:center;gap:8px;width:100%;min-width:0">
+    ${prec?`<button class="btn btn-ghost btn-sm" title="Post précédent" onclick="rsVoisin(-1)">‹</button>`:''}
+    <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.titre||(_rs.nouveau?'Nouveau post':'Sans titre'))}</span>
+    ${suiv?`<button class="btn btn-ghost btn-sm" title="Post suivant" onclick="rsVoisin(1)">›</button>`:''}</span>`;
   const body=`
+    <div class="form-group"><label class="form-label">Sujet (pour vous, n’est pas publié)</label><input class="form-control" id="rs-titre" value="${esc(r.titre||'')}" placeholder="Ex. Avis du Casino, Reel mariage de juin…"></div>
     <div class="form-grid">
-      <div class="form-group"><label class="form-label">Date</label><input type="date" class="form-control" id="rs-date" value="${esc(r.date||'')}"></div>
-      <div class="form-group"><label class="form-label">Heure</label><input type="time" class="form-control" id="rs-heure" value="${esc(r.heure||'')}"></div>
+      <div class="form-group"><label class="form-label">Jour</label><input type="date" class="form-control" id="rs-date" value="${esc(r.date||'')}" ${fait?'disabled':''}></div>
+      <div class="form-group"><label class="form-label">Heure</label><input type="time" class="form-control" id="rs-heure" value="${esc(r.heure||'')}" ${fait?'disabled':''}></div>
     </div>
-    <div class="td-dim" style="margin:4px 0 10px">${esc(r.serie||'')} · <span class="badge ${RS_STATUT_BADGE[r.statut]||'brouillon'}">${esc(r.statut||'')}</span>${r.valideAt?' · validé le '+esc(fmtDateShort(r.valideAt)):''}</div>
-    <div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:6px">${media||'<div class="td-dim">Pas de visuel.</div>'}</div>
-    <div class="panel" style="margin:10px 0"><div class="panel-title">Vérifications</div>${ctrHtml}</div>
+    ${fait?'<div class="td-dim" style="margin:-4px 0 8px">Déjà publié au moins une fois : la date ne se change plus.</div>':`<div class="rs-outils" style="margin:-4px 0 10px">
+      ${[[-1,'−1 jour'],[1,'+1 jour'],[7,'+1 semaine']].map(([n,t])=>`<button class="btn btn-ghost btn-sm" onclick="const d=document.getElementById('rs-date');d.value=rsAjout(d.value,${n})">${t}</button>`).join('')}
+      ${!_rs.nouveau?`<button class="btn btn-ghost btn-sm" onclick="rsFicheAction('echanger')">Échanger avec un autre post</button>`:''}
+      ${!_rs.nouveau&&r.statut!=='idée'?`<button class="btn btn-ghost btn-sm" onclick="rsFicheAction('decote')">Mettre de côté</button>`:''}</div>`}
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px"><span class="badge ${st.c}">${st.t}</span>${r.serie?'<span class="td-dim">'+esc(r.serie)+'</span>':''}${r.valideAt&&r.statut==='validé'?'<span class="td-dim">validé le '+esc(fmtDateShort(r.valideAt))+'</span>':''}</div>
+    <div class="panel" style="margin:0 0 10px">${etatTxt}${avTxt}</div>
+    <div class="td-strong" style="margin:4px 0 6px">Photos et vidéo${r.reseaux&&r.reseaux.facebook&&r.reseaux.facebook.format==='lien'?' (Instagram ; Facebook montre l’aperçu de l’article)':' (Facebook et Instagram)'}</div>
+    <div class="rs-photos">${fluxHtml}${ajout('flux','+ Ajouter photos ou vidéo')}</div>
+    ${autres}
     ${sections}`;
-  const erreurs=ctr.some(c=>c.n==='erreur');
-  const foot=`<div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;width:100%"><button class="btn btn-ghost" onclick="rsSupprimer()">Supprimer</button>
-    <button class="btn btn-ghost" onclick="closeModal()">Fermer</button>
+  const foot=`<div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;width:100%">
+    ${_rs.nouveau?'':'<button class="btn btn-ghost" onclick="rsSupprimer()">Supprimer</button>'}
+    <button class="btn btn-ghost" onclick="rsFermer()">Fermer</button>
     <button class="btn btn-ghost" onclick="rsEnregistrer()">Enregistrer</button>
-    ${r.statut==='validé'?`<button class="btn btn-warn" onclick="rsStatut('à valider')">Remettre à valider</button>`
-      :`<button class="btn btn-or" ${erreurs?'disabled title="Corrigez d’abord les erreurs"':''} onclick="rsValider()">Valider</button>`}</div>`;
-  openModal(esc(r.titre||r.id),body,foot);
-  window._modalGuard=()=>!rsModifie()||confirm('Fermer sans enregistrer vos modifications ?');
+    ${r.statut==='validé'&&!fait?`<button class="btn btn-warn" onclick="rsStatutFiche('à valider')">Remettre en relecture</button>`
+      :fait?'':`<button class="btn btn-or" ${err.length?'disabled title="Corrigez d’abord ce qui est en rouge"':''} onclick="rsValider()">Valider</button>`}</div>`;
+  openModal(titre,body,foot);
+  window._modalGuard=()=>!rsModifie()||confirm('Fermer sans enregistrer vos changements ?');
 }
-function rsEnregistrer(sansToast){
+function rsFermer(){ if(rsModifie()&&!confirm('Fermer sans enregistrer vos changements ?')) return; _rs.nouveau=false; closeModal(true); RENDERERS.reseaux(); }
+function rsVoisin(n){
+  if(rsModifie()) rsEnregistrer(true);
+  const i=_rs.ordre.indexOf(_rs.edit.id), id=_rs.ordre[i+n]; if(!id) return;
+  const row=DB.get('contenus',id); if(!row) return;
+  _rs.edit=JSON.parse(JSON.stringify(row)); _rs.editBase=JSON.stringify(rsForme(row)); _rs.nouveau=false; rsFiche();
+}
+function rsFicheAction(a){ if(rsModifie()||_rs.nouveau) rsEnregistrer(true); const id=_rs.edit.id; closeModal(true); _rs.nouveau=false; rsAction(id,a); }
+function rsEnregistrer(silence){
   const r=rsLire(); if(!r) return null;
-  const change=JSON.stringify(rsForme(r))!==_rs.editBase;
-  if(change && r.statut==='validé'){ r.statut='à valider'; delete r.valideAt; if(!sansToast) toast('Modifié après validation : le post repasse « à valider »','ok'); }
-  const sauve=DB.save('contenus',r); _rs.edit=JSON.parse(JSON.stringify(sauve)); _rs.editBase=JSON.stringify(rsForme(sauve));
-  if(!sansToast && !change) toast('Enregistré','ok');
-  return sauve;
+  if(!r.titre) r.titre=(r.reseaux.facebook&&r.reseaux.facebook.texte||r.reseaux.instagram&&r.reseaux.instagram.texte||'Sans titre').split('\n')[0].slice(0,60);
+  const change=rsContenuChange(_rs.editBase,r);
+  if(change && r.statut==='validé'){ r.statut='à valider'; delete r.valideAt; if(!silence) toast('Texte ou photos modifiés : le post est à revalider','ok'); }
+  if(r.date && r.statut==='idée') r.statut='à valider';
+  if(!r.date && r.statut==='à valider') r.statut='idée';
+  rsFormats(r);
+  const s=DB.save('contenus',r); _rs.edit=JSON.parse(JSON.stringify(s)); _rs.editBase=JSON.stringify(rsForme(s)); _rs.nouveau=false;
+  if(!silence&&!change) toast('Enregistré','ok');
+  if(!_rs.ordre.includes(s.id)) _rs.ordre.push(s.id);
+  updateBadges(); return s;
 }
 function rsValider(){
   rsEnregistrer(true); const r=_rs.edit;
-  if(rsControles(r).some(c=>c.n==='erreur')){ toast('Corrigez d’abord les erreurs','err'); rsFiche(); return; }
+  if(rsControles(r).some(c=>c.n==='erreur')){ toast('Corrigez d’abord ce qui est en rouge','err'); rsFiche(); return; }
   r.statut='validé'; r.valideAt=new Date().toISOString();
   const s=DB.save('contenus',r); _rs.edit=JSON.parse(JSON.stringify(s)); _rs.editBase=JSON.stringify(rsForme(s));
-  toast(DB.config().reseauxAuto!==false?'Validé : il partira le '+rsJour(r.date,r.heure):'Validé','ok');
-  updateBadges(); rsFiche(); if(_currentView==='reseaux') RENDERERS.reseaux();
+  toast(DB.config().reseauxAuto!==false?'Validé : il partira '+rsJour(r.date,r.heure):'Validé','ok');
+  updateBadges(); rsFiche();
 }
-function rsStatut(st){ rsEnregistrer(true); const r=_rs.edit; r.statut=st; if(st!=='validé') delete r.valideAt;
+function rsStatutFiche(st){ rsEnregistrer(true); const r=_rs.edit; r.statut=st; if(st!=='validé') delete r.valideAt;
   const s=DB.save('contenus',r); _rs.edit=JSON.parse(JSON.stringify(s)); _rs.editBase=JSON.stringify(rsForme(s)); updateBadges(); rsFiche(); }
 function rsPrendre(res){ const r=_rs.edit; const nv=(r.nouvelleVersion||{})[res]; if(nv==null) return;
   const t=document.getElementById('rs-t-'+res); if(t) t.value=nv;
   r.reseaux[res].texteOrigine=nv; delete r.nouvelleVersion[res]; if(!Object.keys(r.nouvelleVersion).length) delete r.nouvelleVersion;
-  toast('Texte remplacé : enregistrez pour garder','ok'); }
+  toast('Texte remplacé. Enregistrez pour le garder','ok'); }
+function rsReprendre(res){ const fb=document.getElementById('rs-t-facebook'), t=document.getElementById('rs-t-'+res); if(!fb||!t) return;
+  if(t.value.trim()&&!confirm('Remplacer ce texte par celui de Facebook ?')) return;
+  t.value=fb.value.replace(/\n*https?:\/\/\S+\s*$/,''); t.dispatchEvent(new Event('input')); }
 function rsCopier(res){ const t=document.getElementById('rs-t-'+res); const v=t?t.value:'';
   (navigator.clipboard?navigator.clipboard.writeText(v):Promise.reject()).then(()=>toast('Texte copié','ok'),()=>{ if(t){ t.select(); document.execCommand('copy'); toast('Texte copié','ok'); } }); }
+
+/* ───── Photos et vidéos ───── */
+function rsFormats(r){   // format de chaque réseau d'après ses médias
+  const f=r.reseaux||{};
+  ['facebook','instagram'].forEach(k=>{ const c=f[k]; if(!c||c.format==='lien') return;
+    const m=c.medias||[], video=m.length&&/\.mp4$/.test(m[0]);
+    c.format=video?(k==='instagram'?'reel':'video'):m.length>1?(k==='instagram'?'carrousel':'album'):'photo'; });
+}
+function rsCiblesFlux(r){ return ['facebook','instagram'].filter(k=>r.reseaux&&r.reseaux[k]&&r.reseaux[k].format!=='lien'); }
+function rsPhotoBouger(i,n){ rsLire(); const r=_rs.edit; rsCiblesFlux(r).forEach(k=>{ const m=r.reseaux[k].medias; if(m[i+n]===undefined) return; [m[i],m[i+n]]=[m[i+n],m[i]]; }); rsFiche(); }
+function rsPhotoRetirer(cible,i){ rsLire(); const r=_rs.edit;
+  const ks=cible==='flux'?rsCiblesFlux(r):[cible]; ks.forEach(k=>{ r.reseaux[k].medias.splice(i,1); if(cible==='flux'&&k==='instagram') delete r.reseaux[k].couverture; });
+  rsFormats(r); rsFiche(); }
+async function rsJpeg(file){   // photo → JPEG, 2160 px au plus, recadrée entre 4:5 et 1,91:1 pour Instagram
+  const url=URL.createObjectURL(file);
+  try{
+    const img=await new Promise((ok,ko)=>{ const i=new Image(); i.onload=()=>ok(i); i.onerror=ko; i.src=url; });
+    let sw=img.naturalWidth, sh=img.naturalHeight, sx=0, sy=0, recadre=false;
+    const q=sw/sh;
+    if(q<0.8){ const h=Math.round(sw/0.8); sy=Math.round((sh-h)/2); sh=h; recadre=true; }
+    else if(q>1.91){ const w=Math.round(sh*1.91); sx=Math.round((sw-w)/2); sw=w; recadre=true; }
+    const k=Math.min(1,2160/Math.max(sw,sh)), w=Math.round(sw*k), h=Math.round(sh*k);
+    const c=document.createElement('canvas'); c.width=w; c.height=h; c.getContext('2d').drawImage(img,sx,sy,sw,sh,0,0,w,h);
+    const blob=await new Promise(ok=>c.toBlob(ok,'image/jpeg',0.9));
+    return {blob, largeur:w, hauteur:h, recadre};
+  } finally { URL.revokeObjectURL(url); }
+}
+async function rsEnvoyerFichier(blob,nom){
+  const fd=new FormData(); fd.append('auth',cloudAuth()); fd.append('f',blob,nom);
+  const r=await fetch(cloudUrl()+'?action=mediaAjouter',{method:'POST',body:fd}); return r.json();
+}
+async function rsAjouterFichiers(files,cible){
+  if(!cloudUrl()){ toast('Ajout impossible hors ligne','err'); return; }
+  rsLire(); const r=_rs.edit; let recadres=0, n=0;
+  for(const f of [...files]){
+    try{
+      const video=/^video\//.test(f.type)||/\.(mp4|mov)$/i.test(f.name);
+      if(video&&f.size>32*1048576){ toast('Vidéo trop lourde (32 Mo au plus)','err'); continue; }
+      toast('Envoi de '+f.name+'…','ok');
+      let blob=f, meta={type:video?'video':'image'};
+      if(!video){ const j=await rsJpeg(f); blob=j.blob; meta.largeur=j.largeur; meta.hauteur=j.hauteur; if(j.recadre) recadres++; }
+      const rep=await rsEnvoyerFichier(blob, video?'video.mp4':'photo.jpg');
+      if(!rep||!rep.ok){ toast('Refusé : '+((rep&&rep.error)||'serveur injoignable'),'err'); continue; }
+      meta.nom=rep.nom; meta.role=cible==='flux'?'fil':cible;
+      if(rep.largeur){ meta.largeur=rep.largeur; meta.hauteur=rep.hauteur; }
+      if(video){ const d=await new Promise(ok=>{ const v=document.createElement('video'); v.preload='metadata'; v.onloadedmetadata=()=>ok(v.duration); v.onerror=()=>ok(null); v.src=URL.createObjectURL(f); }); if(d) meta.duree=Math.round(d*10)/10; }
+      r.medias=(r.medias||[]).filter(m=>m.nom!==meta.nom).concat([meta]);
+      const ks=cible==='flux'?rsCiblesFlux(r):[cible];
+      ks.forEach(k=>{ const c=r.reseaux[k]; c.medias=c.medias||[];
+        if(video){ c.medias=[meta.nom]; } else { if(c.medias.length&&/\.mp4$/.test(c.medias[0])) c.medias=[]; if(cible==='flux') c.medias.push(meta.nom); else c.medias=[meta.nom]; } });
+      n++;
+    }catch(e){ toast('Fichier illisible : '+f.name,'err'); }
+  }
+  rsFormats(r); rsFiche();
+  if(n) toast(n+' fichier(s) ajouté(s)'+(recadres?', '+recadres+' recadré(s) pour Instagram':'')+'. Pensez à enregistrer.','ok');
+}
+
+/* ───── Publication ───── */
 async function rsPublier(res,forcer){
   if(!cloudUrl()){ toast('Publication impossible hors ligne','err'); return; }
   const r=rsEnregistrer(true); if(!r) return;
-  if(rsControles(r).some(c=>c.n==='erreur')){ toast('Corrigez d’abord les erreurs','err'); rsFiche(); return; }
-  if(r.statut!=='validé'){
-    if(!confirm('Publier maintenant sur '+(res==='instagram'?'Instagram':'Facebook')+' ? Le post sera marqué validé.')) return;
-    r.statut='validé'; r.valideAt=new Date().toISOString(); const s=DB.save('contenus',r); _rs.edit=JSON.parse(JSON.stringify(s)); _rs.editBase=JSON.stringify(rsForme(s));
-  } else if(!confirm('Publier maintenant sur '+(res==='instagram'?'Instagram':'Facebook')+' ?')) return;
-  toast('Publication en cours… (jusqu’à une minute pour une vidéo)','ok');
+  if(rsControles(r).some(c=>c.n==='erreur')){ toast('Corrigez d’abord ce qui est en rouge','err'); rsFiche(); return; }
+  const nom=res==='instagram'?'Instagram':'Facebook';
+  if(!confirm('Publier maintenant sur '+nom+' ?')) return;
+  if(r.statut!=='validé'){ r.statut='validé'; r.valideAt=new Date().toISOString(); const s=DB.save('contenus',r); _rs.edit=JSON.parse(JSON.stringify(s)); _rs.editBase=JSON.stringify(rsForme(s)); }
+  toast('Publication en cours… jusqu’à une minute pour une vidéo','ok');
   const j=await cloudPost({action:'contenuPublier',row:_rs.edit,reseau:res,forcer:!!forcer});
   if(j&&j.entree) _rs.pubs[_rs.edit.id+'|'+res]=j.entree;
-  if(j&&j.ok) toast(j.entree&&j.entree.etat==='préparation'?'Vidéo envoyée : Meta la prépare, elle sera publiée au prochain passage':'Publié','ok');
-  else toast('Échec : '+((j&&(j.error||(j.entree&&j.entree.erreur)))||'serveur injoignable'),'err');
+  if(j&&j.ok) toast(j.entree&&j.entree.etat==='préparation'?'Vidéo envoyée : Instagram la traite, elle sera publiée dans quelques minutes':'Publié sur '+nom,'ok');
+  else toast('Pas publié : '+((j&&(j.error||(j.entree&&j.entree.erreur)))||'serveur injoignable'),'err');
   await rsCharger(true); rsFiche();
 }
 async function rsMarquer(res,etat){
   if(!cloudUrl()){ toast('Hors ligne','err'); return; }
-  let url='';
-  if(etat==='manuel' && ['google','story'].includes(res)) url=prompt('Lien du post (facultatif) :','')||'';
-  const j=await cloudPost({action:'contenuMarquer',id:_rs.edit.id,reseau:res,etat,url});
-  if(j&&j.ok){ if(j.entree) _rs.pubs[_rs.edit.id+'|'+res]=j.entree; else delete _rs.pubs[_rs.edit.id+'|'+res]; toast('C’est noté','ok'); }
+  const j=await cloudPost({action:'contenuMarquer',id:_rs.edit.id,reseau:res,etat,url:''});
+  if(j&&j.ok){ if(j.entree) _rs.pubs[_rs.edit.id+'|'+res]=j.entree; else delete _rs.pubs[_rs.edit.id+'|'+res]; toast(etat==='effacer'?'Remis à publier':'Noté comme publié','ok'); }
   else toast('Pas enregistré : serveur injoignable','err');
   updateBadges(); rsFiche();
 }
-function rsSupprimer(){ const r=_rs.edit; if(!r) return;
-  if(rsActifs(r).some(x=>rsFait(r,x.k)) && !confirm('Ce post a déjà été publié. Le supprimer du planning (il reste en ligne sur les réseaux) ?')) return;
-  if(!confirm('Supprimer « '+(r.titre||r.id)+' » du planning ?')) return;
-  DB.remove('contenus',r.id); _rs.edit=null; closeModal(true); toast('Post supprimé du planning','ok'); updateBadges(); RENDERERS.reseaux(); }
+function rsSupprimerId(id){ const r=DB.get('contenus',id); if(!r) return;
+  if(rsUnFait(r)&&!confirm('Ce post est déjà publié. Le retirer du planning ? (il reste en ligne sur les réseaux)')) return;
+  if(!confirm('Supprimer « '+(r.titre||'ce post')+' » ?')) return;
+  DB.remove('contenus',id); _rs.annuler=null; toast('Supprimé','ok'); updateBadges(); RENDERERS.reseaux(); }
+function rsSupprimer(){ const r=_rs.edit; if(!r) return; const id=r.id; closeModal(true); _rs.edit=null; rsSupprimerId(id); }
 
 /* ───── Connexion Meta ───── */
 function rsConnexion(choix){
   const m=_rs.meta||{};
   const pages=choix?`<div class="form-group"><label class="form-label">Page à utiliser</label><select class="form-control" id="rs-page">${choix.map(p=>`<option value="${esc(p.id)}">${esc(p.nom)}</option>`).join('')}</select></div>`:'';
-  openModal('Connexion Meta (Facebook et Instagram)',`
-    ${m.connecte?`<div class="panel">Connecté à <strong>${esc(m.pageNom)}</strong>${m.igNom?' et <strong>@'+esc(m.igNom)+'</strong>':''} depuis le ${esc(fmtDateShort(m.connecteAt))}.${m.erreur?'<div style="color:var(--err,#e55)">'+esc(m.erreur)+'</div>':''}</div>`:''}
+  openModal('Connexion à Facebook et Instagram',`
+    ${m.connecte?`<div class="panel">Connecté à <strong>${esc(m.pageNom)}</strong>${m.igNom?' et <strong>@'+esc(m.igNom)+'</strong>':''} depuis le ${esc(fmtDateShort(m.connecteAt))}.${m.erreur?'<div class="rs-err">'+esc(m.erreur)+'</div>':''}</div>`:''}
     <ol class="td-dim" style="padding-left:18px;line-height:1.6">
-      <li>Vérifiez dans l’app Instagram que <strong>louismagie_</strong> est un compte professionnel relié à la page Facebook.</li>
+      <li>Dans l’app Instagram, vérifiez que <strong>louismagie_</strong> est un compte professionnel relié à la page Facebook.</li>
       <li>Sur <a href="https://developers.facebook.com/apps" target="_blank">developers.facebook.com/apps</a>, créez une application de type « Business ». Elle peut rester en mode développement.</li>
       <li>Dans <a href="https://developers.facebook.com/tools/explorer" target="_blank">l’explorateur de l’API Graph</a>, choisissez l’application, cochez <code>pages_show_list</code>, <code>pages_read_engagement</code>, <code>pages_manage_posts</code>, <code>instagram_basic</code>, <code>instagram_content_publish</code>, puis « Generate Access Token ».</li>
-      <li>Collez ce jeton ci-dessous avec l’identifiant et la clé secrète de l’application (Paramètres → Général). Ils restent sur le serveur du CRM et ne repassent jamais par vos appareils.</li>
+      <li>Collez ce jeton ici, avec l’identifiant et la clé secrète de l’application (Paramètres → Général). Ils restent sur le serveur du CRM.</li>
     </ol>
     <div class="form-grid">
       <div class="form-group"><label class="form-label">Identifiant de l’application</label><input class="form-control" id="rs-app" autocomplete="off"></div>
-      <div class="form-group"><label class="form-label">Clé secrète de l’application</label><input class="form-control" id="rs-sec" type="password" autocomplete="off"></div>
+      <div class="form-group"><label class="form-label">Clé secrète</label><input class="form-control" id="rs-sec" type="password" autocomplete="off"></div>
     </div>
-    <div class="form-group"><label class="form-label">Jeton d’accès (explorateur)</label><input class="form-control" id="rs-tok" type="password" autocomplete="off"></div>
+    <div class="form-group"><label class="form-label">Jeton de l’explorateur</label><input class="form-control" id="rs-tok" type="password" autocomplete="off"></div>
     ${pages}`,
-    `${m.connecte?'<button class="btn btn-danger" onclick="rsDeconnecter()">Déconnecter</button>':''}
+    `<div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;width:100%">${m.connecte?'<button class="btn btn-danger" onclick="rsDeconnecter()">Déconnecter</button>':''}
      <button class="btn btn-ghost" onclick="closeModal()">Fermer</button>
-     <button class="btn btn-or" onclick="rsConnecter()">Connecter</button>`);
+     <button class="btn btn-or" onclick="rsConnecter()">Connecter</button></div>`);
 }
 async function rsConnecter(){
-  const p={action:'metaConnecter',appId:(document.getElementById('rs-app')||{}).value||'',appSecret:(document.getElementById('rs-sec')||{}).value||'',
-    userToken:(document.getElementById('rs-tok')||{}).value||''};
+  const g=id=>(document.getElementById(id)||{}).value||'';
+  const p={action:'metaConnecter',appId:g('rs-app'),appSecret:g('rs-sec'),userToken:g('rs-tok')};
   const sel=document.getElementById('rs-page'); if(sel) p.pageId=sel.value;
   if(!p.userToken){ toast('Collez le jeton de l’explorateur','err'); return; }
-  toast('Connexion à Meta…','ok');
+  toast('Connexion…','ok');
   const j=await cloudPost(p);
-  if(j&&j.choisir){ rsConnexion(j.choisir); document.getElementById('rs-app').value=p.appId; document.getElementById('rs-sec').value=p.appSecret; document.getElementById('rs-tok').value=p.userToken; toast(j.error,'ok'); return; }
+  if(j&&j.choisir){ rsConnexion(j.choisir); document.getElementById('rs-app').value=p.appId; document.getElementById('rs-sec').value=p.appSecret; document.getElementById('rs-tok').value=p.userToken; toast('Plusieurs pages : choisissez celle de LouisMagie','ok'); return; }
   if(!j||!j.ok){ toast('Connexion refusée : '+((j&&j.error)||'serveur injoignable'),'err'); return; }
   _rs.meta=j.meta; closeModal(true); toast(j.meta.avertissement||('Connecté à '+j.meta.pageNom+(j.meta.igNom?' et @'+j.meta.igNom:'')),'ok');
   RENDERERS.reseaux();
 }
-async function rsDeconnecter(){ if(!confirm('Déconnecter Meta ? Plus rien ne partira automatiquement.')) return;
-  const j=await cloudPost({action:'metaDeconnecter'}); if(j&&j.ok){ _rs.meta=j.meta; closeModal(true); RENDERERS.reseaux(); toast('Meta déconnecté','ok'); } }
+async function rsDeconnecter(){ if(!confirm('Déconnecter Facebook et Instagram ? Plus rien ne partira tout seul.')) return;
+  const j=await cloudPost({action:'metaDeconnecter'}); if(j&&j.ok){ _rs.meta=j.meta; closeModal(true); RENDERERS.reseaux(); toast('Déconnecté','ok'); } }
 
 (async function boot(){
   try{ applyTheme(localStorage.getItem('lm_theme')||'dark'); }catch(_){ applyTheme('dark'); }
