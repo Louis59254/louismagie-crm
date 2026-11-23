@@ -3921,8 +3921,8 @@ RENDERERS['devis-create']=function(params){
     ['id','cle','_base','updatedAt','statut','dateEnvoi','dateAcceptation','acompteRecu','dateAcompte','signataire','signatureImg','signedAt','relances','mailSignatureFait','signToken','shareToken','token','notesSuivi','docs','paiements'].forEach(k=>delete d[k]);
     d.id=''; d.statut='Brouillon'; d.dateCreation=todayISO();
   }
-  else if(cloudUrl()&&_pullOk) cloudReprise(true);   // nouveau devis : on récupère d'abord les numéros pris sur l'autre appareil
   else {
+    if(cloudUrl()&&_pullOk) cloudReprise(true);   // nouveau devis : on récupère d'abord les numéros pris sur l'autre appareil (en arrière-plan)
     d={id:'',dateCreation:todayISO(),idClient:'',nomClient:'',email:'',tel:'',dateEvenement:'',creneau:'Soirée',horaire:'',lieu:'',distanceKm:0,nbInvites:'',prestations:[{label:'',prix:0,duree:''}],montantHT:0,fraisDeplacement:0,tva:0,montantTTC:0,remise:0,acomptePct:(cfg.acompteDefautPct??30),statut:'Brouillon',dateEnvoi:'',dateAcceptation:'',notes:'',idDemandeOrigine:''};
     if(params.demandeId){ const dem=DB.get('demandes',params.demandeId); if(dem){
       Object.assign(d,{nomClient:dem.nom,email:dem.email,tel:dem.tel,typeEvenement:dem.typeEvenement||'',dateEvenement:dem.dateEvenement,creneau:dem.creneau||'Soirée',lieu:dem.lieu,distanceKm:dem.distanceKm||0,nbInvites:dem.nbInvites,idDemandeOrigine:dem.id,prestations:[{label:dem.prestationSouhaitee||'',prix:0,duree:dem.duree||''}]}); } }
