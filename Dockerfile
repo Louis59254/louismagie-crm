@@ -11,6 +11,8 @@ RUN apt-get update \
 # Sert crm.html comme page d'accueil + l'API PHP
 COPY crm.html /var/www/html/index.html
 COPY api.php  /var/www/html/api.php
+# Module Réseaux (publication Facebook / Instagram), chargé par api.php
+COPY reseaux.php /var/www/html/reseaux.php
 COPY robots.txt /var/www/html/robots.txt
 # App sur l'écran d'accueil + notifications push
 COPY sw.js manifest.webmanifest icon-192.png icon-512.png apple-touch-icon.png /var/www/html/

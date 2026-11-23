@@ -33,7 +33,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') { exit; }
 
 $ENTITIES = ['demandes','devis','prestations','factures','clients','relances',
              'activite','mails','catalogue','recettes','declarations','planifs','templates',
-             'projets','magiciens','effets','segments','campagnes','rdv'];
+             'projets','magiciens','effets','segments','campagnes','rdv','contenus'];
 
 function out($o){ echo json_encode($o, JSON_UNESCAPED_UNICODE); exit; }
 
@@ -865,7 +865,7 @@ $estFormulaire = !empty($_POST);
 $req = (!$estFormulaire && $raw !== '') ? json_decode($raw, true) : [];
 if (!is_array($req)) $req = [];
 $action = $_GET['action'] ?? ($req['action'] ?? '');
-$auth   = $_GET['auth']   ?? ($req['auth']   ?? '');   // sha256(mot de passe) envoyé par le CRM
+$auth   = $_GET['auth']   ?? ($req['auth']   ?? ($_POST['auth'] ?? ''));   // sha256(mot de passe) envoyé par le CRM (POST : envoi de médias)
 $token  = $_GET['token']  ?? ($req['token']  ?? '');   // legacy / Apps Script
 
 // Un corps JSON illisible (POST tronqué, JSON invalide) ne doit JAMAIS passer pour un succès
@@ -878,6 +878,12 @@ if ($action === '') out(['ok'=>false, 'error'=>'action manquante']);
 
 if (!is_dir($DATA_DIR)) @mkdir($DATA_DIR, 0775, true);
 if (!is_dir($DATA_DIR)) out(['ok'=>false, 'error'=>'dossier data non créable']);
+
+/* Module Réseaux (fichier à part) : une erreur dedans ne doit jamais couper le reste du CRM */
+$RESEAUX_KO = '';
+try { require_once __DIR__.'/reseaux.php'; } catch (Throwable $e) { $RESEAUX_KO = $e->getMessage(); error_log('reseaux.php : '.$RESEAUX_KO); }
+// Visuels des posts : lecture publique (Meta les télécharge), nom = empreinte du fichier, impossible à deviner
+if ($action === 'media') { if (function_exists('rsMediaServir')) rsMediaServir($DATA_DIR); http_response_code(404); exit; }
 
 /* ===== Pixel de suivi d'ouverture (public, pas d'auth) ===== */
 if ($action === 'track') {
@@ -1986,6 +1992,8 @@ if ($action === 'runScheduled') {
   @file_put_contents("$DATA_DIR/_cron_dernier.txt", gmdate('c'));   // preuve que la tâche planifiée de Coolify tourne
   $rappelsPush = pushRappels($DATA_DIR);   // récap du matin + rendez-vous dans l'heure (best effort)
   $sauvegarde = sauvegardeEmail($DATA_DIR, $ENTITIES);   // copie hors serveur, dans la boîte mail de Louis
+  $reseaux = null;   // module Réseaux : posts validés arrivés à leur heure (n'interrompt jamais les emails)
+  if (function_exists('reseauxCron')) { try { $reseaux = reseauxCron($DATA_DIR); } catch (Throwable $e) { $reseaux = ['erreur'=>$e->getMessage()]; } }
   // Allège les envois déjà traités (anciennes campagnes comprises) : une écriture au plus, aucune si rien à faire.
   // La version complète reste dans _historique (historiser, appelé par majTable).
   $alleges = (int)majTable($DATA_DIR, 'planifs', function(&$t) {
@@ -2075,7 +2083,7 @@ if ($action === 'runScheduled') {
   }
   if ($lock) { @flock($lock, LOCK_UN); @fclose($lock); }
   out(['ok'=>$arret==='','sent'=>$sent,'fail'=>$fail,'reportes'=>$reportes,'incertains'=>$incertains,'perimes'=>$perimes,
-       'desabonnes'=>$skip,'sautes'=>$sautes,'alleges'=>$alleges,'arret'=>$arret,'plafond'=>$plafond,'total'=>count($arr),'rappelsPush'=>$rappelsPush,'sauvegarde'=>$sauvegarde]);
+       'desabonnes'=>$skip,'sautes'=>$sautes,'alleges'=>$alleges,'arret'=>$arret,'plafond'=>$plafond,'total'=>count($arr),'rappelsPush'=>$rappelsPush,'sauvegarde'=>$sauvegarde,'reseaux'=>$reseaux]);
 }
 
 /* ===== Diagnostic SMTP (clé requise) ===== */
@@ -2478,6 +2486,12 @@ switch ($action) {
     if ($res === null) out(['ok'=>false,'error'=>'écriture impossible']);
     $ds = desabosUnion($DATA_DIR, desabosLire($DATA_DIR));
     out(['ok'=>true, 'changed'=>$res['changed'], 'entree'=>$res['entree'], 'desabos'=>($ds ?: new stdClass())]);
+  }
+
+  case 'mediaAjouter': case 'mediaExiste': case 'metaEtat': case 'metaConnecter': case 'metaDeconnecter':
+  case 'publications': case 'contenuPublier': case 'contenuMarquer': {
+    if (!function_exists('reseauxAction')) out(['ok'=>false, 'error'=>'module Réseaux indisponible'.($RESEAUX_KO !== '' ? ' : '.$RESEAUX_KO : '')]);
+    reseauxAction($action, $req, $DATA_DIR);
   }
 
   default: out(['ok'=>false, 'error'=>'action inconnue: '.$action]);

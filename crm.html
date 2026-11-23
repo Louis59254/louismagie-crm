@@ -410,6 +410,7 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
       <div class="sb-item" onclick="nav('factures')" id="nav-factures"><span class="ic">🧾</span>Factures <span class="badge-count" id="badge-factures" style="display:none">0</span></div>
       <div class="sb-item" onclick="nav('clients')" id="nav-clients"><span class="ic">👥</span>Clients & partenaires</div>
       <div class="sb-item" onclick="nav('marketing')" id="nav-marketing"><span class="ic">📣</span>Marketing <span class="badge-count" id="badge-marketing" style="display:none">0</span></div>
+      <div class="sb-item" onclick="nav('reseaux')" id="nav-reseaux"><span class="ic">📲</span>Réseaux <span class="badge-count" id="badge-reseaux" style="display:none">0</span></div>
       <div class="sb-item" onclick="nav('compta')" id="nav-compta"><span class="ic">📊</span>Compta / URSSAF <span class="badge-count" id="badge-compta" style="display:none">0</span></div>
       <div class="sb-item" onclick="nav('projets')" id="nav-projets"><span class="ic">🎭</span>Imagine <span class="badge-count" id="badge-projets" style="display:none">0</span></div>
       <div class="sb-section">Configuration</div>
@@ -454,6 +455,7 @@ select.form-control{background-image:url("data:image/svg+xml,%3Csvg xmlns='http:
       <div class="view" id="view-clients"></div>
       <div class="view" id="view-devis-create"></div>
       <div class="view" id="view-marketing"></div>
+      <div class="view" id="view-reseaux"></div>
       <div class="view" id="view-compta"></div>
       <div class="view" id="view-projets"></div>
       <div class="view" id="view-projet"></div>
@@ -480,7 +482,7 @@ const LOGO_B64="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAKAAAACgCAYAAACLz2
    ════════════════════════════════════════════════════ */
 
 /* ───── Couche données (abstraction) ───── */
-const ENTITIES = ['demandes','devis','prestations','factures','clients','relances','activite','mails','catalogue','recettes','declarations','planifs','templates','projets','magiciens','effets','segments','campagnes','rdv'];
+const ENTITIES = ['demandes','devis','prestations','factures','clients','relances','activite','mails','catalogue','recettes','declarations','planifs','templates','projets','magiciens','effets','segments','campagnes','rdv','contenus'];
 const LS_PREFIX = 'lm_crm_';
 /* ═══ Fusion multi-appareils ═══════════════════════════════════════════
    Rien n'est jamais remplacé en bloc : chaque enregistrement est arbitré
@@ -940,7 +942,7 @@ function authStore(hash){ const stay=(document.getElementById('pwd-stay')||{}).c
   if(stay){ localStorage.setItem('lm_authh',hash); localStorage.setItem('lm_auth','1'); } }
 function doLogout(){ ['lm_auth','lm_authh'].forEach(k=>{ sessionStorage.removeItem(k); localStorage.removeItem(k); }); location.reload(); }
 function ouvrirLienProfond(){
-  const v=(location.hash||'').match(/^#(agenda|demandes)$/);
+  const v=(location.hash||'').match(/^#(agenda|demandes|reseaux)$/);
   if(v&&document.getElementById('app').style.display==='flex'){ try{ history.replaceState(null,'',location.pathname+location.search); }catch(_){} nav(v[1]); return; }
   const m=(location.hash||'').match(/^#(devis|projet|rdv)=([A-Za-z0-9._-]+)$/); if(!m) return;
   if(document.getElementById('app').style.display!=='flex') return;   // après connexion
@@ -1058,6 +1060,7 @@ function updateBadges(){
   setBadge('badge-demandes',nd); setBadge('badge-devis',ndv); setBadge('badge-factures',nf);
   setBadge('badge-compta',trimsADeclarer().length);
   try{ setBadge('badge-marketing',mktRappels().length); }catch(_){}
+  try{ setBadge('badge-reseaux',rsBadge()); }catch(_){}
   try{ const today=todayISO(); setBadge('badge-projets',DB.all('projets').filter(x=>x.date&&x.date>=today&&!['Annulé','Facturé'].includes(x.statut)).length); }catch(_){}
 }
 function setBadge(id,n){ const el=document.getElementById(id); if(!el)return;
@@ -7466,6 +7469,328 @@ function showDocPreview(doc,title,filename){
 }
 function ficheMagicienOpen(pid,mid){ const doc=pdfFicheMagicien(pid,mid); if(!doc)return; showDocPreview(doc,'Fiche · '+magNom((getP(pid).equipe.find(x=>x.id===mid)||{}).magicienId),'fiche-'+magNom((getP(pid).equipe.find(x=>x.id===mid)||{}).magicienId)); }
 function ficheProjetOpen(pid){ const doc=pdfFicheProjet(pid); if(!doc)return; showDocPreview(doc,'Fiche projet · '+(getP(pid).nom||''),'fiche-projet'); }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Module « Réseaux » : planning, relecture, validation et publication
+   des posts Facebook / Instagram / Google / Story. Entité 'contenus'
+   (synchronisée), registre de publication côté serveur (action publications).
+   Les posts arrivent du Mac (pole-contenu/envoyer_crm.py) ; Louis relit,
+   corrige, valide. Un post validé part à son heure si la publication
+   automatique est active (Réglages du module), sinon au clic.
+   ═══════════════════════════════════════════════════════════════════════ */
+VIEW_TITLES.reseaux='Réseaux sociaux';
+const RS_RES=[
+  {k:'facebook', nom:'Facebook', court:'FB', api:true,  max:63206},
+  {k:'instagram',nom:'Instagram',court:'IG', api:true,  max:2200},
+  {k:'google',   nom:'Google Business',court:'G', api:false, max:1500},
+  {k:'story',    nom:'Story Instagram',court:'St', api:false, max:0},
+];
+let _rs={filtre:'avenir', meta:null, pubs:{}, charge:0, enCours:false, edit:null, editBase:''};
+
+function rsMediaUrl(nom){ const u=cloudUrl(); return u&&nom ? u+'?action=media&f='+encodeURIComponent(nom) : ''; }
+function rsPub(row,res){ return _rs.pubs[row.id+'|'+res]||null; }
+function rsEtat(row,res){ const p=rsPub(row,res); return p&&p.etat ? p.etat : ''; }
+function rsActifs(row){ return RS_RES.filter(r=>row.reseaux&&row.reseaux[r.k]&&row.reseaux[r.k].actif); }
+function rsFait(row,res){ return ['publié','manuel'].includes(rsEtat(row,res)); }
+function rsToutFait(row){ const a=rsActifs(row); return a.length>0 && a.every(r=>rsFait(row,r.k)); }
+function rsProbleme(row){ return rsActifs(row).some(r=>['échec','incertain'].includes(rsEtat(row,r.k))); }
+function rsDateHeure(row){ return (row.date||'')+'T'+(row.heure||'12:00'); }
+function rsEnRetard(row){ return row.statut==='validé' && !rsToutFait(row) && rsDateHeure(row) < (todayISO()+'T'+new Date().toTimeString().slice(0,5)); }
+
+/* ───── Contrôles avant validation ───── */
+function rsControles(row){
+  const L=[]; const err=m=>L.push({n:'erreur',m}); const av=m=>L.push({n:'avert',m});
+  if(row.statut==='à filmer') err('Vidéo à tourner : le post n’a pas encore de visuel.');
+  if(!row.date) err('Pas de date.');
+  const actifs=rsActifs(row);
+  if(!actifs.length) err('Aucun réseau coché.');
+  actifs.forEach(r=>{
+    const c=row.reseaux[r.k]; const t=String(c.texte||''); const medias=(c.medias||[]);
+    if(r.k!=='story' && !t.trim()) err(r.nom+' : texte vide.');
+    if(r.max && t.length>r.max) err(r.nom+' : '+t.length+' caractères, '+r.max+' au plus.');
+    if(c.format!=='lien' && !medias.length) err(r.nom+' : pas de visuel.');
+    if(r.k==='facebook' && c.format==='lien' && !c.lien) err('Facebook : lien manquant.');
+    if(r.k==='instagram'){
+      const ht=(t.match(/#[\p{L}\p{N}_]+/gu)||[]).length;
+      if(ht>30) err('Instagram : '+ht+' hashtags, 30 au plus.'); else if(ht>5) av('Instagram : '+ht+' hashtags, 3 à 5 suffisent.');
+      if(medias.length>10) err('Instagram : '+medias.length+' images, 10 au plus dans un carrousel.');
+      const v=(row.medias||[]).find(m=>m.nom===medias[0]); if(v&&v.duree&&v.duree>90) err('Instagram : vidéo de '+Math.round(v.duree)+' s, 90 s au plus pour un Reel.');
+    }
+    if(r.k==='google' && /0[1-9](?:[ .-]?\d{2}){4}/.test(t)) av('Google : un numéro de téléphone dans le texte fait souvent refuser le post.');
+    if(/[—–]/.test(t)) av(r.nom+' : tiret cadratin dans le texte.');
+    if(/louismagie\.fr\/[^\s]*/.test(t) && !/utm_source=/.test(t) && r.k==='facebook') av('Facebook : lien vers le site sans suivi UTM.');
+  });
+  if(row.date && row.date<todayISO() && !rsToutFait(row)) av('Date passée : le post n’est pas parti partout.');
+  const memeJour=DB.all('contenus').filter(x=>x.id!==row.id&&x.date===row.date&&x.statut!=='à filmer'&&rsActifs(x).some(a=>actifs.some(b=>b.k===a.k)));
+  if(row.date && memeJour.length) av('Un autre post est prévu le même jour sur le même réseau ('+memeJour.map(x=>x.titre).join(', ')+').');
+  const auto=DB.config().reseauxAuto!==false;
+  if(auto && actifs.some(r=>r.api) && _rs.meta && !_rs.meta.connecte) av('Meta n’est pas connecté : Facebook et Instagram ne partiront pas tout seuls.');
+  return L;
+}
+
+/* ───── Chargement des états serveur (connexion Meta + registre) ───── */
+async function rsCharger(forcer){
+  if(!cloudUrl()||_rs.enCours) return;
+  if(!forcer && Date.now()-_rs.charge<60000) return;
+  _rs.enCours=true;
+  try{
+    const [m,p]=await Promise.all([cloudPost({action:'metaEtat'}),cloudPost({action:'publications'})]);
+    if(m&&m.ok) _rs.meta=m.meta;
+    if(p&&p.ok) _rs.pubs=p.publications||{};
+    _rs.charge=Date.now();
+  }finally{ _rs.enCours=false; }
+  if(_currentView==='reseaux'&&!document.getElementById('modal-bg').classList.contains('open')) RENDERERS.reseaux();
+  updateBadges();
+}
+function rsBadge(){ return DB.all('contenus').filter(r=>r.statut==='à valider'||rsProbleme(r)).length; }
+
+/* ───── Vue principale ───── */
+const RS_STATUT_BADGE={'à valider':'nouveau','validé':'confirmee','à filmer':'brouillon','archivé':'annulee'};
+const RS_ETAT_TXT={'publié':['✓','publié'],'manuel':['✓','publié à la main'],'préparation':['⏳','Meta prépare la vidéo'],'envoi':['⏳','envoi en cours'],
+  'échec':['⚠','échec'],'incertain':['?','à vérifier']};
+function rsPastilles(row){
+  return RS_RES.filter(r=>row.reseaux&&row.reseaux[r.k]).map(r=>{
+    const c=row.reseaux[r.k]; if(!c.actif) return '';
+    const e=rsEtat(row,r.k); const t=RS_ETAT_TXT[e];
+    const cls=['publié','manuel'].includes(e)?'payee':(['échec','incertain'].includes(e)?'refuse':(e?'encours':'brouillon'));
+    return `<span class="badge ${cls}" title="${esc(r.nom+(t?' : '+t[1]:' : à publier'))}">${t?t[0]+' ':''}${r.court}</span>`;
+  }).join(' ');
+}
+function rsSemaine(ds){ const d=new Date(ds+'T12:00:00'); const l=new Date(d); l.setDate(d.getDate()-((d.getDay()+6)%7));
+  return l.toISOString().slice(0,10); }
+function rsJour(ds,h){ const d=new Date(ds+'T12:00:00'); if(isNaN(d)) return '—';
+  return d.toLocaleDateString('fr-FR',{weekday:'short',day:'numeric',month:'short'})+(h?' · '+h:''); }
+function rsVignette(row){
+  const m=(row.reseaux&&(row.reseaux.instagram||row.reseaux.facebook))||{};
+  let nom=(m.medias||[])[0]; if(nom&&/\.mp4$/.test(nom)) nom=m.couverture||'';
+  const u=rsMediaUrl(nom);
+  return u?`<img src="${u}" loading="lazy" alt="" style="width:46px;height:58px;object-fit:cover;border-radius:6px;display:block">`
+          :`<div style="width:46px;height:58px;border-radius:6px;border:1px dashed var(--anthr,#444)"></div>`;
+}
+
+RENDERERS.reseaux=function(){
+  const v=document.getElementById('view-reseaux'); if(!v) return;
+  rsCharger(false);
+  const tous=DB.all('contenus').filter(r=>r.statut!=='archivé');
+  const today=todayISO(), mois=today.slice(0,7);
+  const nAval=tous.filter(r=>r.statut==='à valider').length;
+  const nVal=tous.filter(r=>r.statut==='validé'&&!rsToutFait(r)).length;
+  const nPub=tous.filter(r=>(r.date||'').slice(0,7)===mois&&rsToutFait(r)).length;
+  const nPb=tous.filter(rsProbleme).length;
+  const filtres={
+    avenir: r=>!rsToutFait(r)||r.date>=today,
+    avalider: r=>r.statut==='à valider',
+    problemes: r=>rsProbleme(r)||rsEnRetard(r),
+    publies: r=>rsToutFait(r),
+    tout: ()=>true,
+  };
+  const liste=tous.filter(filtres[_rs.filtre]||filtres.avenir).sort((a,b)=>rsDateHeure(a).localeCompare(rsDateHeure(b)));
+  const m=_rs.meta, auto=DB.config().reseauxAuto!==false;
+  const metaTxt=!cloudUrl()?'Hors ligne : la publication passe par le serveur du CRM.'
+    :!m?'Vérification de la connexion Meta…'
+    :m.connecte?`Connecté à <strong>${esc(m.pageNom)}</strong>${m.igNom?' et <strong>@'+esc(m.igNom)+'</strong>':' (aucun compte Instagram relié)'}${m.erreur?' · <span style="color:var(--err,#e55)">'+esc(m.erreur)+'</span>':''}`
+    :'Meta n’est pas connecté : rien ne part automatiquement sur Facebook et Instagram.';
+  let lignes='', sem=null;
+  liste.forEach(r=>{
+    const s=r.date?rsSemaine(r.date):'';
+    if(s!==sem){ sem=s; lignes+=`<tr><td colspan="6" class="td-dim" style="padding-top:14px;font-weight:600">${s?'Semaine du '+new Date(s+'T12:00:00').toLocaleDateString('fr-FR',{day:'numeric',month:'long'}):'Sans date'}</td></tr>`; }
+    const ctr=rsControles(r); const ne=ctr.filter(c=>c.n==='erreur').length, na=ctr.length-ne;
+    const retard=rsEnRetard(r);
+    lignes+=`<tr style="cursor:pointer" onclick="rsOuvrir('${esc(r.id)}')">
+      <td style="white-space:nowrap">${esc(rsJour(r.date,r.heure))}${retard?'<div class="td-dim" style="color:var(--err,#e55)">en retard</div>':''}</td>
+      <td>${rsVignette(r)}</td>
+      <td><div class="td-strong">${esc(r.titre||r.id)}</div><div class="td-dim">${esc(r.serie||'')}${r.nouvelleVersion?' · nouvelle version reçue du Mac':''}</div></td>
+      <td>${rsPastilles(r)}</td>
+      <td><span class="badge ${RS_STATUT_BADGE[r.statut]||'brouillon'}">${esc(r.statut||'')}</span></td>
+      <td class="td-dim" title="${esc(ctr.map(c=>c.m).join('\n'))}">${ne?'⛔ '+ne:''} ${na?'⚠ '+na:''}</td></tr>`;
+  });
+  const opt=(k,l)=>`<option value="${k}"${_rs.filtre===k?' selected':''}>${l}</option>`;
+  v.innerHTML=`
+    <div class="kpi-grid">
+      ${kpi('or','À valider',nAval,'relisez et validez')}
+      ${kpi('info','Validés à venir',nVal,auto?'partent à leur heure':'publication au clic')}
+      ${kpi('vert','Publiés ce mois',nPub)}
+      ${kpi(nPb?'rouge':'vert','Problèmes',nPb,nPb?'échec ou à vérifier':'rien à signaler')}
+    </div>
+    <div class="panel" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <div style="flex:1;min-width:220px">${metaTxt}</div>
+      <label style="display:flex;gap:6px;align-items:center;white-space:nowrap"><input type="checkbox" ${auto?'checked':''} onchange="rsAuto(this.checked)"> Publication automatique des posts validés</label>
+      <button class="btn btn-ghost btn-sm" onclick="rsConnexion()">${m&&m.connecte?'Connexion Meta':'Connecter Meta'}</button>
+    </div>
+    <div class="table-wrap"><div class="table-header">
+      <div class="table-title">Planning des réseaux</div>
+      <div class="table-filters">
+        <select class="filter-input" onchange="_rs.filtre=this.value;RENDERERS.reseaux()">
+          ${opt('avenir','À venir et en cours')}${opt('avalider','À valider')}${opt('problemes','Problèmes')}${opt('publies','Publiés')}${opt('tout','Tout')}
+        </select>
+        <button class="btn btn-ghost btn-sm" onclick="rsCharger(true)">↻ Actualiser</button>
+      </div></div>
+      <div class="table-scroll"><table><tbody>${lignes||'<tr><td class="td-dim" style="padding:18px">Aucun post dans ce filtre. Les posts arrivent du Mac avec envoyer_crm.py.</td></tr>'}</tbody></table></div>
+    </div>`;
+};
+function rsAuto(on){ const c=DB.config(); c.reseauxAuto=!!on; DB.saveConfig(c);
+  toast(on?'Les posts validés partiront à leur heure':'Publication au clic uniquement','ok'); RENDERERS.reseaux(); }
+
+/* ───── Fiche d'un post ───── */
+function rsOuvrir(id){
+  const row=DB.get('contenus',id); if(!row) return;
+  _rs.edit=JSON.parse(JSON.stringify(row)); _rs.editBase=JSON.stringify(rsForme(row));
+  rsFiche();
+}
+function rsForme(r){ return {date:r.date||'',heure:r.heure||'',reseaux:RS_RES.map(x=>{ const c=(r.reseaux||{})[x.k]; return c?[!!c.actif,c.texte||'']:null; })}; }
+function rsLire(){   // formulaire → fiche en cours d'édition
+  const r=_rs.edit; if(!r) return r;
+  const d=document.getElementById('rs-date'), h=document.getElementById('rs-heure');
+  if(d) r.date=d.value; if(h) r.heure=h.value;
+  RS_RES.forEach(x=>{ const c=r.reseaux&&r.reseaux[x.k]; if(!c) return;
+    const t=document.getElementById('rs-t-'+x.k), a=document.getElementById('rs-a-'+x.k);
+    if(t) c.texte=t.value; if(a) c.actif=a.checked; });
+  return r;
+}
+function rsModifie(){ return _rs.edit && JSON.stringify(rsForme(rsLire()))!==_rs.editBase; }
+function rsFiche(){
+  const r=_rs.edit; const ctr=rsControles(r);
+  const medias=(r.medias||[]).filter(m=>m.role!=='couverture');
+  const media=medias.map(m=>{ const u=rsMediaUrl(m.nom); if(!u) return '';
+    return /\.mp4$/.test(m.nom)?`<video src="${u}" controls preload="metadata" style="height:150px;border-radius:8px"></video>`
+      :`<a href="${u}" target="_blank" title="${esc(m.role||'')}"><img src="${u}" loading="lazy" style="height:150px;border-radius:8px"></a>`; }).join('');
+  const sections=RS_RES.filter(x=>r.reseaux&&r.reseaux[x.k]).map(x=>{
+    const c=r.reseaux[x.k]; const p=rsPub(r,x.k); const e=p?p.etat:'';
+    const etat=e?`<span class="badge ${['publié','manuel'].includes(e)?'payee':['échec','incertain'].includes(e)?'refuse':'encours'}">${esc((RS_ETAT_TXT[e]||['',e])[1])}</span>${p.publieAt?' <span class="td-dim">'+esc(fmtDateShort(p.publieAt))+'</span>':''}${p.url?' · <a href="'+esc(p.url)+'" target="_blank">voir le post</a>':''}${p.erreur?'<div class="td-dim" style="color:var(--err,#e55)">'+esc(p.erreur)+'</div>':''}`:'<span class="td-dim">pas encore publié</span>';
+    let btn='';
+    if(x.api){
+      if(!e||e==='échec') btn=`<button class="btn btn-or btn-sm" onclick="rsPublier('${x.k}')">${e==='échec'?'Réessayer':'Publier maintenant'}</button>`;
+      if(e==='incertain') btn=`<button class="btn btn-success btn-sm" onclick="rsMarquer('${x.k}','manuel')">C’est bien publié</button> <button class="btn btn-warn btn-sm" onclick="rsPublier('${x.k}',true)">Republier</button>`;
+      btn+=` <button class="btn btn-ghost btn-sm" onclick="rsCopier('${x.k}')">Copier le texte</button>`
+        +(c.lien?` <button class="btn btn-ghost btn-sm" title="${esc(x.k==='instagram'?'Lien à mettre dans la bio':'Lien')}" onclick="navigator.clipboard.writeText(${esc(JSON.stringify(c.lien))});toast('Lien copié','ok')">Copier le lien${x.k==='instagram'?' (bio)':''}</button>`:'');
+    } else {
+      btn=`<button class="btn btn-ghost btn-sm" onclick="rsCopier('${x.k}')">Copier le texte</button>`
+        +((c.medias||[]).map(n=>` <a class="btn btn-ghost btn-sm" href="${rsMediaUrl(n)}" download target="_blank">Image</a>`).join(''))
+        +(c.lien?` <button class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText(${esc(JSON.stringify(c.lien))});toast('Lien copié','ok')">Copier le lien</button>`:'')
+        +(['manuel','publié'].includes(e)?` <button class="btn btn-ghost btn-sm" onclick="rsMarquer('${x.k}','effacer')">Annuler « publié »</button>`
+          :` <button class="btn btn-success btn-sm" onclick="rsMarquer('${x.k}','manuel')">Marquer publié</button>`);
+    }
+    const nv=(r.nouvelleVersion||{})[x.k];
+    return `<div class="panel" style="margin:10px 0">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+        <label class="td-strong" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="rs-a-${x.k}" ${c.actif?'checked':''}> ${x.nom}${c.format?' <span class="td-dim">· '+esc(c.format)+'</span>':''}</label>
+        <div>${etat}</div></div>
+      ${nv?`<div class="td-dim" style="margin:6px 0">Nouvelle version reçue du Mac. <a href="#" onclick="event.preventDefault();rsPrendre('${x.k}')">Remplacer mon texte par celle-ci</a></div>`:''}
+      ${x.k==='story'?`<div class="td-dim" style="margin:6px 0">Story : publiez-la depuis l’app Instagram (le sticker lien n’est pas disponible par l’API).</div>`:''}
+      <textarea class="form-control" id="rs-t-${x.k}" rows="${x.k==='story'?2:6}" oninput="document.getElementById('rs-n-${x.k}').textContent=this.value.length+(${x.max}?' / ${x.max}':'')">${esc(c.texte||'')}</textarea>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;gap:8px;flex-wrap:wrap">
+        <div>${btn}</div><div class="td-dim" id="rs-n-${x.k}">${(c.texte||'').length}${x.max?' / '+x.max:''}</div></div>
+    </div>`;
+  }).join('');
+  const ctrHtml=ctr.length?ctr.map(c=>`<div style="color:${c.n==='erreur'?'var(--err,#e55)':'inherit'}">${c.n==='erreur'?'⛔':'⚠'} ${esc(c.m)}</div>`).join('')
+    :'<div style="color:var(--ok,#4a4)">✓ Tout est correct.</div>';
+  const body=`
+    <div class="form-grid">
+      <div class="form-group"><label class="form-label">Date</label><input type="date" class="form-control" id="rs-date" value="${esc(r.date||'')}"></div>
+      <div class="form-group"><label class="form-label">Heure</label><input type="time" class="form-control" id="rs-heure" value="${esc(r.heure||'')}"></div>
+    </div>
+    <div class="td-dim" style="margin:4px 0 10px">${esc(r.serie||'')} · <span class="badge ${RS_STATUT_BADGE[r.statut]||'brouillon'}">${esc(r.statut||'')}</span>${r.valideAt?' · validé le '+esc(fmtDateShort(r.valideAt)):''}</div>
+    <div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:6px">${media||'<div class="td-dim">Pas de visuel.</div>'}</div>
+    <div class="panel" style="margin:10px 0"><div class="panel-title">Vérifications</div>${ctrHtml}</div>
+    ${sections}`;
+  const erreurs=ctr.some(c=>c.n==='erreur');
+  const foot=`<div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;width:100%"><button class="btn btn-ghost" onclick="rsSupprimer()">Supprimer</button>
+    <button class="btn btn-ghost" onclick="closeModal()">Fermer</button>
+    <button class="btn btn-ghost" onclick="rsEnregistrer()">Enregistrer</button>
+    ${r.statut==='validé'?`<button class="btn btn-warn" onclick="rsStatut('à valider')">Remettre à valider</button>`
+      :`<button class="btn btn-or" ${erreurs?'disabled title="Corrigez d’abord les erreurs"':''} onclick="rsValider()">Valider</button>`}</div>`;
+  openModal(esc(r.titre||r.id),body,foot);
+  window._modalGuard=()=>!rsModifie()||confirm('Fermer sans enregistrer vos modifications ?');
+}
+function rsEnregistrer(sansToast){
+  const r=rsLire(); if(!r) return null;
+  const change=JSON.stringify(rsForme(r))!==_rs.editBase;
+  if(change && r.statut==='validé'){ r.statut='à valider'; delete r.valideAt; if(!sansToast) toast('Modifié après validation : le post repasse « à valider »','ok'); }
+  const sauve=DB.save('contenus',r); _rs.edit=JSON.parse(JSON.stringify(sauve)); _rs.editBase=JSON.stringify(rsForme(sauve));
+  if(!sansToast && !change) toast('Enregistré','ok');
+  return sauve;
+}
+function rsValider(){
+  rsEnregistrer(true); const r=_rs.edit;
+  if(rsControles(r).some(c=>c.n==='erreur')){ toast('Corrigez d’abord les erreurs','err'); rsFiche(); return; }
+  r.statut='validé'; r.valideAt=new Date().toISOString();
+  const s=DB.save('contenus',r); _rs.edit=JSON.parse(JSON.stringify(s)); _rs.editBase=JSON.stringify(rsForme(s));
+  toast(DB.config().reseauxAuto!==false?'Validé : il partira le '+rsJour(r.date,r.heure):'Validé','ok');
+  updateBadges(); rsFiche(); if(_currentView==='reseaux') RENDERERS.reseaux();
+}
+function rsStatut(st){ rsEnregistrer(true); const r=_rs.edit; r.statut=st; if(st!=='validé') delete r.valideAt;
+  const s=DB.save('contenus',r); _rs.edit=JSON.parse(JSON.stringify(s)); _rs.editBase=JSON.stringify(rsForme(s)); updateBadges(); rsFiche(); }
+function rsPrendre(res){ const r=_rs.edit; const nv=(r.nouvelleVersion||{})[res]; if(nv==null) return;
+  const t=document.getElementById('rs-t-'+res); if(t) t.value=nv;
+  r.reseaux[res].texteOrigine=nv; delete r.nouvelleVersion[res]; if(!Object.keys(r.nouvelleVersion).length) delete r.nouvelleVersion;
+  toast('Texte remplacé : enregistrez pour garder','ok'); }
+function rsCopier(res){ const t=document.getElementById('rs-t-'+res); const v=t?t.value:'';
+  (navigator.clipboard?navigator.clipboard.writeText(v):Promise.reject()).then(()=>toast('Texte copié','ok'),()=>{ if(t){ t.select(); document.execCommand('copy'); toast('Texte copié','ok'); } }); }
+async function rsPublier(res,forcer){
+  if(!cloudUrl()){ toast('Publication impossible hors ligne','err'); return; }
+  const r=rsEnregistrer(true); if(!r) return;
+  if(rsControles(r).some(c=>c.n==='erreur')){ toast('Corrigez d’abord les erreurs','err'); rsFiche(); return; }
+  if(r.statut!=='validé'){
+    if(!confirm('Publier maintenant sur '+(res==='instagram'?'Instagram':'Facebook')+' ? Le post sera marqué validé.')) return;
+    r.statut='validé'; r.valideAt=new Date().toISOString(); const s=DB.save('contenus',r); _rs.edit=JSON.parse(JSON.stringify(s)); _rs.editBase=JSON.stringify(rsForme(s));
+  } else if(!confirm('Publier maintenant sur '+(res==='instagram'?'Instagram':'Facebook')+' ?')) return;
+  toast('Publication en cours… (jusqu’à une minute pour une vidéo)','ok');
+  const j=await cloudPost({action:'contenuPublier',row:_rs.edit,reseau:res,forcer:!!forcer});
+  if(j&&j.entree) _rs.pubs[_rs.edit.id+'|'+res]=j.entree;
+  if(j&&j.ok) toast(j.entree&&j.entree.etat==='préparation'?'Vidéo envoyée : Meta la prépare, elle sera publiée au prochain passage':'Publié','ok');
+  else toast('Échec : '+((j&&(j.error||(j.entree&&j.entree.erreur)))||'serveur injoignable'),'err');
+  await rsCharger(true); rsFiche();
+}
+async function rsMarquer(res,etat){
+  if(!cloudUrl()){ toast('Hors ligne','err'); return; }
+  let url='';
+  if(etat==='manuel' && ['google','story'].includes(res)) url=prompt('Lien du post (facultatif) :','')||'';
+  const j=await cloudPost({action:'contenuMarquer',id:_rs.edit.id,reseau:res,etat,url});
+  if(j&&j.ok){ if(j.entree) _rs.pubs[_rs.edit.id+'|'+res]=j.entree; else delete _rs.pubs[_rs.edit.id+'|'+res]; toast('C’est noté','ok'); }
+  else toast('Pas enregistré : serveur injoignable','err');
+  updateBadges(); rsFiche();
+}
+function rsSupprimer(){ const r=_rs.edit; if(!r) return;
+  if(rsActifs(r).some(x=>rsFait(r,x.k)) && !confirm('Ce post a déjà été publié. Le supprimer du planning (il reste en ligne sur les réseaux) ?')) return;
+  if(!confirm('Supprimer « '+(r.titre||r.id)+' » du planning ?')) return;
+  DB.remove('contenus',r.id); _rs.edit=null; closeModal(true); toast('Post supprimé du planning','ok'); updateBadges(); RENDERERS.reseaux(); }
+
+/* ───── Connexion Meta ───── */
+function rsConnexion(choix){
+  const m=_rs.meta||{};
+  const pages=choix?`<div class="form-group"><label class="form-label">Page à utiliser</label><select class="form-control" id="rs-page">${choix.map(p=>`<option value="${esc(p.id)}">${esc(p.nom)}</option>`).join('')}</select></div>`:'';
+  openModal('Connexion Meta (Facebook et Instagram)',`
+    ${m.connecte?`<div class="panel">Connecté à <strong>${esc(m.pageNom)}</strong>${m.igNom?' et <strong>@'+esc(m.igNom)+'</strong>':''} depuis le ${esc(fmtDateShort(m.connecteAt))}.${m.erreur?'<div style="color:var(--err,#e55)">'+esc(m.erreur)+'</div>':''}</div>`:''}
+    <ol class="td-dim" style="padding-left:18px;line-height:1.6">
+      <li>Vérifiez dans l’app Instagram que <strong>louismagie_</strong> est un compte professionnel relié à la page Facebook.</li>
+      <li>Sur <a href="https://developers.facebook.com/apps" target="_blank">developers.facebook.com/apps</a>, créez une application de type « Business ». Elle peut rester en mode développement.</li>
+      <li>Dans <a href="https://developers.facebook.com/tools/explorer" target="_blank">l’explorateur de l’API Graph</a>, choisissez l’application, cochez <code>pages_show_list</code>, <code>pages_read_engagement</code>, <code>pages_manage_posts</code>, <code>instagram_basic</code>, <code>instagram_content_publish</code>, puis « Generate Access Token ».</li>
+      <li>Collez ce jeton ci-dessous avec l’identifiant et la clé secrète de l’application (Paramètres → Général). Ils restent sur le serveur du CRM et ne repassent jamais par vos appareils.</li>
+    </ol>
+    <div class="form-grid">
+      <div class="form-group"><label class="form-label">Identifiant de l’application</label><input class="form-control" id="rs-app" autocomplete="off"></div>
+      <div class="form-group"><label class="form-label">Clé secrète de l’application</label><input class="form-control" id="rs-sec" type="password" autocomplete="off"></div>
+    </div>
+    <div class="form-group"><label class="form-label">Jeton d’accès (explorateur)</label><input class="form-control" id="rs-tok" type="password" autocomplete="off"></div>
+    ${pages}`,
+    `${m.connecte?'<button class="btn btn-danger" onclick="rsDeconnecter()">Déconnecter</button>':''}
+     <button class="btn btn-ghost" onclick="closeModal()">Fermer</button>
+     <button class="btn btn-or" onclick="rsConnecter()">Connecter</button>`);
+}
+async function rsConnecter(){
+  const p={action:'metaConnecter',appId:(document.getElementById('rs-app')||{}).value||'',appSecret:(document.getElementById('rs-sec')||{}).value||'',
+    userToken:(document.getElementById('rs-tok')||{}).value||''};
+  const sel=document.getElementById('rs-page'); if(sel) p.pageId=sel.value;
+  if(!p.userToken){ toast('Collez le jeton de l’explorateur','err'); return; }
+  toast('Connexion à Meta…','ok');
+  const j=await cloudPost(p);
+  if(j&&j.choisir){ rsConnexion(j.choisir); document.getElementById('rs-app').value=p.appId; document.getElementById('rs-sec').value=p.appSecret; document.getElementById('rs-tok').value=p.userToken; toast(j.error,'ok'); return; }
+  if(!j||!j.ok){ toast('Connexion refusée : '+((j&&j.error)||'serveur injoignable'),'err'); return; }
+  _rs.meta=j.meta; closeModal(true); toast(j.meta.avertissement||('Connecté à '+j.meta.pageNom+(j.meta.igNom?' et @'+j.meta.igNom:'')),'ok');
+  RENDERERS.reseaux();
+}
+async function rsDeconnecter(){ if(!confirm('Déconnecter Meta ? Plus rien ne partira automatiquement.')) return;
+  const j=await cloudPost({action:'metaDeconnecter'}); if(j&&j.ok){ _rs.meta=j.meta; closeModal(true); RENDERERS.reseaux(); toast('Meta déconnecté','ok'); } }
 
 (async function boot(){
   try{ applyTheme(localStorage.getItem('lm_theme')||'dark'); }catch(_){ applyTheme('dark'); }
