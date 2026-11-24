@@ -7492,6 +7492,9 @@ let _rs={vue:'calendrier', filtre:'avenir', recherche:'', mois:null, jour:'', me
 
 /* ───── Petits outils ───── */
 const rsMob=()=>window.innerWidth<=680;
+let _rsMobAvant=rsMob();
+window.addEventListener('resize',()=>{ const m=rsMob(); if(m===_rsMobAvant) return; _rsMobAvant=m;
+  if(_currentView==='reseaux'&&!document.getElementById('modal-bg').classList.contains('open')) RENDERERS.reseaux(); });
 function rsMediaUrl(nom){ const u=cloudUrl(); return u&&nom ? u+'?action=media&f='+encodeURIComponent(nom) : ''; }
 function rsPub(row,res){ return _rs.pubs[row.id+'|'+res]||null; }
 function rsEtat(row,res){ const p=rsPub(row,res); return p&&p.etat ? p.etat : ''; }
