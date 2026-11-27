@@ -1992,8 +1992,6 @@ if ($action === 'runScheduled') {
   @file_put_contents("$DATA_DIR/_cron_dernier.txt", gmdate('c'));   // preuve que la tâche planifiée de Coolify tourne
   $rappelsPush = pushRappels($DATA_DIR);   // récap du matin + rendez-vous dans l'heure (best effort)
   $sauvegarde = sauvegardeEmail($DATA_DIR, $ENTITIES);   // copie hors serveur, dans la boîte mail de Louis
-  $reseaux = null;   // module Réseaux : posts validés arrivés à leur heure (n'interrompt jamais les emails)
-  if (function_exists('reseauxCron')) { try { $reseaux = reseauxCron($DATA_DIR); } catch (Throwable $e) { $reseaux = ['erreur'=>$e->getMessage()]; } }
   // Allège les envois déjà traités (anciennes campagnes comprises) : une écriture au plus, aucune si rien à faire.
   // La version complète reste dans _historique (historiser, appelé par majTable).
   $alleges = (int)majTable($DATA_DIR, 'planifs', function(&$t) {
@@ -2081,6 +2079,9 @@ if ($action === 'runScheduled') {
     if ($serie >= 3) { $arret = '3 refus d’affilée, dernier : '.$info; break; }   // quota ou contenu refusé : le reste attend
     if (empty($er['deja'])) usleep(350000);   // cadence douce, pour ne pas se faire limiter par le serveur SMTP
   }
+  // module Réseaux APRÈS les emails programmés : ses appels à Meta ne retardent jamais un envoi
+  $reseaux = null;
+  if (function_exists('reseauxCron')) { try { $reseaux = reseauxCron($DATA_DIR); } catch (Throwable $e) { $reseaux = ['erreur'=>$e->getMessage()]; } }
   if ($lock) { @flock($lock, LOCK_UN); @fclose($lock); }
   out(['ok'=>$arret==='','sent'=>$sent,'fail'=>$fail,'reportes'=>$reportes,'incertains'=>$incertains,'perimes'=>$perimes,
        'desabonnes'=>$skip,'sautes'=>$sautes,'alleges'=>$alleges,'arret'=>$arret,'plafond'=>$plafond,'total'=>count($arr),'rappelsPush'=>$rappelsPush,'sauvegarde'=>$sauvegarde,'reseaux'=>$reseaux]);

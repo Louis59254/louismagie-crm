@@ -22,12 +22,12 @@ function rsGraphBase(){ return rtrim(getenv('META_GRAPH') ?: 'https://graph.face
 function rsMediaDir($DATA_DIR){ $d = $DATA_DIR.'/_medias'; if (!is_dir($d)) @mkdir($d, 0775, true); return $d; }
 function rsBaseUrl(){
   $u = getenv('CRM_PUBLIC_URL');
-  if ($u) return rtrim($u, '/');
+  if ($u) return preg_replace('#/api\.php$#', '', rtrim($u, '/'));   // CRM_PUBLIC_URL peut être l'adresse complète d'api.php
   $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
   return ($https ? 'https' : 'http').'://'.($_SERVER['HTTP_HOST'] ?? 'localhost');
 }
 function rsMediaUrl($nom){ return rsBaseUrl().'/api.php?action=media&f='.rawurlencode($nom); }
-function rsNomValide($nom){ return is_string($nom) && preg_match('/^[a-f0-9]{32}\.(jpg|mp4)$/', $nom) === 1; }
+function rsNomValide($nom){ return is_string($nom) && preg_match('/^[a-f0-9]{32}\.(jpg|mp4)\z/', $nom) === 1; }
 
 /* ───── Registre et jetons ───── */
 function rsMetaLire($DATA_DIR){ $m = readJson($DATA_DIR.'/_meta.json'); return is_array($m) ? $m : []; }
@@ -54,10 +54,10 @@ function rsRegistreMaj($DATA_DIR, $cle, $fn){
 }
 
 /* ───── Appel HTTP à l'API Graph (sans dépendance) ───── */
-function rsGraph($method, $path, $params = []){
+function rsGraph($method, $path, $params = [], $timeout = 25){
   $url = (strpos($path, 'http') === 0) ? $path : rsGraphBase().'/'.ltrim($path, '/');
   $body = http_build_query($params);
-  $opts = ['http' => ['method' => $method, 'timeout' => 60, 'ignore_errors' => true,
+  $opts = ['http' => ['method' => $method, 'timeout' => $timeout, 'ignore_errors' => true,
                       'header' => "Content-Type: application/x-www-form-urlencoded\r\nAccept: application/json\r\n"]];
   if ($method === 'GET') { if ($body !== '') $url .= (strpos($url, '?') === false ? '?' : '&').$body; }
   else $opts['http']['content'] = $body;
@@ -74,6 +74,11 @@ function rsGraph($method, $path, $params = []){
   }
   return ['ok' => $code >= 200 && $code < 300, 'code' => $code, 'json' => $j, 'erreur' => ($code >= 200 && $code < 300) ? '' : 'HTTP '.$code];
 }
+
+/* Appel final (celui qui crée le post) sans réponse claire : Meta a peut-être publié quand même.
+   « incertain » bloque toute republication automatique tant que Louis n'a pas vérifié. */
+function rsPerdu($x){ return !$x['ok'] && (!empty($x['reseau']) || (int)$x['code'] === 0 || (int)$x['code'] >= 500); }
+function rsIncertain($etape){ return ['etat' => 'incertain', 'erreur' => $etape.' : réponse de Meta perdue, vérifie la page avant de republier']; }
 
 /* ───── Médias ───── */
 // Lecture publique (Meta doit pouvoir télécharger) : nom = empreinte, impossible à deviner.
@@ -108,7 +113,7 @@ function rsMediaAjouter($DATA_DIR){
   $tmp = $fic['tmp_name'];
   $tete = (string)file_get_contents($tmp, false, null, 0, 12);
   if (substr($tete, 0, 3) === "\xFF\xD8\xFF") $ext = 'jpg';
-  elseif (substr($tete, 4, 4) === 'ftyp') $ext = 'mp4';
+  elseif (substr($tete, 4, 4) === 'ftyp' && preg_match('/^(isom|iso[2-6]|mp4[12]|avc1|M4V |dash)/', substr($tete, 8, 4))) $ext = 'mp4';   // pas de HEIC ni de MOV
   else return ['ok' => false, 'error' => 'format refusé : JPEG ou MP4 seulement'];
   $nom = substr(hash_file('sha256', $tmp), 0, 32).'.'.$ext;
   $dest = rsMediaDir($DATA_DIR).'/'.$nom;
@@ -151,7 +156,7 @@ function rsMetaConnecter($DATA_DIR, $req){
   if (!$x['ok']) return ['ok' => false, 'error' => 'jeton de page refusé : '.$x['erreur']];
   $j = $x['json'];
   $ig = $j['instagram_business_account'] ?? null;
-  $m = ['appId' => $appId, 'appSecret' => $secret, 'pageId' => (string)$j['id'], 'pageNom' => (string)($j['name'] ?? ''),
+  $m = ['appId' => $appId, 'pageId' => (string)$j['id'], 'pageNom' => (string)($j['name'] ?? ''),
         'pageToken' => $pageToken, 'igId' => (string)($ig['id'] ?? ''), 'igNom' => (string)($ig['username'] ?? ''),
         'connecteAt' => nowTs(), 'verifieAt' => nowTs(), 'erreur' => ''];
   if (!writeJson($DATA_DIR.'/_meta.json', $m)) return ['ok' => false, 'error' => 'écriture impossible'];
@@ -168,11 +173,13 @@ function rsMetaVerifier($DATA_DIR, $forcer = false){
   $x = rsGraph('GET', 'me', ['fields' => 'id', 'access_token' => $m['pageToken']]);
   $avant = (string)($m['erreur'] ?? '');
   if ($x['ok']) { $m['erreur'] = ''; $m['verifieAt'] = nowTs(); }
-  elseif (empty($x['reseau'])) {
+  elseif (empty($x['reseau']) && (in_array((int)($x['metaCode'] ?? 0), [190, 102, 10], true) || ((int)($x['metaCode'] ?? 0) >= 200 && (int)($x['metaCode'] ?? 0) <= 299))) {
+    // jeton ou permission refusés (une panne passagère de Meta ne coupe rien : on revérifie au passage suivant)
     $m['erreur'] = 'Connexion Meta refusée : '.$x['erreur'];
     $m['verifieAt'] = nowTs();
     if ($avant === '' && function_exists('pushNotifier')) @pushNotifier($DATA_DIR, 'Réseaux : connexion Meta perdue', 'Reconnecte Meta dans Réseaux → Connexion pour reprendre les publications.', '/#reseaux', 'reseaux-meta');
   }
+  else return $m;   // panne passagère ou réseau : rien n'est écrit, nouvel essai au prochain passage
   writeJson($DATA_DIR.'/_meta.json', $m);
   return $m;
 }
@@ -194,12 +201,18 @@ function rsPublier($DATA_DIR, $row, $reseau, $meta, $forcer = false){
   $cfg = $row['reseaux'][$reseau] ?? null;
   if ($id === '' || !is_array($cfg) || empty($cfg['actif'])) return ['etat' => 'échec', 'erreur' => 'réseau non actif sur ce post'];
   if (($row['statut'] ?? '') !== 'validé') return ['etat' => 'échec', 'erreur' => 'post pas validé'];
-  if (empty($meta['pageToken'])) return ['etat' => 'échec', 'erreur' => 'Meta non connecté'];
-  if ($reseau === 'instagram' && empty($meta['igId'])) return ['etat' => 'échec', 'erreur' => 'aucun compte Instagram relié à la page'];
+  // refus avant tout appel à Meta : inscrit au registre, pour que le cron ne le retente pas toutes les 15 min
+  $refus = function($msg) use ($DATA_DIR, $cle) {
+    list(, $e) = rsRegistreMaj($DATA_DIR, $cle, function($x) use ($msg) {
+      if (in_array((string)($x['etat'] ?? ''), RS_ETATS_BLOQUANTS, true)) return false;
+      return array_merge((array)$x, ['etat' => 'échec', 'erreur' => $msg]); });
+    return $e ?: ['etat' => 'échec', 'erreur' => $msg]; };
+  if (empty($meta['pageToken'])) return $refus('Meta non connecté');
+  if ($reseau === 'instagram' && empty($meta['igId'])) return $refus('aucun compte Instagram relié à la page');
   $medias = array_values(array_filter((array)($cfg['medias'] ?? []), 'is_string'));
   $format = (string)($cfg['format'] ?? '');
-  if ($format !== 'lien' && !$medias) return ['etat' => 'échec', 'erreur' => 'aucun visuel'];
-  if (!rsMediasExistent($DATA_DIR, $medias)) return ['etat' => 'échec', 'erreur' => 'visuel absent du serveur : renvoie les médias depuis le Mac'];
+  if ($format !== 'lien' && !$medias) return $refus('aucun visuel');
+  if (!rsMediasExistent($DATA_DIR, $medias)) return $refus('visuel absent du serveur : renvoie les médias depuis le Mac');
 
   // Réservation : une seule publication par post et par réseau, même si deux passages se croisent
   list($pris, $entree) = rsRegistreMaj($DATA_DIR, $cle, function($e) use ($forcer) {
@@ -225,15 +238,18 @@ function rsPublierFacebook($meta, $format, $medias, $texte, $cfg){
     $lien = (string)($cfg['lien'] ?? '');
     if ($lien === '') return ['etat' => 'échec', 'erreur' => 'lien manquant'];
     $x = rsGraph('POST', "$page/feed", ['message' => $texte, 'link' => $lien, 'access_token' => $tok]);
+    if (rsPerdu($x)) return rsIncertain('publication');
     if (!$x['ok']) return $echec($x, 'publication');
     $pid = (string)($x['json']['id'] ?? '');
   } elseif ($format === 'video') {
-    $x = rsGraph('POST', "$page/videos", ['file_url' => rsMediaUrl($medias[0]), 'description' => $texte, 'access_token' => $tok]);
+    $x = rsGraph('POST', "$page/videos", ['file_url' => rsMediaUrl($medias[0]), 'description' => $texte, 'access_token' => $tok], 180);
+    if (rsPerdu($x)) return rsIncertain('vidéo');
     if (!$x['ok']) return $echec($x, 'vidéo');
     $pid = (string)($x['json']['id'] ?? '');
     return ['etat' => 'publié', 'postId' => $pid, 'url' => 'https://www.facebook.com/'.$pid, 'publieAt' => nowTs(), 'erreur' => ''];
   } elseif (count($medias) === 1) {
-    $x = rsGraph('POST', "$page/photos", ['url' => rsMediaUrl($medias[0]), 'message' => $texte, 'access_token' => $tok]);
+    $x = rsGraph('POST', "$page/photos", ['url' => rsMediaUrl($medias[0]), 'message' => $texte, 'access_token' => $tok], 60);
+    if (rsPerdu($x)) return rsIncertain('photo');
     if (!$x['ok']) return $echec($x, 'photo');
     $pid = (string)($x['json']['post_id'] ?? $x['json']['id'] ?? '');
   } else {                                   // album : photos non publiées, puis un post qui les regroupe
@@ -246,6 +262,7 @@ function rsPublierFacebook($meta, $format, $medias, $texte, $cfg){
     $p = ['message' => $texte, 'access_token' => $tok];
     foreach ($ids as $i => $m) $p["attached_media[$i]"] = json_encode($m);
     $x = rsGraph('POST', "$page/feed", $p);
+    if (rsPerdu($x)) return rsIncertain('album');
     if (!$x['ok']) return $echec($x, 'album');
     $pid = (string)($x['json']['id'] ?? '');
   }
@@ -256,12 +273,13 @@ function rsPublierInstagram($meta, $medias, $texte, $cfg){
   $ig = $meta['igId']; $tok = $meta['pageToken'];
   $echec = function($x, $etape) { return ['etat' => 'échec', 'erreur' => $etape.' : '.$x['erreur'], 'metaCode' => (int)($x['metaCode'] ?? 0)]; };
   if (mb_strlen($texte) > 2200) return ['etat' => 'échec', 'erreur' => 'texte Instagram trop long (2 200 caractères au plus)'];
+  if (!$medias) return ['etat' => 'échec', 'erreur' => 'Instagram a besoin d’au moins un visuel'];
   $video = substr($medias[0], -3) === 'mp4';
   if ($video) {
     $p = ['media_type' => 'REELS', 'video_url' => rsMediaUrl($medias[0]), 'caption' => $texte, 'share_to_feed' => 'true', 'access_token' => $tok];
     $cov = (string)($cfg['couverture'] ?? '');
     if (rsNomValide($cov)) $p['cover_url'] = rsMediaUrl($cov);
-    $x = rsGraph('POST', "$ig/media", $p);
+    $x = rsGraph('POST', "$ig/media", $p, 120);
     if (!$x['ok']) return $echec($x, 'Reel');
     $cont = (string)$x['json']['id'];
   } elseif (count($medias) === 1) {
@@ -294,7 +312,12 @@ function rsInstagramFinir($meta, $cont, $creeAt = null){
     if (time() - $debut > 3600) return ['etat' => 'échec', 'erreur' => 'préparation Instagram trop longue (plus d’une heure)', 'conteneur' => $cont];
     return ['etat' => 'préparation', 'conteneur' => $cont, 'conteneurAt' => $creeAt ?: nowTs(), 'erreur' => ''];
   }
-  $x = rsGraph('POST', "$ig/media_publish", ['creation_id' => $cont, 'access_token' => $tok]);
+  return rsInstagramPublier($meta, $cont);
+}
+function rsInstagramPublier($meta, $cont){
+  $tok = $meta['pageToken']; $ig = $meta['igId'];
+  $x = rsGraph('POST', "$ig/media_publish", ['creation_id' => $cont, 'access_token' => $tok], 60);
+  if (rsPerdu($x)) return rsIncertain('publication') + ['conteneur' => $cont];
   if (!$x['ok']) return ['etat' => 'échec', 'erreur' => 'publication : '.$x['erreur'], 'metaCode' => (int)($x['metaCode'] ?? 0), 'conteneur' => $cont];
   $mid = (string)($x['json']['id'] ?? '');
   $l = rsGraph('GET', $mid, ['fields' => 'permalink', 'access_token' => $tok]);
@@ -304,13 +327,26 @@ function rsInstagramFinir($meta, $cont, $creeAt = null){
 
 /* Fait avancer un Reel en préparation (registre déjà à « préparation »). */
 function rsAvancer($DATA_DIR, $cle, $e, $meta){
-  $res = rsInstagramFinir($meta, (string)$e['conteneur'], (string)($e['conteneurAt'] ?? ''));
-  if (($res['etat'] ?? '') === 'préparation') return $e;
+  $cont = (string)($e['conteneur'] ?? ''); $creeAt = (string)($e['conteneurAt'] ?? '');
+  if ($cont === '') return $e;
+  $s = rsGraph('GET', $cont, ['fields' => 'status_code', 'access_token' => $meta['pageToken']]);
+  $st = $s['ok'] ? (string)($s['json']['status_code'] ?? '') : '';
+  if ($st !== 'FINISHED') {   // encore en préparation, refusé ou trop long (aucune publication ici)
+    if ($st === 'ERROR' || $st === 'EXPIRED') $res = ['etat' => 'échec', 'erreur' => 'Instagram a refusé le média ('.$st.')'];
+    elseif (time() - (strtotime($creeAt) ?: time()) > 3600) $res = ['etat' => 'échec', 'erreur' => 'préparation Instagram trop longue (plus d’une heure)'];
+    else return $e;
+    list(, $fin) = rsRegistreMaj($DATA_DIR, $cle, function($x) use ($res) {
+      return (($x['etat'] ?? '') === 'préparation') ? array_merge((array)$x, $res) : false; });
+    return $fin ?: $e;
+  }
+  // prêt : on réserve avant de publier, pour qu'un clic et le cron ne publient pas tous les deux
+  list($pris, $cur) = rsRegistreMaj($DATA_DIR, $cle, function($x) {
+    return (($x['etat'] ?? '') === 'préparation') ? array_merge((array)$x, ['etat' => 'envoi', 'debutAt' => nowTs()]) : false; });
+  if (!$pris) return $cur ?: $e;
+  $res = rsInstagramPublier($meta, $cont);
   list(, $fin) = rsRegistreMaj($DATA_DIR, $cle, function($x) use ($res) {
-    if (($x['etat'] ?? '') !== 'préparation') return false;   // déjà traité par un autre passage
-    return array_merge((array)$x, $res);
-  });
-  return $fin ?: $e;
+    return (($x['etat'] ?? '') === 'envoi') ? array_merge((array)$x, $res) : false; });
+  return $fin ?: $res;
 }
 
 /* ───── Passage du cron (toutes les 15 min, sous le verrou de runScheduled) ───── */
@@ -429,7 +465,7 @@ function reseauxAction($action, $req, $DATA_DIR){
       $id = (string)($req['id'] ?? ''); $res = (string)($req['reseau'] ?? ''); $etat = (string)($req['etat'] ?? '');
       if ($id === '' || !preg_match('/^[a-z]+$/', $res)) out(['ok' => false, 'error' => 'requête incomplète']);
       list($ok, $e) = rsRegistreMaj($DATA_DIR, $id.'|'.$res, function($x) use ($etat, $req) {
-        if ($etat === 'effacer') return null;
+        if ($etat === 'effacer') return in_array((string)($x['etat'] ?? ''), ['envoi', 'préparation'], true) ? false : null;   // jamais pendant une publication
         if ($etat !== 'manuel') return false;
         return array_merge((array)$x, ['etat' => 'manuel', 'url' => mb_substr((string)($req['url'] ?? ''), 0, 300), 'publieAt' => nowTs(), 'erreur' => '']);
       });
