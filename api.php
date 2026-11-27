@@ -1983,7 +1983,9 @@ if ($action === 'sign' || $action === 'signSubmit') {
 
 /* ===== Envoi planifié (déclenché par cron Coolify, protégé par CRON_KEY) ===== */
 if ($action === 'runScheduled') {
-  $__ck=getenv('CRON_KEY'); if (!$__ck || !hash_equals($__ck, (string)($_GET['key'] ?? ''))) out(['ok'=>false,'error'=>'cron key invalide']);
+  // Lancé dans le conteneur par cron.php (tâche planifiée de Coolify) : pas de clé. Par le web : CRON_KEY obligatoire.
+  $__cli = defined('LM_CRON_CLI') && PHP_SAPI === 'cli';
+  $__ck=getenv('CRON_KEY'); if (!$__cli && (!$__ck || !hash_equals($__ck, (string)($_GET['key'] ?? '')))) out(['ok'=>false,'error'=>'cron key invalide']);
   @set_time_limit(0); ignore_user_abort(true);   // un curl coupé ne doit pas arrêter PHP entre l'envoi et son inscription
   // Verrou : deux exécutions simultanées du cron enverraient les emails en double (la réservation
   // ligne par ligne ci-dessous protège aussi le cas où ce verrou n'a pas pu s'ouvrir)

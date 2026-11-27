@@ -14,6 +14,8 @@ COPY api.php  /var/www/html/api.php
 # Module Réseaux (publication Facebook / Instagram), chargé par api.php
 COPY reseaux.php /var/www/html/reseaux.php
 COPY robots.txt /var/www/html/robots.txt
+# Tâche planifiée (Coolify → Scheduled Tasks : php /var/www/html/cron.php), refusée depuis le web
+COPY cron.php /var/www/html/cron.php
 # App sur l'écran d'accueil + notifications push
 COPY sw.js manifest.webmanifest icon-192.png icon-512.png apple-touch-icon.png /var/www/html/
 # Polices de la charte pour les PDF (DM Sans, Syne), en sous-ensemble latin
