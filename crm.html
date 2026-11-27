@@ -1658,7 +1658,7 @@ function voirDevis(id){
     <button class="btn btn-ghost" onclick="dossierEvenement('${id}')">📁 Dossier</button>
     ${d.statut!=='Brouillon'?`<button class="btn btn-ghost" onclick="devisBack('${id}')">↩ Étape précédente</button>`:''}
     <button class="btn btn-ghost" onclick="apercuPdf('Devis','${id}')">👁 Aperçu PDF</button>
-    ${devisVerrou(d)?`<button class="btn btn-ghost" onclick="closeModal();dupliquerDevis('${id}')">📋 Dupliquer</button>`:`<button class="btn btn-ghost" onclick="closeModal();nav('devis-create',{id:'${id}'})">✎ Modifier</button>`}
+    ${devisVerrou(d)?`<button class="btn btn-ghost" onclick="closeModal();nav('devis-create',{id:'${id}'})">✎ Date, horaires…</button><button class="btn btn-ghost" onclick="closeModal();dupliquerDevis('${id}')">📋 Dupliquer</button>`:`<button class="btn btn-ghost" onclick="closeModal();nav('devis-create',{id:'${id}'})">✎ Modifier</button>`}
     <button class="btn btn-ghost" onclick="closeModal()">Fermer</button>`;
   openModal('Devis · '+esc(d.id),prochaineEtapeHtml(d)+body,footer);
 }
@@ -2144,6 +2144,46 @@ function devisVerrou(d){ if(!d||!d.id) return '';
   if(factSoldeDe(d.id)||(typeof factAcompteDe==='function'&&factAcompteDe(d.id))) return 'facturé';
   if(d.statut==='Acompte reçu'||(+d.acompteRecu||0)>0) return 'acompté';
   return ''; }
+/* Devis accepté : prestations, prix et acompte figés ; les infos pratiques restent modifiables */
+const DV_INFOS_PRATIQUES=['dateEvenement','creneau','horaire','lieu','nbInvites','email','tel','notes'];
+const DV_INFOS_LIB={dateEvenement:'date',creneau:'créneau',horaire:'horaires',lieu:'lieu',nbInvites:'nombre d\'invités',email:'email',tel:'téléphone',notes:'notes'};
+function dvVerrouiller(verrou){
+  const v=document.getElementById('view-devis-create'); if(!v) return;
+  const libres=new Set(DV_INFOS_PRATIQUES.map(k=>'dv-'+k));
+  v.querySelectorAll('input,textarea,select,button').forEach(e=>{
+    if(e.tagName==='BUTTON'){ if(!/nav\(|apercuPdf|dupliquerDevis|dvSaveInfosPratiques/.test(e.getAttribute('onclick')||'')) e.disabled=true; return; }   // seuls les boutons du bas restent actifs
+    if(!libres.has(e.id)) e.disabled=true; });
+  v.insertAdjacentHTML('afterbegin','<div class="alert warning"><span class="alert-icon">🔒</span><div><strong>Devis '+esc(verrou)+'</strong> : les prestations, les prix et l\'acompte ne bougent plus, le client les a acceptés. '
+    +'Tu peux mettre à jour les <strong>infos pratiques</strong> (date, créneau, horaires, lieu, invités, contact, notes). Si un changement modifie le prix, duplique le devis.</div></div>');
+}
+function dvSaveInfosPratiques(id){
+  const d=DB.get('devis',id); if(!d) return;
+  const g=k=>{ const e=document.getElementById('dv-'+k); return e?String(e.value).trim():''; };
+  const avant={}, changes=[];
+  DV_INFOS_PRATIQUES.forEach(k=>{ const nv=g(k), av=String(d[k]==null?'':d[k]).trim(); if(nv!==av){ avant[k]=d[k]; d[k]=nv; changes.push(k); } });
+  if(!changes.length){ toast('Rien n\'a changé'); return; }
+  if(!d.dateEvenement){ toast('La date est requise','err'); return; }
+  d.majApresAccord=(d.majApresAccord||[]).concat([{at:new Date().toISOString(),champs:changes,avant}]);
+  DB.save('devis',d); syncPrestationDevis(d);
+  const liste=changes.map(k=>DV_INFOS_LIB[k]).join(', ');
+  logActivite('Devis '+id+' : infos pratiques mises à jour après accord ('+liste+')');
+  updateBadges();
+  const prevenir=changes.some(k=>['dateEvenement','creneau','horaire','lieu'].includes(k))&&d.email;
+  toast('Infos pratiques mises à jour : '+liste,'ok');
+  nav('devis'); voirDevis(id);
+  if(prevenir) setTimeout(()=>{ if(confirm('Prévenir '+(d.nomClient||'le client')+' par email du changement ('+liste+') ?')) mailMajDevis(id,changes); },300);
+}
+function mailMajDevis(id,changes){
+  const d=DB.get('devis',id); if(!d) return;
+  const l=[];
+  if(changes.includes('dateEvenement')) l.push('Date : '+fmtDateFr(d.dateEvenement));
+  if(changes.includes('creneau')&&d.creneau) l.push('Créneau : '+d.creneau);
+  if(changes.includes('horaire')&&d.horaire) l.push('Horaires : '+d.horaire);
+  if(changes.includes('lieu')&&d.lieu) l.push('Lieu : '+d.lieu);
+  openMailComposer({titre:'Changement confirmé · '+d.id, to:d.email||'', subject:'Votre prestation de magie : changement confirmé',
+    body:EMAIL_TPL.bonjour(d)+'\n\nComme convenu, je vous confirme la mise à jour de votre prestation :\n\n'+l.join('\n')+'\n\nLe reste du devis '+d.id+' ne change pas.\n\n'+sig(),
+    kind:'majDevis', ref:id});
+}
 function dupliquerDevis(id){ nav('devis-create',{dupliquer:id}); }
 function montantAcompte(d){ return Math.round((+(d&&d.montantTTC)||0)*(+(d&&d.acomptePct)||0))/100; }
 function arr2(x){ return Math.round((+x||0)*100)/100; }
@@ -2734,7 +2774,8 @@ function pdfDevis(id,returnDoc){
   y=pdfBlocs(doc,y,
     {nom:aTiers?ct.societe:ct.nom,
      lines:[aTiers?('À l\'attention de '+ct.nom+(ct.fonction?(' — '+ct.fonction):'')):'',ct.email,ct.tel,ct.adresse||d.lieu,ct.siren?('SIREN '+ct.siren):'']},
-    {titre:'PRESTATION',lines:['Date : '+fmtDateFr(d.dateEvenement),'Créneau : '+(d.creneau||'—'),d.horaire?('Horaire : '+d.horaire):'','Lieu : '+(d.lieu||'—'),d.nbInvites?('Invités : '+d.nbInvites):'']});
+    {titre:'PRESTATION',lines:['Date : '+fmtDateFr(d.dateEvenement),'Créneau : '+(d.creneau||'—'),d.horaire?('Horaire : '+d.horaire):'','Lieu : '+(d.lieu||'—'),d.nbInvites?('Invités : '+d.nbInvites):'',
+      (d.majApresAccord||[]).length?('Infos mises à jour le '+fmtDateShort(String(d.majApresAccord.slice(-1)[0].at).slice(0,10))+' (accord du client)'):'']});
   const body=(d.prestations||[]).map(p=>[p.label||'Prestation',p.duree||'—',fmtEurPdf(p.prix)]);
   pdfTable(doc,y,['Prestation','Durée','Montant'],body);
   let ty=doc.lastAutoTable.finalY+9;
@@ -4023,13 +4064,12 @@ RENDERERS['devis-create']=function(params){
 
     <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-bottom:30px">
       <button class="btn btn-ghost" onclick="nav('devis')">Annuler</button>
-      ${verrou?`<button class="btn btn-ghost" onclick="apercuPdf('Devis','${d.id}')">👁 PDF</button><button class="btn btn-or" onclick="dupliquerDevis('${d.id}')">📋 Dupliquer en nouveau devis</button>`
+      ${verrou?`<button class="btn btn-ghost" onclick="apercuPdf('Devis','${d.id}')">👁 PDF</button><button class="btn btn-ghost" onclick="dupliquerDevis('${d.id}')">📋 Dupliquer en nouveau devis</button><button class="btn btn-or" onclick="dvSaveInfosPratiques('${d.id}')">💾 Enregistrer les infos pratiques</button>`
         :`<button class="btn btn-ghost" onclick="if(dvSave(false))apercuPdf('Devis',DV.id)">👁 Aperçu PDF</button>
       <button class="btn btn-or" onclick="dvSave(true)">${d.id?'Enregistrer':'Enregistrer le brouillon'}</button>`}
     </div></div>`;
-  if(verrou){ const v=document.getElementById('view-devis-create'); if(v){ v.querySelectorAll('input,textarea,select').forEach(e=>e.disabled=true);
-    v.insertAdjacentHTML('afterbegin','<div class="alert warning"><span class="alert-icon">🔒</span><div><strong>Devis '+esc(verrou)+'</strong> : il ne peut plus être modifié, le client a accepté ce contenu. Pour changer quelque chose, duplique-le en nouveau devis.</div></div>'); } }
   dvRenderLines(); dvRecalc();
+  if(verrou) dvVerrouiller(verrou);
   // Indicateur d'enregistrement local + bandeau si un brouillon a été restauré
   const vue=document.getElementById('view-devis-create'), boite=vue&&vue.firstElementChild;
   if(boite){
