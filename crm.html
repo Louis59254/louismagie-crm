@@ -1087,7 +1087,7 @@ function nav(view,params){
 function updateBadges(){
   const nd=DB.all('demandes').filter(d=>d.statut==='Nouveau').length;
   const ndv=DB.all('devis').filter(d=>d.statut==='Envoyé').length;
-  const nf=DB.all('factures').filter(f=>['Émise','Relance 1','Relance 2'].includes(f.statut)).length;
+  const nf=DB.all('factures').filter(f=>f.type!=='avoir'&&['Émise','Relance 1','Relance 2'].includes(f.statut)).length;
   setBadge('badge-demandes',nd); setBadge('badge-devis',ndv); setBadge('badge-factures',nf);
   setBadge('badge-compta',trimsADeclarer().length);
   { let n=0; try{ n+=mktRappels().length; }catch(_){} try{ n+=rsBadge(); }catch(_){} setBadge('badge-marketing',n); }   // emails + réseaux : un seul menu
@@ -1235,7 +1235,10 @@ RENDERERS.dashboard=function(){
       +(j===1&&r.email&&!r.rappelEnvoye?' · <a onclick="rdvMail(\''+r.id+'\',\'rappel\')" style="color:inherit;text-decoration:underline;cursor:pointer">Envoyer le rappel</a>':''),j+1); });
   collisionsAll().forEach((c,i)=>{ alertes+=alertHtml('danger','⚠️','<strong>Numéro en double : '+esc(c.row.id)+'</strong> ('+esc(c.row.nomClient||'')+') a été créé sur cet appareil alors que l\'autre appareil avait déjà utilisé ce numéro. Rien n\'est perdu : il est mis de côté. <a onclick="renumeroterCollision('+i+')" style="color:inherit;text-decoration:underline;cursor:pointer">Renuméroter</a>'); });
   const sto=stockageLocal(); if(sto.pct>=70) alrt('stockage-'+todayISO(),sto.pct>=85?'danger':'warning','💾','<strong>Mémoire de l\'appareil remplie à '+sto.pct+' %</strong> ('+sto.mo+' Mo). Au-delà, de nouvelles modifications ne pourraient plus être enregistrées ici. Tes données sont sur le serveur : exporte une sauvegarde puis demande-moi d\'alléger.',1);
-  if(!alertes) alertes=alertHtml('success','✓','Aucune alerte — tout est à jour. 🎩');
+  const masquees=Object.entries(DB.config().dismissed||{}).filter(([k,v])=>/^(sign|cloture|dvieux|presta|urssaf|acpt|devy|relance|avis|proj|rdv)-/.test(k)&&Date.parse(v)>Date.now());
+  if(!alertes) alertes=masquees.length
+    ? alertHtml('info','🔕','Rien à l\'écran, mais <strong>'+masquees.length+' alerte'+(masquees.length>1?'s masquées':' masquée')+'</strong> (×) : '+esc(masquees.map(([k])=>libelleAlerte(k)).slice(0,4).join(', '))+(masquees.length>4?'…':'')+'. Elles reviennent d\'elles-mêmes à leur date.')
+    : alertHtml('success','✓','Aucune alerte — tout est à jour. 🎩');
 
   // Activité
   const acts=DB.all('activite').slice(0,10);
@@ -1259,6 +1262,8 @@ RENDERERS.dashboard=function(){
   buildChartCA(); buildChartType();
 };
 function kpi(cls,label,val,sub){ return '<div class="kpi '+cls+'"><div class="kpi-label">'+label+'</div><div class="kpi-val">'+val+'</div>'+(sub?'<div class="kpi-sub">'+sub+'</div>':'')+'</div>'; }
+function libelleAlerte(k){ const [t,...r]=k.split('-'), id=r.join('-');
+  return ({sign:'signature '+id,cloture:'prestation à clôturer',dvieux:'relance devis',presta:'prestation proche',urssaf:'déclaration URSSAF '+id,acpt:'acompte '+id,devy:'devis sans réponse '+id,relance:'relance facture '+id,avis:'avis Google',proj:'projet Imagine',rdv:'rendez-vous'})[t]||k; }
 function alertHtml(type,icon,txt,key,days){
   return '<div class="alert '+type+'"><span class="alert-icon">'+icon+'</span><div style="flex:1">'+txt+'</div>'
     +(key?'<button class="alert-x" title="Masquer cette notification" onclick="dismissAlert(\''+key+'\','+(days||7)+')">×</button>':'')+'</div>'; }
@@ -1318,7 +1323,7 @@ function statsPeriodeHtml(){
   const [d0,f0,lib]=periodeBornes(_statP,0), a=statsSur(d0,f0);
   const cmp=_statCmp&&_statP!=='an-1'?(()=>{ const [d1,f1,l1]=periodeBornes(_statP,1); return {v:statsSur(d1,f1),l:l1}; })():null;
   const ev=(k,fmt)=>{ if(!cmp) return ''; const x=a[k], y=cmp.v[k]; if(!y&&!x) return 'idem '+cmp.l;
-    if(!y) return 'nouveau vs '+cmp.l; const pc=Math.round((x-y)/y*100); return (pc>0?'+':'')+pc+' % vs '+cmp.l+' ('+fmt(y)+')'; };
+    if(!y) return 'pas de donnée pour '+cmp.l; const pc=Math.round((x-y)/y*100); return (pc>0?'+':'')+pc+' % vs '+cmp.l+' ('+fmt(y)+')'; };
   const n=v=>String(Math.round(v));
   const opt=[['mois','Ce mois'],['trim','Ce trimestre'],['annee','Cette année'],['12m','12 derniers mois'],['an-1','Année dernière']];
   return `<div class="panel" style="margin-bottom:16px"><div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
@@ -1992,6 +1997,7 @@ function propagateClient(c){
 function statutPrestaCible(d){
   const st=(typeof d==='string')?d:(d&&d.statut);
   if(st==='Refusé') return null;                                // pas dans l'agenda
+  if(d&&typeof d==='object'&&d.dateEvenement&&d.dateEvenement<todayISO()&&(factSoldeDe(d.id)||{}).statut==='Payée') return 'Réalisée';   // passée et soldée : elle a eu lieu
   if(st==='Accepté'||st==='Acompte reçu') return 'Confirmée';   // créneau bloqué
   if(d&&typeof d==='object'&&(d.signataire||d.signedAt)) return 'Confirmée';
   return 'Option';                                              // Brouillon / Envoyé
