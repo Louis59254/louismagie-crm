@@ -2110,8 +2110,13 @@ if ($action === 'login') {
   out(['ok'=> ($auth !== '' && hash_equals($stored, $auth))]);
 }
 if ($action === 'setAuth') {
-  if ($stored !== '' && !hash_equals($stored, $auth)) out(['ok'=>false, 'error'=>'mot de passe actuel invalide']);
-  file_put_contents($AUTH_FILE, $req['new'] ?? '');
+  // Un appareil encore relié par l'ancien jeton (première version du CRM) peut aussi définir le mot de passe :
+  // il a déjà accès à toutes les données, ce n'est pas un droit de plus.
+  $parJeton = $token !== '' && $TOKEN !== 'CHANGE_MOI_secret_long' && hash_equals($TOKEN, (string)$token);
+  if ($stored !== '' && !hash_equals($stored, $auth) && !$parJeton) out(['ok'=>false, 'error'=>'mot de passe actuel invalide']);
+  $nouveau = (string)($req['new'] ?? '');
+  if (!preg_match('/^[a-f0-9]{64}$/', $nouveau)) out(['ok'=>false, 'error'=>'nouveau mot de passe invalide']);   // jamais vide : un fichier vide rouvrirait le CRM au premier venu
+  if (@file_put_contents($AUTH_FILE, $nouveau) !== strlen($nouveau)) out(['ok'=>false, 'error'=>'écriture impossible']);
   out(['ok'=>true]);
 }
 
