@@ -1237,7 +1237,7 @@ RENDERERS.dashboard=function(){
   const sto=stockageLocal(); if(sto.pct>=70) alrt('stockage-'+todayISO(),sto.pct>=85?'danger':'warning','💾','<strong>Mémoire de l\'appareil remplie à '+sto.pct+' %</strong> ('+sto.mo+' Mo). Au-delà, de nouvelles modifications ne pourraient plus être enregistrées ici. Tes données sont sur le serveur : exporte une sauvegarde puis demande-moi d\'alléger.',1);
   const masquees=Object.entries(DB.config().dismissed||{}).filter(([k,v])=>/^(sign|cloture|dvieux|presta|urssaf|acpt|devy|relance|avis|proj|rdv)-/.test(k)&&Date.parse(v)>Date.now());
   if(!alertes) alertes=masquees.length
-    ? alertHtml('info','🔕','Rien à l\'écran, mais <strong>'+masquees.length+' alerte'+(masquees.length>1?'s masquées':' masquée')+'</strong> (×) : '+esc(masquees.map(([k])=>libelleAlerte(k)).slice(0,4).join(', '))+(masquees.length>4?'…':'')+'. Elles reviennent d\'elles-mêmes à leur date.')
+    ? alertHtml('info','🔕','Rien à l\'écran, mais <strong>'+masquees.length+' alerte'+(masquees.length>1?'s masquées':' masquée')+'</strong> (×) : '+esc(resumeMasquees(masquees))+'. Elles reviennent d\'elles-mêmes à leur date.')
     : alertHtml('success','✓','Aucune alerte — tout est à jour. 🎩');
 
   // Activité
@@ -1264,6 +1264,11 @@ RENDERERS.dashboard=function(){
 function kpi(cls,label,val,sub){ return '<div class="kpi '+cls+'"><div class="kpi-label">'+label+'</div><div class="kpi-val">'+val+'</div>'+(sub?'<div class="kpi-sub">'+sub+'</div>':'')+'</div>'; }
 function libelleAlerte(k){ const [t,...r]=k.split('-'), id=r.join('-');
   return ({sign:'signature '+id,cloture:'prestation à clôturer',dvieux:'relance devis',presta:'prestation proche',urssaf:'déclaration URSSAF '+id,acpt:'acompte '+id,devy:'devis sans réponse '+id,relance:'relance facture '+id,avis:'avis Google',proj:'projet Imagine',rdv:'rendez-vous'})[t]||k; }
+/* Résumé groupé, le plus important d'abord (argent et obligations avant les relances) */
+function resumeMasquees(liste){
+  const ordre=[['urssaf','déclaration URSSAF','déclarations URSSAF'],['acpt','acompte à encaisser','acomptes à encaisser'],['relance','relance facture','relances facture'],['sign','signature en attente','signatures en attente'],['cloture','prestation à clôturer','prestations à clôturer'],['devy','devis sans réponse','devis sans réponse'],['dvieux','relance devis','relances devis'],['presta','prestation proche','prestations proches'],['proj','projet Imagine','projets Imagine'],['avis','avis Google','avis Google'],['rdv','rendez-vous','rendez-vous']];
+  const n={}; liste.forEach(([k])=>{ const t=k.split('-')[0]; n[t]=(n[t]||0)+1; });
+  return ordre.filter(([t])=>n[t]).map(([t,s,p])=>n[t]+' '+(n[t]>1?p:s)).join(', '); }
 function alertHtml(type,icon,txt,key,days){
   return '<div class="alert '+type+'"><span class="alert-icon">'+icon+'</span><div style="flex:1">'+txt+'</div>'
     +(key?'<button class="alert-x" title="Masquer cette notification" onclick="dismissAlert(\''+key+'\','+(days||7)+')">×</button>':'')+'</div>'; }
